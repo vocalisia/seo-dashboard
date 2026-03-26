@@ -1,0 +1,59 @@
+import { sql } from "@/lib/db";
+import { NextResponse } from "next/server";
+
+export async function GET() {
+  try {
+    const { rows } = await sql`
+      SELECT
+        s.*,
+        COALESCE(a.total_sessions, 0) as total_sessions_30d,
+        COALESCE(a.total_users, 0) as total_users_30d,
+        COALESCE(a.total_pageviews, 0) as total_pageviews_30d,
+        COALESCE(a.total_organic, 0) as organic_sessions_30d,
+        COALESCE(gsc.total_clicks, 0) as gsc_clicks_30d,
+        COALESCE(gsc.total_impressions, 0) as gsc_impressions_30d,
+        COALESCE(gsc.avg_position, 0) as avg_position_30d
+      FROM sites s
+      LEFT JOIN (
+        SELECT site_id,
+          SUM(sessions) as total_sessions,
+          SUM(users) as total_users,
+          SUM(pageviews) as total_pageviews,
+          SUM(organic_sessions) as total_organic
+        FROM analytics_daily
+        WHERE date >= NOW() - INTERVAL '30 days'
+        GROUP BY site_id
+      ) a ON a.site_id = s.id
+      LEFT JOIN (
+        SELECT site_id,
+          SUM(clicks) as total_clicks,
+          SUM(impressions) as total_impressions,
+          AVG(position) as avg_position
+        FROM search_console_data
+        WHERE date >= NOW() - INTERVAL '30 days'
+        GROUP BY site_id
+      ) gsc ON gsc.site_id = s.id
+      WHERE s.is_active = true
+      ORDER BY s.name
+    `;
+    return NextResponse.json(rows);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const { name, url, ga_property_id, gsc_property } = await request.json();
+    const { rows } = await sql`
+      INSERT INTO sites (name, url, ga_property_id, gsc_property)
+      VALUES (${name}, ${url}, ${ga_property_id}, ${gsc_property})
+      RETURNING *
+    `;
+    return NextResponse.json(rows[0]);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
