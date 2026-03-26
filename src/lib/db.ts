@@ -1,6 +1,12 @@
-import { sql } from "@vercel/postgres";
+import { neon } from "@neondatabase/serverless";
+
+export function getSQL() {
+  return neon(process.env.DATABASE_URL!);
+}
 
 export async function initDB() {
+  const sql = getSQL();
+
   await sql`
     CREATE TABLE IF NOT EXISTS sites (
       id SERIAL PRIMARY KEY,
@@ -61,13 +67,6 @@ export async function initDB() {
     )
   `;
 
-  await sql`
-    CREATE INDEX IF NOT EXISTS idx_analytics_site_date ON analytics_daily(site_id, date)
-  `;
-
-  await sql`
-    CREATE INDEX IF NOT EXISTS idx_gsc_site_date ON search_console_data(site_id, date)
-  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_analytics_site_date ON analytics_daily(site_id, date)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_gsc_site_date ON search_console_data(site_id, date)`;
 }
-
-export { sql };

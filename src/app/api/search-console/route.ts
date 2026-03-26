@@ -1,4 +1,4 @@
-import { sql } from "@/lib/db";
+import { getSQL } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest) {
@@ -12,8 +12,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const sql = getSQL();
+
     if (type === "queries") {
-      const { rows } = await sql`
+      const rows = await sql`
         SELECT
           query,
           SUM(clicks) as total_clicks,
@@ -32,7 +34,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (type === "pages") {
-      const { rows } = await sql`
+      const rows = await sql`
         SELECT
           page,
           SUM(clicks) as total_clicks,

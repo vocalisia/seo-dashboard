@@ -1,13 +1,12 @@
-import { sql } from "@/lib/db";
+import { getSQL } from "@/lib/db";
 import { getAnalyticsClient, getSearchConsoleClient } from "@/lib/google-auth";
 import { NextResponse } from "next/server";
 
 async function syncAnalytics(siteId: number, propertyId: string) {
+  const sql = getSQL();
   const analytics = getAnalyticsClient();
   const endDate = new Date().toISOString().split("T")[0];
-  const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .split("T")[0];
+  const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
   const response = await analytics.properties.runReport({
     property: `properties/${propertyId}`,
@@ -15,12 +14,8 @@ async function syncAnalytics(siteId: number, propertyId: string) {
       dateRanges: [{ startDate, endDate }],
       dimensions: [{ name: "date" }, { name: "sessionDefaultChannelGroup" }],
       metrics: [
-        { name: "sessions" },
-        { name: "totalUsers" },
-        { name: "newUsers" },
-        { name: "screenPageViews" },
-        { name: "bounceRate" },
-        { name: "averageSessionDuration" },
+        { name: "sessions" }, { name: "totalUsers" }, { name: "newUsers" },
+        { name: "screenPageViews" }, { name: "bounceRate" }, { name: "averageSessionDuration" },
       ],
     },
   });
@@ -74,10 +69,8 @@ async function syncAnalytics(siteId: number, propertyId: string) {
               ${stats.count > 0 ? stats.avg_duration / stats.count : 0},
               ${stats.organic}, ${stats.direct}, ${stats.referral}, ${stats.social})
       ON CONFLICT (site_id, date) DO UPDATE SET
-        sessions = EXCLUDED.sessions,
-        users = EXCLUDED.users,
-        pageviews = EXCLUDED.pageviews,
-        organic_sessions = EXCLUDED.organic_sessions
+        sessions = EXCLUDED.sessions, users = EXCLUDED.users,
+        pageviews = EXCLUDED.pageviews, organic_sessions = EXCLUDED.organic_sessions
     `;
     inserted++;
   }
@@ -85,76 +78,50 @@ async function syncAnalytics(siteId: number, propertyId: string) {
 }
 
 async function syncSearchConsole(siteId: number, siteUrl: string) {
+  const sql = getSQL();
   const searchConsole = getSearchConsoleClient();
   const endDate = new Date().toISOString().split("T")[0];
-  const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .split("T")[0];
+  const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
-  let startRow = 0;
+  const response = await searchConsole.searchanalytics.query({
+    siteUrl,
+    requestBody: {
+      startDate, endDate,
+      dimensions: ["query", "page", "date"],
+      rowLimit: 25000, startRow: 0,
+    },
+  });
+
+  const rows = response.data.rows || [];
   let totalInserted = 0;
-  let hasMore = true;
 
-  while (hasMore) {
-    const response = await searchConsole.searchanalytics.query({
-      siteUrl,
-      requestBody: {
-        startDate,
-        endDate,
-        dimensions: ["query", "page", "date"],
-        rowLimit: 25000,
-        startRow,
-      },
-    });
-
-    const rows = response.data.rows || [];
-    if (rows.length === 0) {
-      hasMore = false;
-      break;
-    }
-
-    for (const row of rows) {
-      await sql`
-        INSERT INTO search_console_data
-        (site_id, date, query, page, clicks, impressions, ctr, position)
-        VALUES (${siteId}, ${row.keys?.[2] || ""}, ${row.keys?.[0] || ""}, ${row.keys?.[1] || ""},
-                ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0})
-        ON CONFLICT DO NOTHING
-      `;
-      totalInserted++;
-    }
-
-    startRow += rows.length;
-    if (rows.length < 25000) hasMore = false;
+  for (const row of rows) {
+    await sql`
+      INSERT INTO search_console_data
+      (site_id, date, query, page, clicks, impressions, ctr, position)
+      VALUES (${siteId}, ${row.keys?.[2] || ""}, ${row.keys?.[0] || ""}, ${row.keys?.[1] || ""},
+              ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0})
+      ON CONFLICT DO NOTHING
+    `;
+    totalInserted++;
   }
-
   return totalInserted;
 }
 
 export async function POST() {
   try {
-    const { rows: sites } = await sql`
-      SELECT * FROM sites WHERE is_active = true
-    `;
-
+    const sql = getSQL();
+    const sites = await sql`SELECT * FROM sites WHERE is_active = true`;
     const results = [];
 
     for (const site of sites) {
-      const result: { site: string; analytics?: number; gsc?: number; error?: string } = {
-        site: site.name,
-      };
-
+      const result: { site: string; analytics?: number; gsc?: number; error?: string } = { site: site.name };
       try {
-        if (site.ga_property_id) {
-          result.analytics = await syncAnalytics(site.id, site.ga_property_id);
-        }
-        if (site.gsc_property) {
-          result.gsc = await syncSearchConsole(site.id, site.gsc_property);
-        }
+        if (site.ga_property_id) result.analytics = await syncAnalytics(site.id, site.ga_property_id);
+        if (site.gsc_property) result.gsc = await syncSearchConsole(site.id, site.gsc_property);
       } catch (err: unknown) {
         result.error = err instanceof Error ? err.message : "Unknown error";
       }
-
       results.push(result);
     }
 

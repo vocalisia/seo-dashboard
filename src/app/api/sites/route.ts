@@ -1,9 +1,10 @@
-import { sql } from "@/lib/db";
+import { getSQL } from "@/lib/db";
 import { NextResponse } from "next/server";
 
 export async function GET() {
   try {
-    const { rows } = await sql`
+    const sql = getSQL();
+    const rows = await sql`
       SELECT
         s.*,
         COALESCE(a.total_sessions, 0) as total_sessions_30d,
@@ -45,8 +46,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const sql = getSQL();
     const { name, url, ga_property_id, gsc_property } = await request.json();
-    const { rows } = await sql`
+    const rows = await sql`
       INSERT INTO sites (name, url, ga_property_id, gsc_property)
       VALUES (${name}, ${url}, ${ga_property_id}, ${gsc_property})
       RETURNING *

@@ -1,4 +1,4 @@
-import { sql } from "@/lib/db";
+import { getSQL } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest) {
@@ -10,7 +10,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { rows } = await sql`
+    const sql = getSQL();
+    const rows = await sql`
       SELECT * FROM analytics_daily
       WHERE site_id = ${parseInt(siteId)}
       AND date >= NOW() - INTERVAL '1 day' * ${parseInt(days)}
