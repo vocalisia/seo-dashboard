@@ -92,6 +92,11 @@ const SITE_REPO_MAP: Record<
     articlePath: "content/blog",
     format: "mdx",
   },
+  "fitness": {
+    repo: "vocalisia/fitnessmaison",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
 };
 
 // Language config: label, locale, instructions language, target countries (ISO-3)
