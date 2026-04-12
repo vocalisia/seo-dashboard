@@ -341,6 +341,12 @@ export default function DashboardPage() {
           <Link href="/internal-links" className="bg-teal-600/20 hover:bg-teal-600/40 text-teal-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
             🔗 Maillage
           </Link>
+          <Link href="/authority" className="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            🛡 Autorité
+          </Link>
+          <Link href="/compare" className="bg-pink-600/20 hover:bg-pink-600/40 text-pink-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            ⚖ Comparer
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
