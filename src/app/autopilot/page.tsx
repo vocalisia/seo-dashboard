@@ -249,6 +249,12 @@ export default function AutopilotPage() {
             >
               <Globe className="w-3 h-3" /> Dashboard par pays
             </Link>
+            <Link
+              href="/autopilot/roi"
+              className="text-xs text-emerald-400 hover:text-emerald-300 bg-emerald-900/20 border border-emerald-800 rounded px-3 py-1.5 flex items-center gap-1.5"
+            >
+              📈 ROI &amp; Indexation
+            </Link>
             <div className="text-xs text-gray-500 bg-gray-800 rounded px-2 py-1">
               Cron: lundi 9h00
             </div>
