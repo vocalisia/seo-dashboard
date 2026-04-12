@@ -219,14 +219,30 @@ export default function DashboardPage() {
     setKwHistLoading(false);
   }
 
+  const [syncMsg, setSyncMsg] = useState<{type: "ok"|"err"; text: string} | null>(null);
+
   async function handleSync() {
     setSyncing(true);
+    setSyncMsg(null);
     try {
-      await fetch("/api/sync", { method: "POST" });
-      setKeywords({}); setGains({});
-      await fetchSites();
-    } catch { /* ignore */ }
+      const res = await fetch("/api/sync", { method: "POST" });
+      const data = await res.json();
+      if (res.status === 401 || data.error?.includes("authentifié")) {
+        setSyncMsg({ type: "err", text: "Connecte-toi Google d'abord → /login" });
+      } else if (data.error) {
+        setSyncMsg({ type: "err", text: data.error });
+      } else {
+        const results = data.results || [];
+        const total = results.reduce((s: number, r: { gsc?: number }) => s + (r.gsc || 0), 0);
+        setSyncMsg({ type: "ok", text: `Sync OK — ${total} lignes GSC importées` });
+        setKeywords({}); setGains({});
+        await fetchSites();
+      }
+    } catch (err) {
+      setSyncMsg({ type: "err", text: err instanceof Error ? err.message : "Erreur réseau" });
+    }
     setSyncing(false);
+    setTimeout(() => setSyncMsg(null), 8000);
   }
 
   const totalClicks = sites.reduce((s, site) => s + (Number(site.gsc_clicks_30d) || 0), 0);
@@ -305,12 +321,27 @@ export default function DashboardPage() {
             🌍 Pays
           </Link>
           <button onClick={handleSync} disabled={syncing}
-            className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
+            className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
+              syncing
+                ? "bg-yellow-600 animate-pulse text-white"
+                : "bg-blue-600 hover:bg-blue-700 text-white"
+            } disabled:cursor-wait`}>
             {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            {syncing ? "Sync..." : "Synchroniser"}
+            {syncing ? "Sync en cours..." : "Synchroniser"}
           </button>
         </div>
       </header>
+
+      {/* Sync feedback */}
+      {syncMsg && (
+        <div className={`mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center gap-2 animate-in ${
+          syncMsg.type === "ok"
+            ? "bg-green-900/40 border border-green-700 text-green-300"
+            : "bg-red-900/40 border border-red-700 text-red-300"
+        }`}>
+          {syncMsg.type === "ok" ? "✅" : "❌"} {syncMsg.text}
+        </div>
+      )}
 
       {/* KPIs globaux */}
       <div className="px-6 py-4 grid grid-cols-3 gap-4">
