@@ -146,6 +146,9 @@ Rules:
         projected_revenue_6m: number;
         suggested_domains: string[];
         seed_articles: string[];
+        target_countries?: string[];
+        target_languages?: string[];
+        competitors?: { url: string; name: string }[];
         confidence_score: number;
       }[];
     };
@@ -172,11 +175,21 @@ Rules:
           projected_revenue_6m INTEGER,
           suggested_domains JSONB,
           seed_articles JSONB,
+          target_countries JSONB,
+          target_languages JSONB,
+          competitors JSONB,
           confidence_score INTEGER,
           status VARCHAR(20) DEFAULT 'pending',
+          validation JSONB,
           created_at TIMESTAMP DEFAULT NOW()
         )
       `;
+
+      // Add columns if missing (migration-safe)
+      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS target_countries JSONB`;
+      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS target_languages JSONB`;
+      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS competitors JSONB`;
+      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS validation JSONB`;
 
       // Clear old scan
       await sql`DELETE FROM market_opportunities WHERE status = 'pending'`;
@@ -185,12 +198,14 @@ Rules:
         await sql`
           INSERT INTO market_opportunities
           (niche, reason, site_type, core_keywords, monthly_volume, competition, monetization,
-           projected_traffic_6m, projected_revenue_6m, suggested_domains, seed_articles, confidence_score)
+           projected_traffic_6m, projected_revenue_6m, suggested_domains, seed_articles,
+           target_countries, target_languages, competitors, confidence_score)
           VALUES (${opp.niche}, ${opp.reason}, ${opp.site_type}, ${JSON.stringify(opp.core_keywords)},
                   ${opp.monthly_volume}, ${opp.competition}, ${opp.monetization},
                   ${opp.projected_traffic_6m}, ${opp.projected_revenue_6m},
                   ${JSON.stringify(opp.suggested_domains)}, ${JSON.stringify(opp.seed_articles)},
-                  ${opp.confidence_score})
+                  ${JSON.stringify(opp.target_countries ?? [])}, ${JSON.stringify(opp.target_languages ?? [])},
+                  ${JSON.stringify(opp.competitors ?? [])}, ${opp.confidence_score})
         `;
       }
     } catch (err) {
