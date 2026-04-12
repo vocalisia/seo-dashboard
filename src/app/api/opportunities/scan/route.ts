@@ -47,11 +47,11 @@ export async function POST() {
     const sites = await sql`SELECT name, url FROM sites WHERE is_active = true`;
     const siteNames = sites.map((s) => `${s.name} (${s.url})`).join(", ");
 
-    // 3. Build keyword themes (top 50 by impressions)
+    // 3. Build keyword themes (top 20 by impressions — keep prompt short for sonar-pro)
     const topKeywords = nicheData
-      .slice(0, 50)
-      .map((n) => `"${n.query}" (${n.total_impressions} impr, pos ${parseFloat(n.avg_position).toFixed(1)}, ${n.site_count} sites)`)
-      .join("\n");
+      .slice(0, 20)
+      .map((n) => `"${n.query}" (${n.total_impressions} impr, pos ${parseFloat(n.avg_position).toFixed(1)})`)
+      .join(", ");
 
     // 4. Ask Perplexity for market opportunities
     const prompt = `I own these websites: ${siteNames}
@@ -135,10 +135,13 @@ Rules:
 
     let aiResponse = "";
     try {
+      console.log(`[scanner] prompt length: ${prompt.length} chars`);
       aiResponse = await askAI([{ role: "user", content: prompt }], "search", 4000);
+      console.log(`[scanner] AI response length: ${aiResponse.length} chars`);
     } catch (err) {
-      console.error("Opportunity scan failed:", err);
-      return NextResponse.json({ success: false, error: "AI research failed" });
+      const msg = err instanceof Error ? err.message : "unknown";
+      console.error("Opportunity scan failed:", msg);
+      return NextResponse.json({ success: false, error: `AI research failed: ${msg.slice(0, 200)}` });
     }
 
     // 5. Parse response
