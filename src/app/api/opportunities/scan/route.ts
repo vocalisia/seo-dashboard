@@ -81,6 +81,9 @@ For each opportunity:
 8. Estimated monthly revenue potential (EUR)
 9. Suggested domain name (2-3 options, .com or .ch or .fr)
 10. First 5 article titles to seed the site
+11. TARGET COUNTRIES: which 2-5 countries have the most demand for this niche (ISO codes: FRA, DEU, CHE, GBR, USA, etc.)
+12. TARGET LANGUAGES: which languages to publish in (fr, en, de, es, it, nl, pt)
+13. TOP 3-5 EXISTING COMPETITORS: real competitor website URLs (full URLs like https://example.com) that are already ranking well in this niche — these must be REAL, EXISTING websites
 
 RESPOND IN STRICT JSON ONLY:
 {
@@ -97,6 +100,12 @@ RESPOND IN STRICT JSON ONLY:
       "projected_revenue_6m": 1500,
       "suggested_domains": ["domain1.com", "domain2.ch"],
       "seed_articles": ["Title 1", "Title 2", "Title 3", "Title 4", "Title 5"],
+      "target_countries": ["FRA", "CHE", "BEL"],
+      "target_languages": ["fr", "en"],
+      "competitors": [
+        {"url": "https://competitor1.com", "name": "Competitor 1"},
+        {"url": "https://competitor2.com", "name": "Competitor 2"}
+      ],
       "confidence_score": 85
     }
   ]
@@ -107,6 +116,7 @@ Rules:
 - monthly_volume must be >= 10000 for the combined core keywords
 - Be realistic with projections (not overly optimistic)
 - confidence_score: 0-100 based on data quality and market viability
+- Competitor URLs MUST be real, existing websites (verify they exist)
 - Sort by confidence_score DESC`;
 
     let aiResponse = "";

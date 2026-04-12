@@ -17,9 +17,22 @@ interface Opportunity {
   projected_revenue_6m: number;
   suggested_domains: string[];
   seed_articles: string[];
+  target_countries?: string[];
+  target_languages?: string[];
+  competitors?: { url: string; name: string }[];
   confidence_score: number;
   status: string;
 }
+
+const COUNTRY_FLAG: Record<string, string> = {
+  FRA: "🇫🇷", DEU: "🇩🇪", CHE: "🇨🇭", GBR: "🇬🇧", USA: "🇺🇸", BEL: "🇧🇪", CAN: "🇨🇦",
+  ESP: "🇪🇸", ITA: "🇮🇹", NLD: "🇳🇱", PRT: "🇵🇹", AUT: "🇦🇹", BRA: "🇧🇷", AUS: "🇦🇺",
+  IRL: "🇮🇪", LUX: "🇱🇺", MEX: "🇲🇽", ARG: "🇦🇷", JPN: "🇯🇵", IND: "🇮🇳", SGP: "🇸🇬",
+};
+
+const LANG_FLAG: Record<string, string> = {
+  fr: "🇫🇷", en: "🇬🇧", de: "🇩🇪", es: "🇪🇸", it: "🇮🇹", nl: "🇳🇱", pt: "🇵🇹",
+};
 
 const COMP_COLOR: Record<string, string> = {
   low: "text-green-400 bg-green-900/30",
@@ -184,6 +197,41 @@ export default function ScannerPage() {
                     <span key={i} className="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-300">{kw}</span>
                   ))}
                 </div>
+
+                {/* Countries + Languages */}
+                <div className="flex flex-wrap gap-4 mb-3">
+                  {opp.target_countries && opp.target_countries.length > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-gray-500">Pays:</span>
+                      {opp.target_countries.map((c, i) => (
+                        <span key={i} className="text-base" title={c}>{COUNTRY_FLAG[c] ?? c}</span>
+                      ))}
+                    </div>
+                  )}
+                  {opp.target_languages && opp.target_languages.length > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-gray-500">Langues:</span>
+                      {opp.target_languages.map((l, i) => (
+                        <span key={i} className="bg-gray-800 rounded px-1.5 py-0.5">
+                          {LANG_FLAG[l] ?? ""} {l.toUpperCase()}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Competitors */}
+                {opp.competitors && opp.competitors.length > 0 && (
+                  <div className="flex items-center gap-2 mb-3 text-xs flex-wrap">
+                    <span className="text-gray-500">Concurrents:</span>
+                    {opp.competitors.map((c, i) => (
+                      <a key={i} href={c.url} target="_blank" rel="noopener noreferrer"
+                        className="text-red-400 bg-red-900/20 hover:bg-red-900/40 rounded px-2 py-0.5 underline decoration-red-800 hover:decoration-red-400 transition-colors">
+                        {c.name || c.url.replace(/^https?:\/\//, '').split('/')[0]}
+                      </a>
+                    ))}
+                  </div>
+                )}
 
                 {/* Domains */}
                 <div className="flex items-center gap-2 mb-3 text-xs">
