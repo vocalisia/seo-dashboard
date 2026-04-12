@@ -108,6 +108,16 @@ RESPOND IN STRICT JSON ONLY:
       ],
       "success_rate": 72,
       "revenue_timeline": {"m1": 0, "m3": 200, "m6": 1500, "m12": 3000},
+      "business_model": {
+        "type": "affiliate blog with e-commerce upsell",
+        "how_to_monetize": "Detailed explanation of how to make money: what affiliate programs to join, what products to sell, what ads to run, what subscription to offer",
+        "affiliate_programs": ["Amazon Associates", "ShareASale partner X"],
+        "products_to_sell": ["Digital guide at 29€", "Monthly subscription at 9.99€/month"],
+        "ad_revenue_estimate": 300,
+        "affiliate_revenue_estimate": 800,
+        "product_revenue_estimate": 400,
+        "tools_needed": ["Shopify or WooCommerce", "Stripe", "Mailchimp"]
+      },
       "confidence_score": 85
     }
   ]
@@ -116,6 +126,7 @@ RESPOND IN STRICT JSON ONLY:
 Additional fields explained:
 - success_rate: estimated % chance of reaching page 1 within 12 months (0-100). Factor in: competition level, content quality advantage, niche specificity, keyword difficulty.
 - revenue_timeline: projected monthly revenue in EUR at month 1, 3, 6, 12. Be REALISTIC. Month 1 is almost always 0 for a new site.
+- business_model: DETAILED monetization strategy. Be SPECIFIC about which affiliate programs, what products to create, pricing, tools needed. Not generic — actionable.
 
 Rules:
 - Only suggest niches NOT already covered by my current sites
@@ -155,6 +166,9 @@ Rules:
         target_countries?: string[];
         target_languages?: string[];
         competitors?: { url: string; name: string }[];
+        success_rate?: number;
+        revenue_timeline?: { m1: number; m3: number; m6: number; m12: number };
+        business_model?: Record<string, unknown>;
         confidence_score: number;
       }[];
     };
@@ -196,6 +210,9 @@ Rules:
       await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS target_languages JSONB`;
       await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS competitors JSONB`;
       await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS validation JSONB`;
+      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS business_model JSONB`;
+      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS success_rate INTEGER`;
+      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS revenue_timeline JSONB`;
 
       // Clear old scan
       await sql`DELETE FROM market_opportunities WHERE status = 'pending'`;
@@ -205,13 +222,15 @@ Rules:
           INSERT INTO market_opportunities
           (niche, reason, site_type, core_keywords, monthly_volume, competition, monetization,
            projected_traffic_6m, projected_revenue_6m, suggested_domains, seed_articles,
-           target_countries, target_languages, competitors, confidence_score)
+           target_countries, target_languages, competitors, business_model, success_rate, revenue_timeline, confidence_score)
           VALUES (${opp.niche}, ${opp.reason}, ${opp.site_type}, ${JSON.stringify(opp.core_keywords)},
                   ${opp.monthly_volume}, ${opp.competition}, ${opp.monetization},
                   ${opp.projected_traffic_6m}, ${opp.projected_revenue_6m},
                   ${JSON.stringify(opp.suggested_domains)}, ${JSON.stringify(opp.seed_articles)},
                   ${JSON.stringify(opp.target_countries ?? [])}, ${JSON.stringify(opp.target_languages ?? [])},
-                  ${JSON.stringify(opp.competitors ?? [])}, ${opp.confidence_score})
+                  ${JSON.stringify(opp.competitors ?? [])}, ${JSON.stringify(opp.business_model ?? {})},
+                  ${opp.success_rate ?? 0}, ${JSON.stringify(opp.revenue_timeline ?? {})},
+                  ${opp.confidence_score})
         `;
       }
     } catch (err) {

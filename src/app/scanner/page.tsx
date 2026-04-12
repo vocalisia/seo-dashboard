@@ -22,6 +22,16 @@ interface Opportunity {
   competitors?: { url: string; name: string }[];
   success_rate?: number;
   revenue_timeline?: { m1: number; m3: number; m6: number; m12: number };
+  business_model?: {
+    type: string;
+    how_to_monetize: string;
+    affiliate_programs?: string[];
+    products_to_sell?: string[];
+    ad_revenue_estimate?: number;
+    affiliate_revenue_estimate?: number;
+    product_revenue_estimate?: number;
+    tools_needed?: string[];
+  };
   confidence_score: number;
   status: string;
 }
@@ -265,6 +275,65 @@ export default function ScannerPage() {
                     <span key={i} className="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-300">{kw}</span>
                   ))}
                 </div>
+
+                {/* Business Model */}
+                {opp.business_model && (
+                  <div className="bg-gradient-to-r from-gray-800/80 to-gray-800/40 border border-gray-700 rounded-xl p-4 mb-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-base">💼</span>
+                      <span className="text-sm font-semibold text-white">{opp.business_model.type}</span>
+                    </div>
+                    <p className="text-xs text-gray-400 mb-3">{opp.business_model.how_to_monetize}</p>
+
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      {(opp.business_model.ad_revenue_estimate ?? 0) > 0 && (
+                        <div className="bg-gray-900/60 rounded px-2 py-1.5 text-center">
+                          <div className="text-sm font-bold text-blue-400">{opp.business_model.ad_revenue_estimate}€</div>
+                          <div className="text-[9px] text-gray-500">Ads/mois</div>
+                        </div>
+                      )}
+                      {(opp.business_model.affiliate_revenue_estimate ?? 0) > 0 && (
+                        <div className="bg-gray-900/60 rounded px-2 py-1.5 text-center">
+                          <div className="text-sm font-bold text-green-400">{opp.business_model.affiliate_revenue_estimate}€</div>
+                          <div className="text-[9px] text-gray-500">Affiliation/mois</div>
+                        </div>
+                      )}
+                      {(opp.business_model.product_revenue_estimate ?? 0) > 0 && (
+                        <div className="bg-gray-900/60 rounded px-2 py-1.5 text-center">
+                          <div className="text-sm font-bold text-yellow-400">{opp.business_model.product_revenue_estimate}€</div>
+                          <div className="text-[9px] text-gray-500">Produits/mois</div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-3 text-xs">
+                      {opp.business_model.affiliate_programs && opp.business_model.affiliate_programs.length > 0 && (
+                        <div>
+                          <span className="text-gray-500">Affiliations: </span>
+                          {opp.business_model.affiliate_programs.map((a, i) => (
+                            <span key={i} className="text-green-400 bg-green-900/20 rounded px-1.5 py-0.5 mr-1">{a}</span>
+                          ))}
+                        </div>
+                      )}
+                      {opp.business_model.products_to_sell && opp.business_model.products_to_sell.length > 0 && (
+                        <div>
+                          <span className="text-gray-500">Produits: </span>
+                          {opp.business_model.products_to_sell.map((p, i) => (
+                            <span key={i} className="text-yellow-400 bg-yellow-900/20 rounded px-1.5 py-0.5 mr-1">{p}</span>
+                          ))}
+                        </div>
+                      )}
+                      {opp.business_model.tools_needed && opp.business_model.tools_needed.length > 0 && (
+                        <div>
+                          <span className="text-gray-500">Outils: </span>
+                          {opp.business_model.tools_needed.map((t, i) => (
+                            <span key={i} className="text-gray-300 bg-gray-800 rounded px-1.5 py-0.5 mr-1">{t}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Countries + Languages */}
                 <div className="flex flex-wrap gap-4 mb-3">
