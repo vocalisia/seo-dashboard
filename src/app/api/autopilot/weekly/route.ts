@@ -36,7 +36,7 @@ const LANG_FLAG: Record<string, string> = {
   fr: "🇫🇷", en: "🇬🇧", de: "🇩🇪", es: "🇪🇸", it: "🇮🇹", nl: "🇳🇱", pt: "🇵🇹",
 };
 
-async function runAutopilotForSite(siteId: number, language: string): Promise<ApiResponse> {
+async function runAutopilotForSite(siteId: number, language: string, source: "gsc" | "competitor" = "gsc"): Promise<ApiResponse> {
   const baseUrl = process.env.VERCEL_URL
     ? `https://${process.env.VERCEL_URL}`
     : (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000");
@@ -44,7 +44,7 @@ async function runAutopilotForSite(siteId: number, language: string): Promise<Ap
   const res = await fetch(`${baseUrl}/api/autopilot`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ site_id: siteId, dry_run: false, language }),
+    body: JSON.stringify({ site_id: siteId, dry_run: false, language, source }),
   });
 
   return res.json() as Promise<ApiResponse>;
@@ -141,7 +141,7 @@ export async function POST() {
 
     const results: AutopilotResult[] = [];
 
-    // Loop sites × target_languages
+    // PASS 1: GSC articles (improve existing rankings)
     for (const site of sites) {
       const languages = (site.target_languages && site.target_languages.length > 0)
         ? site.target_languages
@@ -149,7 +149,7 @@ export async function POST() {
 
       for (const language of languages) {
         try {
-          const result = await runAutopilotForSite(site.id, language);
+          const result = await runAutopilotForSite(site.id, language, "gsc");
           results.push({
             site: site.name,
             site_id: site.id,
@@ -163,14 +163,33 @@ export async function POST() {
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unknown error";
-          results.push({
-            site: site.name,
-            site_id: site.id,
-            language,
-            status: "failed",
-            error: message,
-          });
+          results.push({ site: site.name, site_id: site.id, language, status: "failed", error: message });
         }
+      }
+    }
+
+    // PASS 2: Competitor gap articles (attack new keywords vol >= 1000)
+    for (const site of sites) {
+      const mainLang = (site.target_languages && site.target_languages.length > 0)
+        ? site.target_languages[0]
+        : "fr";
+
+      try {
+        const result = await runAutopilotForSite(site.id, mainLang, "competitor");
+        results.push({
+          site: site.name + " [COMPETITOR]",
+          site_id: site.id,
+          language: mainLang,
+          keyword: result.keyword,
+          article_title: result.article_title,
+          github_url: result.github_url,
+          image_url: result.image_url,
+          status: result.status ?? (result.error ? "failed" : "unknown"),
+          error: result.error,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        results.push({ site: site.name + " [COMPETITOR]", site_id: site.id, language: mainLang, status: "failed", error: message });
       }
     }
 

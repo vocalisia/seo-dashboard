@@ -140,14 +140,14 @@ function todayISO(): string {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { site_id?: number; dry_run?: boolean; language?: string };
+  let body: { site_id?: number; dry_run?: boolean; language?: string; source?: "gsc" | "competitor" };
   try {
-    body = (await req.json()) as { site_id?: number; dry_run?: boolean; language?: string };
+    body = (await req.json()) as { site_id?: number; dry_run?: boolean; language?: string; source?: "gsc" | "competitor" };
   } catch {
     return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { site_id, dry_run = false, language = "fr" } = body;
+  const { site_id, dry_run = false, language = "fr", source = "gsc" } = body;
   const lang = LANG_CONFIG[language] ?? LANG_CONFIG.fr;
 
   if (!site_id || typeof site_id !== "number") {
@@ -180,7 +180,9 @@ export async function POST(req: NextRequest) {
     const repoConfig = siteKey ? SITE_REPO_MAP[siteKey] : null;
     console.log(`[autopilot] site="${site.name}" → normalized="${normalizedSiteName}" → siteKey=${siteKey ?? "null"}`);
 
-    // 2. Get top keyword opportunity FILTERED BY COUNTRY of the target language
+    // 2. Get top keyword opportunity
+    //    source="gsc" → from GSC data (improve existing rankings)
+    //    source="competitor" → from competitor_research gaps (attack new terrain)
     const targetCountries = lang.countries;
 
     // Fetch already-used keywords for this site+language (skip if table missing)
@@ -200,10 +202,46 @@ export async function POST(req: NextRequest) {
         console.error("Failed to fetch used keywords (table may not exist yet):", err);
       }
     }
-    console.log(`[autopilot] dry_run=${dry_run} usedKeywords=${usedKeywords.length}`);
+    console.log(`[autopilot] dry_run=${dry_run} source=${source} usedKeywords=${usedKeywords.length}`);
+
+    let kwRows: KeywordRow[] = [];
+
+    // If source=competitor, go DIRECTLY to competitor gaps (skip GSC entirely)
+    if (source === "competitor") {
+      try {
+        const gapRows = (await sql`
+          SELECT keyword AS query,
+                 competitor_position AS position,
+                 estimated_volume AS impressions,
+                 0 AS clicks
+          FROM competitor_research
+          WHERE site_id = ${site_id}
+            AND estimated_volume >= 1000
+            AND NOT (LOWER(keyword) = ANY(${usedKeywords}))
+          ORDER BY estimated_volume DESC
+          LIMIT 1
+        `) as KeywordRow[];
+        if (gapRows.length > 0) {
+          kwRows = gapRows;
+          console.log(`[autopilot] COMPETITOR source: ${kwRows[0].query} vol=${kwRows[0].impressions}`);
+        }
+      } catch {
+        // competitor_research table may not exist
+      }
+
+      if (kwRows.length === 0) {
+        return NextResponse.json({
+          success: false,
+          error: `No competitor gap found for ${site.name}. Lance l'analyse concurrents d'abord (/competitors).`,
+        });
+      }
+    }
+
+    // GSC keyword search — only if source=gsc (skip for competitor mode)
+    if (source !== "competitor") {
 
     // Step A: country-filtered query (requires country data synced)
-    let kwRows = (await sql`
+    kwRows = (await sql`
       SELECT query,
              AVG(position)    AS position,
              SUM(impressions) AS impressions,
@@ -259,6 +297,8 @@ export async function POST(req: NextRequest) {
       `) as KeywordRow[];
       console.log(`[autopilot] step C (ultra relaxed, 90d): ${kwRows.length} rows`);
     }
+
+    } // end of source !== "competitor" block
 
     // Fallback 3: use competitor research gaps (high volume keywords we don't rank for)
     if (kwRows.length === 0) {
