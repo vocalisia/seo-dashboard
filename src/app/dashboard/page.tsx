@@ -329,6 +329,12 @@ export default function DashboardPage() {
           <Link href="/calendar" className="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
             📅 Calendrier
           </Link>
+          <Link href="/alerts" className="bg-red-600/20 hover:bg-red-600/40 text-red-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            🚨 Alertes
+          </Link>
+          <Link href="/refresh" className="bg-amber-600/20 hover:bg-amber-600/40 text-amber-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            🔄 Refresh
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing

@@ -1,0 +1,321 @@
+export const dynamic = "force-dynamic";
+
+import { NextResponse } from "next/server";
+import { getSQL } from "@/lib/db";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface SiteRow {
+  id: number;
+  name: string;
+  url: string;
+}
+
+interface PositionDrop {
+  keyword: string;
+  prev_avg: number;
+  curr_avg: number;
+  drop: number;
+}
+
+interface UnindexedArticle {
+  run_id: number;
+  keyword: string;
+  live_url: string;
+  status_code: number | null;
+}
+
+interface AlertPayload {
+  site_id: number;
+  alert_type: string;
+  severity: string;
+  keyword: string;
+  message: string;
+  data: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function deriveLiveUrl(siteUrl: string, githubUrl: string): string | null {
+  try {
+    const parts = githubUrl.split("/");
+    const filename = parts[parts.length - 1];
+    if (!filename) return null;
+
+    let slug = filename.replace(/\.mdx?$/, "");
+    slug = slug.replace(/^[a-z]{2}-/, "");
+    slug = slug.replace(/-\d{4}-\d{2}-\d{2}$/, "");
+
+    const baseUrl = siteUrl.replace(/\/$/, "");
+    return `${baseUrl}/blog/${slug}`;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Check A — Position drops (>= 5 positions in 7d vs previous 7d)
+// ---------------------------------------------------------------------------
+
+async function checkPositionDrops(
+  sql: ReturnType<typeof getSQL>,
+  siteId: number
+): Promise<PositionDrop[]> {
+  const rows = (await sql`
+    WITH current_week AS (
+      SELECT query,
+             AVG(position) AS avg_pos
+      FROM search_console_data
+      WHERE site_id = ${siteId}
+        AND date >= CURRENT_DATE - INTERVAL '7 days'
+        AND position IS NOT NULL
+      GROUP BY query
+    ),
+    previous_week AS (
+      SELECT query,
+             AVG(position) AS avg_pos
+      FROM search_console_data
+      WHERE site_id = ${siteId}
+        AND date >= CURRENT_DATE - INTERVAL '14 days'
+        AND date < CURRENT_DATE - INTERVAL '7 days'
+        AND position IS NOT NULL
+      GROUP BY query
+    )
+    SELECT cw.query   AS keyword,
+           pw.avg_pos AS prev_avg,
+           cw.avg_pos AS curr_avg,
+           (cw.avg_pos - pw.avg_pos) AS drop
+    FROM current_week cw
+    INNER JOIN previous_week pw ON pw.query = cw.query
+    WHERE (cw.avg_pos - pw.avg_pos) >= 5
+    ORDER BY (cw.avg_pos - pw.avg_pos) DESC
+    LIMIT 50
+  `) as PositionDrop[];
+
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Check B — Indexation failures (published > 48h, HTTP != 200)
+// ---------------------------------------------------------------------------
+
+interface AutopilotRow {
+  id: number;
+  keyword: string;
+  github_url: string;
+}
+
+async function checkIndexation(
+  sql: ReturnType<typeof getSQL>,
+  siteId: number,
+  siteUrl: string
+): Promise<UnindexedArticle[]> {
+  const runs = (await sql`
+    SELECT id, keyword, github_url
+    FROM autopilot_runs
+    WHERE site_id = ${siteId}
+      AND status = 'published'
+      AND github_url IS NOT NULL
+      AND created_at < NOW() - INTERVAL '48 hours'
+    ORDER BY created_at DESC
+    LIMIT 50
+  `) as AutopilotRow[];
+
+  const failures: UnindexedArticle[] = [];
+
+  for (const run of runs) {
+    const liveUrl = deriveLiveUrl(siteUrl, run.github_url);
+    if (!liveUrl) continue;
+
+    let statusCode: number | null = null;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+
+      const res = await fetch(liveUrl, {
+        method: "HEAD",
+        redirect: "follow",
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+      statusCode = res.status;
+    } catch {
+      statusCode = null;
+    }
+
+    if (statusCode !== 200) {
+      failures.push({
+        run_id: run.id,
+        keyword: run.keyword,
+        live_url: liveUrl,
+        status_code: statusCode,
+      });
+    }
+  }
+
+  return failures;
+}
+
+// ---------------------------------------------------------------------------
+// Store alerts
+// ---------------------------------------------------------------------------
+
+async function ensureAlertsTable(sql: ReturnType<typeof getSQL>): Promise<void> {
+  await sql`
+    CREATE TABLE IF NOT EXISTS seo_alerts (
+      id SERIAL PRIMARY KEY,
+      site_id INTEGER REFERENCES sites(id),
+      alert_type VARCHAR(50),
+      severity VARCHAR(20),
+      keyword VARCHAR(500),
+      message TEXT,
+      data JSONB,
+      is_read BOOLEAN DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_seo_alerts_site ON seo_alerts(site_id, created_at DESC)`;
+}
+
+async function insertAlerts(
+  sql: ReturnType<typeof getSQL>,
+  alerts: AlertPayload[]
+): Promise<void> {
+  for (const a of alerts) {
+    await sql`
+      INSERT INTO seo_alerts (site_id, alert_type, severity, keyword, message, data)
+      VALUES (${a.site_id}, ${a.alert_type}, ${a.severity}, ${a.keyword}, ${a.message}, ${JSON.stringify(a.data)})
+    `;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Email via Resend
+// ---------------------------------------------------------------------------
+
+async function sendAlertEmail(alerts: AlertPayload[], sites: SiteRow[]): Promise<void> {
+  const resendKey = process.env.RESEND_API_KEY;
+  const alertEmail = process.env.ALERT_EMAIL;
+  if (!resendKey || !alertEmail || alerts.length === 0) return;
+
+  const siteMap = new Map(sites.map((s) => [s.id, s.name]));
+
+  const rows = alerts
+    .map((a) => {
+      const siteName = siteMap.get(a.site_id) ?? `Site #${a.site_id}`;
+      const badge = a.severity === "critical" ? "🔴" : a.severity === "warning" ? "🟡" : "🔵";
+      return `<tr>
+        <td>${badge} ${a.severity.toUpperCase()}</td>
+        <td>${siteName}</td>
+        <td>${a.alert_type}</td>
+        <td>${a.keyword}</td>
+        <td>${a.message}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const html = `
+<h2>🚨 SEO Alerts — ${alerts.length} issue(s) detected</h2>
+<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
+  <thead><tr><th>Severity</th><th>Site</th><th>Type</th><th>Keyword</th><th>Details</th></tr></thead>
+  <tbody>${rows}</tbody>
+</table>
+<p style="color:#888;font-size:11px">SEO Dashboard Alerts — ${new Date().toISOString().slice(0, 10)}</p>
+  `.trim();
+
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "SEO Dashboard <onboarding@resend.dev>",
+        to: [alertEmail],
+        subject: `🚨 SEO Alerts — ${alerts.length} issue(s) detected`,
+        html,
+      }),
+    });
+  } catch (err) {
+    console.error("Failed to send alert email:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST handler (cron-triggered)
+// ---------------------------------------------------------------------------
+
+export async function POST() {
+  const sql = getSQL();
+
+  try {
+    await ensureAlertsTable(sql);
+
+    const sites = (await sql`
+      SELECT id, name, url FROM sites WHERE is_active = true ORDER BY id
+    `) as SiteRow[];
+
+    if (sites.length === 0) {
+      return NextResponse.json({ success: true, message: "No active sites", alerts: 0 });
+    }
+
+    const allAlerts: AlertPayload[] = [];
+
+    for (const site of sites) {
+      // A) Position drops
+      const drops = await checkPositionDrops(sql, site.id);
+      for (const d of drops) {
+        const severity = d.drop >= 10 ? "critical" : "warning";
+        allAlerts.push({
+          site_id: site.id,
+          alert_type: "position_drop",
+          severity,
+          keyword: d.keyword,
+          message: `Lost ${Math.round(d.drop)} positions (${Math.round(d.prev_avg)} → ${Math.round(d.curr_avg)})`,
+          data: { prev_avg: d.prev_avg, curr_avg: d.curr_avg, drop: d.drop },
+        });
+      }
+
+      // B) Indexation failures
+      const failures = await checkIndexation(sql, site.id, site.url);
+      for (const f of failures) {
+        allAlerts.push({
+          site_id: site.id,
+          alert_type: "not_indexed",
+          severity: "critical",
+          keyword: f.keyword,
+          message: `Article not accessible (HTTP ${f.status_code ?? "timeout"}) — ${f.live_url}`,
+          data: { run_id: f.run_id, live_url: f.live_url, status_code: f.status_code },
+        });
+      }
+
+      // C) Competitor gains — skipped (no history table yet)
+    }
+
+    // Persist
+    await insertAlerts(sql, allAlerts);
+
+    // Email
+    await sendAlertEmail(allAlerts, sites);
+
+    return NextResponse.json({
+      success: true,
+      total_sites: sites.length,
+      alerts: allAlerts.length,
+      by_type: {
+        position_drop: allAlerts.filter((a) => a.alert_type === "position_drop").length,
+        not_indexed: allAlerts.filter((a) => a.alert_type === "not_indexed").length,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("Alert check error:", err);
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
+  }
+}
