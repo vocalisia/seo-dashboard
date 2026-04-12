@@ -3,7 +3,7 @@ import { getAnalyticsClient, getSearchConsoleClient } from "@/lib/google-auth";
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 
-async function syncAnalytics(siteId: number, propertyId: string, accessToken: string) {
+async function syncAnalytics(siteId: number, propertyId: string, accessToken?: string) {
   const sql = getSQL();
   const analytics = getAnalyticsClient(accessToken);
   const endDate = new Date().toISOString().split("T")[0];
@@ -78,7 +78,7 @@ async function syncAnalytics(siteId: number, propertyId: string, accessToken: st
   return inserted;
 }
 
-async function syncSearchConsole(siteId: number, siteUrl: string, accessToken: string) {
+async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: string) {
   const sql = getSQL();
   const searchConsole = getSearchConsoleClient(accessToken);
   const endDate = new Date().toISOString().split("T")[0];
@@ -140,11 +140,20 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken: s
 
 export async function POST() {
   try {
-    const session = await auth();
-    if (!session?.accessToken) {
-      return NextResponse.json({ error: "Non authentifié. Connecte-toi avec Google." }, { status: 401 });
+    // Try OAuth session first, fallback to service account (no login required)
+    let accessToken: string | undefined;
+    try {
+      const session = await auth();
+      accessToken = session?.accessToken ?? undefined;
+    } catch {
+      // no session — will use service account
     }
-    const accessToken = session.accessToken;
+
+    // If no OAuth token, use service account (pass undefined → google-auth.ts handles it)
+    const useServiceAccount = !accessToken;
+    if (useServiceAccount) {
+      console.log("[sync] No OAuth session → using service account");
+    }
 
     const sql = getSQL();
     const sites = await sql`SELECT * FROM sites WHERE is_active = true`;
@@ -161,7 +170,7 @@ export async function POST() {
       results.push(result);
     }
 
-    return NextResponse.json({ success: true, results });
+    return NextResponse.json({ success: true, results, auth: useServiceAccount ? "service_account" : "oauth" });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
