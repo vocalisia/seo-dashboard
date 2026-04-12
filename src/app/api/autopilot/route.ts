@@ -633,6 +633,17 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       }
     }
 
+    // 8b. Ping Google sitemap endpoint
+    if (!dry_run && githubUrl) {
+      try {
+        const sitemapUrl = `${site.url}/sitemap.xml`;
+        await fetch(`https://www.google.com/ping?sitemap=${encodeURIComponent(sitemapUrl)}`);
+        console.log('[autopilot] sitemap ping:', site.url);
+      } catch (err) {
+        console.error('[autopilot] sitemap ping failed (non-blocking):', err);
+      }
+    }
+
     // 9. Store result in autopilot_runs (with language)
     const runStatus = dry_run ? "dry_run" : githubUrl ? "published" : "failed";
     try {
