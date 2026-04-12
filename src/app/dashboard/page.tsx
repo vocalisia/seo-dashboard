@@ -335,6 +335,12 @@ export default function DashboardPage() {
           <Link href="/refresh" className="bg-amber-600/20 hover:bg-amber-600/40 text-amber-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
             🔄 Refresh
           </Link>
+          <Link href="/clusters" className="bg-violet-600/20 hover:bg-violet-600/40 text-violet-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            🧩 Clusters
+          </Link>
+          <Link href="/internal-links" className="bg-teal-600/20 hover:bg-teal-600/40 text-teal-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            🔗 Maillage
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
