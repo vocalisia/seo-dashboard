@@ -3,6 +3,14 @@
     {
       "path": "/api/sync",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/reports/generate",
+      "schedule": "0 8 * * 1"
+    },
+    {
+      "path": "/api/autopilot/weekly",
+      "schedule": "0 9 * * 1"
     }
   ]
 }

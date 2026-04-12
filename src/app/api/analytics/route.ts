@@ -1,6 +1,8 @@
 import { getSQL } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   const siteId = request.nextUrl.searchParams.get("siteId");
   const days = request.nextUrl.searchParams.get("days") || "30";

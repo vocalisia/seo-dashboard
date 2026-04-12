@@ -1,10 +1,11 @@
 import { getSQL } from "@/lib/db";
 import { getAnalyticsClient, getSearchConsoleClient } from "@/lib/google-auth";
+import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 
-async function syncAnalytics(siteId: number, propertyId: string) {
+async function syncAnalytics(siteId: number, propertyId: string, accessToken: string) {
   const sql = getSQL();
-  const analytics = getAnalyticsClient();
+  const analytics = getAnalyticsClient(accessToken);
   const endDate = new Date().toISOString().split("T")[0];
   const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
@@ -77,12 +78,13 @@ async function syncAnalytics(siteId: number, propertyId: string) {
   return inserted;
 }
 
-async function syncSearchConsole(siteId: number, siteUrl: string) {
+async function syncSearchConsole(siteId: number, siteUrl: string, accessToken: string) {
   const sql = getSQL();
-  const searchConsole = getSearchConsoleClient();
+  const searchConsole = getSearchConsoleClient(accessToken);
   const endDate = new Date().toISOString().split("T")[0];
   const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
+  // Query 1: query + page + date (aggregate, no country breakdown)
   const response = await searchConsole.searchanalytics.query({
     siteUrl,
     requestBody: {
@@ -105,11 +107,45 @@ async function syncSearchConsole(siteId: number, siteUrl: string) {
     `;
     totalInserted++;
   }
+
+  // Query 2: by country (aggregated across dates) — stored with the latest date as reference
+  try {
+    const countryResponse = await searchConsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        startDate, endDate,
+        dimensions: ["query", "page", "country"],
+        rowLimit: 25000, startRow: 0,
+      },
+    });
+    const countryRows = countryResponse.data.rows || [];
+    for (const row of countryRows) {
+      const country = (row.keys?.[2] || "").toUpperCase();
+      await sql`
+        INSERT INTO search_console_data
+        (site_id, date, query, page, clicks, impressions, ctr, position, country)
+        VALUES (${siteId}, ${endDate}, ${row.keys?.[0] || ""}, ${row.keys?.[1] || ""},
+                ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0},
+                ${country})
+        ON CONFLICT DO NOTHING
+      `;
+      totalInserted++;
+    }
+  } catch (err) {
+    console.error(`Country sync failed for site ${siteId}:`, err);
+  }
+
   return totalInserted;
 }
 
 export async function POST() {
   try {
+    const session = await auth();
+    if (!session?.accessToken) {
+      return NextResponse.json({ error: "Non authentifié. Connecte-toi avec Google." }, { status: 401 });
+    }
+    const accessToken = session.accessToken;
+
     const sql = getSQL();
     const sites = await sql`SELECT * FROM sites WHERE is_active = true`;
     const results = [];
@@ -117,8 +153,8 @@ export async function POST() {
     for (const site of sites) {
       const result: { site: string; analytics?: number; gsc?: number; error?: string } = { site: site.name };
       try {
-        if (site.ga_property_id) result.analytics = await syncAnalytics(site.id, site.ga_property_id);
-        if (site.gsc_property) result.gsc = await syncSearchConsole(site.id, site.gsc_property);
+        if (site.ga_property_id) result.analytics = await syncAnalytics(site.id, site.ga_property_id, accessToken);
+        if (site.gsc_property) result.gsc = await syncSearchConsole(site.id, site.gsc_property, accessToken);
       } catch (err: unknown) {
         result.error = err instanceof Error ? err.message : "Unknown error";
       }

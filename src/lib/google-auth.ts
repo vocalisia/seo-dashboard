@@ -1,7 +1,6 @@
 import { google } from "googleapis";
 
-function getCredentials() {
-  // Try GOOGLE_CREDENTIALS first (full JSON), then individual vars
+function getServiceAccountCredentials() {
   if (process.env.GOOGLE_CREDENTIALS) {
     return JSON.parse(process.env.GOOGLE_CREDENTIALS);
   }
@@ -11,9 +10,14 @@ function getCredentials() {
   };
 }
 
-export function getGoogleAuth() {
-  const creds = getCredentials();
-  const auth = new google.auth.GoogleAuth({
+export function getGoogleAuth(accessToken?: string) {
+  if (accessToken) {
+    const oauth2 = new google.auth.OAuth2();
+    oauth2.setCredentials({ access_token: accessToken });
+    return oauth2;
+  }
+  const creds = getServiceAccountCredentials();
+  return new google.auth.GoogleAuth({
     credentials: {
       client_email: creds.client_email,
       private_key: creds.private_key,
@@ -23,13 +27,12 @@ export function getGoogleAuth() {
       "https://www.googleapis.com/auth/webmasters.readonly",
     ],
   });
-  return auth;
 }
 
-export function getAnalyticsClient() {
-  return google.analyticsdata({ version: "v1beta", auth: getGoogleAuth() });
+export function getAnalyticsClient(accessToken?: string) {
+  return google.analyticsdata({ version: "v1beta", auth: getGoogleAuth(accessToken) as never });
 }
 
-export function getSearchConsoleClient() {
-  return google.searchconsole({ version: "v1", auth: getGoogleAuth() });
+export function getSearchConsoleClient(accessToken?: string) {
+  return google.searchconsole({ version: "v1", auth: getGoogleAuth(accessToken) as never });
 }
