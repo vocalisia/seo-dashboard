@@ -350,6 +350,9 @@ export default function DashboardPage() {
           <Link href="/health" className="bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
             💊 Santé SEO
           </Link>
+          <Link href="/scanner" className="bg-gradient-to-r from-cyan-600/20 to-blue-600/20 hover:from-cyan-600/40 hover:to-blue-600/40 text-cyan-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-cyan-800/50">
+            🔮 Scanner
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
