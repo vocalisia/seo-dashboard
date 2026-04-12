@@ -9,7 +9,7 @@ export const MODELS = {
   fast:        "gemini-2.5-flash",            // briefs rapides → Gemini Flash
   smart:       "claude-sonnet-4-6",           // rapports hebdo → Sonnet (meilleur FR)
   cluster:     "deepseek-v3",                 // clustering mots clés → logique pure
-  search:      "perplexity/sonar-pro",        // recherche SERP temps réel → Perplexity
+  search:      "sonar-pro",                    // recherche SERP temps réel → Perplexity
   creative:    "mistral-large-latest",        // rédaction créative → Mistral
 
   // Tous les modèles dispo
@@ -23,7 +23,7 @@ export const MODELS = {
   deepseek:    "deepseek-v3",
   mistral:     "mistral-large-latest",
   magistral:   "magistral-medium-latest",
-  perplexity:  "perplexity/sonar-pro",        // web search intégré
+  perplexity:  "sonar-pro",                    // web search intégré
   llama:       "meta-llama/llama-4-maverick",
   grok:        "grok-3",
 };
