@@ -136,8 +136,8 @@ export default function ScannerPage() {
         {/* Opportunities */}
         {opportunities.length > 0 && (
           <div className="space-y-4">
-            {opportunities.map((opp) => (
-              <div key={opp.id} className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            {opportunities.map((opp, idx) => (
+              <div key={opp.id ?? `opp-${idx}`} className="bg-gray-900 border border-gray-800 rounded-xl p-6">
                 {/* Header */}
                 <div className="flex items-start justify-between mb-4">
                   <div>
