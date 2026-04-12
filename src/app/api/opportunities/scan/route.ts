@@ -138,7 +138,7 @@ Rules:
 
     let aiResponse = "";
     try {
-      aiResponse = await askAI([{ role: "user", content: prompt }], "search", 4000);
+      aiResponse = await askAI([{ role: "user", content: prompt }], "search", 8000);
     } catch (err) {
       console.error("Opportunity scan failed:", err);
       return NextResponse.json({ success: false, error: "AI research failed" });
@@ -176,7 +176,27 @@ Rules:
     try {
       parsed = JSON.parse(cleaned);
     } catch {
-      return NextResponse.json({ success: false, error: "AI returned invalid JSON", raw: cleaned.slice(0, 1000) });
+      // Try to fix truncated JSON by closing open brackets
+      let fixed = cleaned;
+      // Count open/close braces and brackets
+      const openBraces = (fixed.match(/{/g) || []).length;
+      const closeBraces = (fixed.match(/}/g) || []).length;
+      const openBrackets = (fixed.match(/\[/g) || []).length;
+      const closeBrackets = (fixed.match(/]/g) || []).length;
+
+      // Remove trailing comma if present
+      fixed = fixed.replace(/,\s*$/, "");
+
+      // Close unclosed structures
+      for (let i = 0; i < openBrackets - closeBrackets; i++) fixed += "]";
+      for (let i = 0; i < openBraces - closeBraces; i++) fixed += "}";
+
+      try {
+        parsed = JSON.parse(fixed);
+        console.log("[scanner] Fixed truncated JSON successfully");
+      } catch {
+        return NextResponse.json({ success: false, error: "AI returned invalid JSON (truncated)", raw: cleaned.slice(0, 1000) });
+      }
     }
 
     // 6. Store in DB
