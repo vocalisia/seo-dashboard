@@ -61,7 +61,7 @@ My sites cover: voice AI, Tesla/EV magazine, CBD Europe, crypto/trust, business 
 My top 50 keywords across all sites (with impressions and position):
 ${topKeywords}
 
-TASK: Analyze my current portfolio and identify 8-10 NEW BUSINESS OPPORTUNITIES where I should create a DEDICATED website, blog, magazine, or e-commerce store.
+TASK: Analyze my current portfolio and identify 5 NEW BUSINESS OPPORTUNITIES where I should create a DEDICATED website, blog, magazine, or e-commerce store.
 
 CRITICAL RULES:
 - DIVERSIFY across DIFFERENT sectors (NOT all in the same niche)
@@ -110,13 +110,10 @@ RESPOND IN STRICT JSON ONLY:
       "revenue_timeline": {"m1": 0, "m3": 200, "m6": 1500, "m12": 3000},
       "business_model": {
         "type": "affiliate blog with e-commerce upsell",
-        "how_to_monetize": "Detailed explanation of how to make money: what affiliate programs to join, what products to sell, what ads to run, what subscription to offer",
-        "affiliate_programs": ["Amazon Associates", "ShareASale partner X"],
-        "products_to_sell": ["Digital guide at 29€", "Monthly subscription at 9.99€/month"],
-        "ad_revenue_estimate": 300,
-        "affiliate_revenue_estimate": 800,
-        "product_revenue_estimate": 400,
-        "tools_needed": ["Shopify or WooCommerce", "Stripe", "Mailchimp"]
+        "how_to_monetize": "Short explanation of monetization strategy",
+        "affiliate_programs": ["Program1", "Program2"],
+        "products_to_sell": ["Product 29€", "Abo 9.99€/m"],
+        "tools_needed": ["Shopify", "Stripe"]
       },
       "confidence_score": 85
     }
@@ -138,7 +135,7 @@ Rules:
 
     let aiResponse = "";
     try {
-      aiResponse = await askAI([{ role: "user", content: prompt }], "search", 8000);
+      aiResponse = await askAI([{ role: "user", content: prompt }], "search", 4000);
     } catch (err) {
       console.error("Opportunity scan failed:", err);
       return NextResponse.json({ success: false, error: "AI research failed" });
