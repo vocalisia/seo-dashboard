@@ -48,6 +48,12 @@ export default function ScannerPage() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(false);
   const [deploying, setDeploying] = useState<number | null>(null);
+  const [validating, setValidating] = useState<number | null>(null);
+  const [validationResults, setValidationResults] = useState<Record<number, {
+    verdict: string; verdict_reason: string; attackability_score: number;
+    time_to_page1_months: number; content_gaps: string[]; quick_wins: string[];
+    strategy_recommendation: string;
+  }>>({});
   const [deployResult, setDeployResult] = useState<string | null>(null);
 
   useEffect(() => { void fetchCached(); }, []);
@@ -68,6 +74,22 @@ export default function ScannerPage() {
       setOpportunities(d.opportunities ?? []);
     } catch { /* ignore */ }
     setLoading(false);
+  }
+
+  async function validateNiche(oppId: number) {
+    setValidating(oppId);
+    try {
+      const res = await fetch("/api/opportunities/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ opportunity_id: oppId }),
+      });
+      const d = await res.json();
+      if (d.success) {
+        setValidationResults((prev) => ({ ...prev, [oppId]: d }));
+      }
+    } catch { /* ignore */ }
+    setValidating(null);
   }
 
   async function deploySite(opp: Opportunity) {
@@ -257,19 +279,81 @@ export default function ScannerPage() {
                   </div>
                 </details>
 
-                {/* Deploy button */}
-                {opp.status === "pending" ? (
-                  <button
-                    onClick={() => deploySite(opp)}
-                    disabled={deploying === opp.id}
-                    className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
-                  >
-                    {deploying === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
-                    {deploying === opp.id ? "Création en cours..." : "Créer ce site maintenant"}
-                  </button>
-                ) : (
-                  <span className="text-xs text-green-400 bg-green-900/20 rounded px-3 py-1.5">✅ Déployé</span>
+                {/* Validation result */}
+                {validationResults[opp.id] && (
+                  <div className={`mb-3 rounded-xl border p-4 ${
+                    validationResults[opp.id].verdict === "GO" ? "bg-green-900/20 border-green-700" :
+                    validationResults[opp.id].verdict === "RISKY" ? "bg-yellow-900/20 border-yellow-700" :
+                    "bg-red-900/20 border-red-700"
+                  }`}>
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className={`text-2xl font-black ${
+                        validationResults[opp.id].verdict === "GO" ? "text-green-400" :
+                        validationResults[opp.id].verdict === "RISKY" ? "text-yellow-400" : "text-red-400"
+                      }`}>
+                        {validationResults[opp.id].verdict === "GO" ? "✅ GO" :
+                         validationResults[opp.id].verdict === "RISKY" ? "⚠️ RISKY" : "🛑 NO-GO"}
+                      </span>
+                      <div className="bg-gray-800 rounded-lg px-3 py-1 text-center">
+                        <div className="text-lg font-bold text-white">{validationResults[opp.id].attackability_score}/100</div>
+                        <div className="text-[10px] text-gray-500">Attaquabilité</div>
+                      </div>
+                      <div className="bg-gray-800 rounded-lg px-3 py-1 text-center">
+                        <div className="text-lg font-bold text-white">{validationResults[opp.id].time_to_page1_months} mois</div>
+                        <div className="text-[10px] text-gray-500">→ Page 1</div>
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-300 mb-2">{validationResults[opp.id].verdict_reason}</p>
+                    {validationResults[opp.id].quick_wins?.length > 0 && (
+                      <div className="mb-2">
+                        <div className="text-xs text-green-400 font-medium mb-1">Quick wins:</div>
+                        {validationResults[opp.id].quick_wins.map((w, i) => (
+                          <div key={i} className="text-xs text-gray-400 pl-2">→ {w}</div>
+                        ))}
+                      </div>
+                    )}
+                    {validationResults[opp.id].content_gaps?.length > 0 && (
+                      <div className="mb-2">
+                        <div className="text-xs text-blue-400 font-medium mb-1">Content gaps:</div>
+                        {validationResults[opp.id].content_gaps.map((g, i) => (
+                          <div key={i} className="text-xs text-gray-400 pl-2">→ {g}</div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="text-xs text-yellow-300 bg-yellow-900/20 rounded px-2 py-1 mt-1">
+                      💡 {validationResults[opp.id].strategy_recommendation}
+                    </div>
+                  </div>
                 )}
+
+                {/* Action buttons */}
+                <div className="flex gap-3">
+                  {/* Validate button */}
+                  {!validationResults[opp.id] && (
+                    <button
+                      onClick={() => validateNiche(opp.id)}
+                      disabled={validating === opp.id}
+                      className="px-4 py-2 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-700 text-yellow-400 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {validating === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>🔍</span>}
+                      {validating === opp.id ? "Analyse SERP..." : "Valider la niche"}
+                    </button>
+                  )}
+
+                  {/* Deploy button */}
+                  {opp.status === "pending" ? (
+                    <button
+                      onClick={() => deploySite(opp)}
+                      disabled={deploying === opp.id}
+                      className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
+                    >
+                      {deploying === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                      {deploying === opp.id ? "Création en cours..." : "Créer ce site"}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-green-400 bg-green-900/20 rounded px-3 py-1.5">✅ Déployé</span>
+                  )}
+                </div>
               </div>
             ))}
           </div>
