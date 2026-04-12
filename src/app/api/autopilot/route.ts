@@ -56,6 +56,41 @@ const SITE_REPO_MAP: Record<
     articlePath: "content/blog",
     format: "mdx",
   },
+  "cbd": {
+    repo: "vocalisia/cbd-europa",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
+  "agents-ia": {
+    repo: "vocalisia/agents-ia-pro",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
+  "master-seller": {
+    repo: "vocalisia/master-seller",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
+  "whatsapp": {
+    repo: "vocalisia/agent-whatsapp-ia-business",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
+  "lead-gene": {
+    repo: "vocalisia/geoleads",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
+  "seo-true": {
+    repo: "vocalisia/seo-true",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
+  "woman-cute": {
+    repo: "vocalisia/woman-cute",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
 };
 
 // Language config: label, locale, instructions language, target countries (ISO-3)
