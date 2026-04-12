@@ -37,6 +37,7 @@ export function getGoogleAuth(accessToken?: string) {
     scopes: [
       "https://www.googleapis.com/auth/analytics.readonly",
       "https://www.googleapis.com/auth/webmasters.readonly",
+      "https://www.googleapis.com/auth/indexing",
     ],
   });
 }

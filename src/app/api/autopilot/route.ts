@@ -5,6 +5,7 @@ import { getSQL, initDB } from "@/lib/db";
 import { askAI } from "@/lib/ai";
 import { generateImage } from "@/lib/ai";
 import { publishToGitHub, listRepoFiles } from "@/lib/github";
+import { getGoogleAuth } from "@/lib/google-auth";
 
 // Site → GitHub repo mapping
 const SITE_REPO_MAP: Record<
@@ -594,7 +595,45 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       }
     }
 
-    // 8. Store result in autopilot_runs (with language)
+    // 8. Request Google indexing for the new article
+    let indexingRequested = false;
+    if (githubUrl && !dry_run) {
+      try {
+        const langPrefix = language !== "fr" ? `${language}-` : "";
+        const liveUrl = `${site.url}/blog/${langPrefix}${articleSlug}-${today}`;
+        console.log(`[autopilot] requesting indexing for: ${liveUrl}`);
+
+        const auth = getGoogleAuth();
+        const client = await (auth as { getClient: () => Promise<{ getAccessToken: () => Promise<{ token?: string | null }> }> }).getClient();
+        const tokenResponse = await client.getAccessToken();
+        const accessToken = tokenResponse.token;
+
+        if (accessToken) {
+          const idxRes = await fetch("https://indexing.googleapis.com/v3/urlNotifications:publish", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${accessToken}`,
+            },
+            body: JSON.stringify({ url: liveUrl, type: "URL_UPDATED" }),
+          });
+
+          if (idxRes.ok) {
+            indexingRequested = true;
+            console.log(`[autopilot] indexing requested successfully for: ${liveUrl}`);
+          } else {
+            const errText = await idxRes.text();
+            console.error(`[autopilot] indexing API error ${idxRes.status}:`, errText);
+          }
+        } else {
+          console.error("[autopilot] could not obtain access token for indexing");
+        }
+      } catch (err) {
+        console.error("[autopilot] indexing request failed (non-blocking):", err);
+      }
+    }
+
+    // 9. Store result in autopilot_runs (with language)
     const runStatus = dry_run ? "dry_run" : githubUrl ? "published" : "failed";
     try {
       await sql`
@@ -612,7 +651,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       console.error("Failed to store autopilot run:", err);
     }
 
-    // 9. Return result
+    // 10. Return result
     return NextResponse.json({
       success: true,
       keyword,
@@ -625,6 +664,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       image_url: imageUrl,
       dry_run,
       status: runStatus,
+      indexing_requested: indexingRequested,
       // Debug info for UI
       repo_matched: repoConfig ? repoConfig.repo : null,
       link_candidates_count: linkCandidates.length,

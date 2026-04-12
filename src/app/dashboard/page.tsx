@@ -323,6 +323,12 @@ export default function DashboardPage() {
           <Link href="/competitors" className="bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
             🎯 Concurrents
           </Link>
+          <Link href="/tracker" className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            📊 Tracker
+          </Link>
+          <Link href="/calendar" className="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            📅 Calendrier
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
