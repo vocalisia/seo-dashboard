@@ -260,10 +260,34 @@ export async function POST(req: NextRequest) {
       console.log(`[autopilot] step C (ultra relaxed, 90d): ${kwRows.length} rows`);
     }
 
+    // Fallback 3: use competitor research gaps (high volume keywords we don't rank for)
+    if (kwRows.length === 0) {
+      try {
+        const gapRows = (await sql`
+          SELECT keyword AS query,
+                 competitor_position AS position,
+                 estimated_volume AS impressions,
+                 0 AS clicks
+          FROM competitor_research
+          WHERE site_id = ${site_id}
+            AND estimated_volume >= 1000
+            AND NOT (LOWER(keyword) = ANY(${usedKeywords}))
+          ORDER BY estimated_volume DESC
+          LIMIT 1
+        `) as KeywordRow[];
+        if (gapRows.length > 0) {
+          kwRows = gapRows;
+          console.log(`[autopilot] step D (competitor gap): ${kwRows[0].query} vol=${kwRows[0].impressions}`);
+        }
+      } catch {
+        // competitor_research table may not exist yet
+      }
+    }
+
     if (kwRows.length === 0) {
       return NextResponse.json({
         success: false,
-        error: `No keyword found for ${lang.label}. Lance une synchro GSC d'abord (dashboard → Synchroniser).`,
+        error: `No keyword found for ${lang.label}. Lance une synchro GSC ou une analyse concurrents d'abord.`,
       });
     }
 

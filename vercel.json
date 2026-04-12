@@ -5,6 +5,10 @@
       "schedule": "0 3 * * *"
     },
     {
+      "path": "/api/competitors/weekly",
+      "schedule": "0 7 * * 1"
+    },
+    {
       "path": "/api/reports/generate",
       "schedule": "0 8 * * 1"
     },
