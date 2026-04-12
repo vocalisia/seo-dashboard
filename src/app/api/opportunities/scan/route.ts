@@ -56,21 +56,30 @@ export async function POST() {
     // 4. Ask Perplexity for market opportunities
     const prompt = `I own these websites: ${siteNames}
 
+My sites cover: voice AI, Tesla/EV magazine, CBD Europe, crypto/trust, business Switzerland, sales training, AI hub, AI agents, lead generation, SEO tools, beauty/fashion.
+
 My top 50 keywords across all sites (with impressions and position):
 ${topKeywords}
 
-TASK: Analyze these keywords and my current portfolio. Identify 5-10 NEW BUSINESS OPPORTUNITIES where I should create a DEDICATED website, blog, magazine, or e-commerce store.
+TASK: Analyze my current portfolio and identify 8-10 NEW BUSINESS OPPORTUNITIES where I should create a DEDICATED website, blog, magazine, or e-commerce store.
+
+CRITICAL RULES:
+- DIVERSIFY across DIFFERENT sectors (NOT all in the same niche)
+- Each opportunity must be in a DIFFERENT industry/sector
+- Cover a MIX of: health/wellness, education, real estate, food/nutrition, travel, legal, insurance, SaaS tools, finance (non-crypto), B2B services, lifestyle, tech, automotive, energy, fitness, parenting, pets, home improvement
+- Maximum 2 opportunities related to existing niches (AI, crypto, CBD)
+- The rest MUST be in completely NEW sectors
 
 For each opportunity:
-1. The niche/market (be specific)
-2. Why it's an opportunity (gap in my portfolio, growing market, etc.)
+1. The niche/market (be specific and UNIQUE from other opportunities)
+2. Why it's an opportunity (gap in my portfolio, growing market, connection to existing sites)
 3. Recommended site type: blog | magazine | e-commerce | saas | directory
-4. Estimated monthly search volume for the core keywords (be realistic)
+4. Estimated monthly search volume for the core keywords (be realistic, based on real search data)
 5. Competition level: low | medium | high
 6. Monetization model: ads | affiliate | e-commerce | subscription | lead-gen
 7. Estimated monthly traffic at 6 months (realistic projection)
 8. Estimated monthly revenue potential (EUR)
-9. Suggested domain name (2-3 options)
+9. Suggested domain name (2-3 options, .com or .ch or .fr)
 10. First 5 article titles to seed the site
 
 RESPOND IN STRICT JSON ONLY:
