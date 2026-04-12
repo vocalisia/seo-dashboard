@@ -189,7 +189,10 @@ export default function ScannerPage() {
                 <div className="flex items-center gap-2 mb-3 text-xs">
                   <span className="text-gray-500">Domaines suggérés:</span>
                   {(opp.suggested_domains || []).map((d, i) => (
-                    <span key={i} className="text-cyan-400 bg-cyan-900/20 rounded px-2 py-0.5">{d}</span>
+                    <a key={i} href={`https://${d}`} target="_blank" rel="noopener noreferrer"
+                      className="text-cyan-400 bg-cyan-900/20 hover:bg-cyan-900/40 rounded px-2 py-0.5 underline decoration-cyan-800 hover:decoration-cyan-400 transition-colors">
+                      {d}
+                    </a>
                   ))}
                 </div>
 
