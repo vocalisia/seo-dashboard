@@ -20,6 +20,8 @@ interface Opportunity {
   target_countries?: string[];
   target_languages?: string[];
   competitors?: { url: string; name: string }[];
+  success_rate?: number;
+  revenue_timeline?: { m1: number; m3: number; m6: number; m12: number };
   confidence_score: number;
   status: string;
 }
@@ -211,6 +213,50 @@ export default function ScannerPage() {
                     <div className="flex items-center gap-1 text-xs text-gray-400"><Zap className="w-3 h-3" /> Monétisation</div>
                     <div className="text-sm font-bold text-yellow-400 mt-1">{opp.monetization}</div>
                   </div>
+                </div>
+
+                {/* Success rate + Revenue timeline */}
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  {/* Success rate bar */}
+                  <div className="bg-gray-800/50 rounded-lg px-3 py-2">
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="text-gray-400">Taux de succès SEO</span>
+                      <span className={`font-bold ${(opp.success_rate ?? 0) >= 70 ? "text-green-400" : (opp.success_rate ?? 0) >= 40 ? "text-yellow-400" : "text-red-400"}`}>
+                        {opp.success_rate ?? "—"}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-700 rounded-full h-2">
+                      <div className="h-2 rounded-full transition-all" style={{
+                        width: `${opp.success_rate ?? 0}%`,
+                        backgroundColor: (opp.success_rate ?? 0) >= 70 ? "#22c55e" : (opp.success_rate ?? 0) >= 40 ? "#eab308" : "#ef4444"
+                      }} />
+                    </div>
+                  </div>
+
+                  {/* Revenue timeline */}
+                  {opp.revenue_timeline && (
+                    <div className="bg-gray-800/50 rounded-lg px-3 py-2">
+                      <div className="text-xs text-gray-400 mb-1">Revenus projetés (€/mois)</div>
+                      <div className="flex items-end gap-1 h-6">
+                        {[
+                          { label: "M1", val: opp.revenue_timeline.m1 },
+                          { label: "M3", val: opp.revenue_timeline.m3 },
+                          { label: "M6", val: opp.revenue_timeline.m6 },
+                          { label: "M12", val: opp.revenue_timeline.m12 },
+                        ].map((p) => {
+                          const max = Math.max(opp.revenue_timeline!.m12, 1);
+                          const pct = Math.max(4, (p.val / max) * 100);
+                          return (
+                            <div key={p.label} className="flex-1 flex flex-col items-center">
+                              <div className="text-[9px] text-green-400 font-medium">{p.val > 0 ? `${p.val}€` : "—"}</div>
+                              <div className="w-full bg-green-500/40 rounded-t-sm" style={{ height: `${pct}%`, minHeight: "2px" }} />
+                              <div className="text-[8px] text-gray-500 mt-0.5">{p.label}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Keywords */}

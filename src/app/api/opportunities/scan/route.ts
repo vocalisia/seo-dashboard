@@ -106,10 +106,16 @@ RESPOND IN STRICT JSON ONLY:
         {"url": "https://competitor1.com", "name": "Competitor 1"},
         {"url": "https://competitor2.com", "name": "Competitor 2"}
       ],
+      "success_rate": 72,
+      "revenue_timeline": {"m1": 0, "m3": 200, "m6": 1500, "m12": 3000},
       "confidence_score": 85
     }
   ]
 }
+
+Additional fields explained:
+- success_rate: estimated % chance of reaching page 1 within 12 months (0-100). Factor in: competition level, content quality advantage, niche specificity, keyword difficulty.
+- revenue_timeline: projected monthly revenue in EUR at month 1, 3, 6, 12. Be REALISTIC. Month 1 is almost always 0 for a new site.
 
 Rules:
 - Only suggest niches NOT already covered by my current sites
