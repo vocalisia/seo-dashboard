@@ -42,6 +42,16 @@ const SITE_REPO_MAP: Record<
     articlePath: "content/blog",
     format: "mdx",
   },
+  "iapme-suisse": {
+    repo: "vocalisia/iapmesuisse",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
+  "iapme": {
+    repo: "vocalisia/iapmesuisse",
+    articlePath: "content/blog",
+    format: "mdx",
+  },
   "hub-ai": {
     repo: "vocalisia/hub-ai",
     articlePath: "content/blog",
