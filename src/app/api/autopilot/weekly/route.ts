@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // 5 min max (Vercel Pro)
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
@@ -37,9 +38,12 @@ const LANG_FLAG: Record<string, string> = {
 };
 
 async function runAutopilotForSite(siteId: number, language: string, source: "gsc" | "competitor" = "gsc"): Promise<ApiResponse> {
-  const baseUrl = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000");
+  // VERCEL_PROJECT_PRODUCTION_URL = canonical prod URL (stable, set by Vercel automatically)
+  // VERCEL_URL = deployment preview URL (changes each deploy — unreliable for self-calls)
+  const baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : process.env.NEXT_PUBLIC_SITE_URL
+      ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
   const res = await fetch(`${baseUrl}/api/autopilot`, {
     method: "POST",
