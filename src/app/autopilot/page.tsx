@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Zap, Clock, CheckCircle, XCircle, ExternalLink, Globe, Image as ImageIcon } from "lucide-react";
+import { ArrowLeft, Loader2, Zap, Clock, CheckCircle, XCircle, ExternalLink, Globe, Image as ImageIcon, PlayCircle } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 
@@ -79,6 +79,8 @@ export default function AutopilotPage() {
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [result, setResult] = useState<AutopilotResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchResult, setBatchResult] = useState<{ published: number; failed: number; total: number } | null>(null);
 
   useEffect(() => {
     fetchSites();
@@ -201,6 +203,26 @@ export default function AutopilotPage() {
     });
   }
 
+  async function runBatchToday() {
+    setBatchRunning(true);
+    setBatchResult(null);
+    try {
+      const res = await fetch("/api/autopilot/weekly", { method: "POST" });
+      const d = await res.json() as { published?: number; failed?: number; total_runs?: number; results?: { status: string }[] };
+      const results = d.results ?? [];
+      setBatchResult({
+        published: d.published ?? results.filter((r) => r.status === "published").length,
+        failed: d.failed ?? results.filter((r) => r.status !== "published").length,
+        total: d.total_runs ?? results.length,
+      });
+      void fetchHistory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur batch");
+    } finally {
+      setBatchRunning(false);
+    }
+  }
+
   function nextMondayAt9() {
     const now = new Date();
     const day = now.getDay();
@@ -258,8 +280,27 @@ export default function AutopilotPage() {
             <div className="text-xs text-gray-500 bg-gray-800 rounded px-2 py-1">
               Cron: lundi 9h00
             </div>
+            <button
+              onClick={runBatchToday}
+              disabled={batchRunning}
+              className="flex items-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded-lg text-xs font-medium transition-colors"
+            >
+              {batchRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PlayCircle className="w-3.5 h-3.5" />}
+              {batchRunning ? "Génération en cours..." : "Générer tous les sites aujourd'hui"}
+            </button>
           </div>
         </div>
+        {batchResult && (
+          <div className={`border rounded-xl px-5 py-4 flex items-center gap-4 ${batchResult.failed === 0 ? "bg-green-900/20 border-green-800" : "bg-yellow-900/20 border-yellow-800"}`}>
+            <CheckCircle className={`w-5 h-5 flex-shrink-0 ${batchResult.failed === 0 ? "text-green-400" : "text-yellow-400"}`} />
+            <div>
+              <div className="text-sm font-medium text-white">Batch terminé</div>
+              <div className="text-xs text-gray-400 mt-0.5">
+                {batchResult.published} publiés · {batchResult.failed} échecs · {batchResult.total} total
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Auto mode config: target languages per site */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-3">
