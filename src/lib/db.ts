@@ -1,5 +1,9 @@
 import { neon } from "@neondatabase/serverless";
 
+export function isDatabaseConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL?.trim());
+}
+
 export function getSQL() {
   return neon(process.env.DATABASE_URL!);
 }

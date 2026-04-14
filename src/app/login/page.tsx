@@ -13,7 +13,12 @@ export default function LoginPage() {
           </div>
         </div>
         <h1 className="text-2xl font-bold text-white mb-2 text-center">SEO Dashboard</h1>
-        <p className="text-gray-400 mb-8 text-center text-sm">Connexion avec Google uniquement (GA4 + GSC)</p>
+        <p className="text-gray-400 mb-2 text-center text-sm">Connexion avec Google uniquement (GA4 + GSC)</p>
+        <p className="text-gray-500 mb-8 text-center text-xs px-2">
+          Si le bouton ne réagit pas, vérifie <code className="text-gray-400">GOOGLE_CLIENT_ID</code> et{" "}
+          <code className="text-gray-400">GOOGLE_CLIENT_SECRET</code> dans <code className="text-gray-400">.env.local</code>{" "}
+          (ex. <code className="text-gray-400">npm run env:pull</code>).
+        </p>
 
         <button
           type="button"

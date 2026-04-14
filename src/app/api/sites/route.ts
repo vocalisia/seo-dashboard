@@ -1,4 +1,4 @@
-import { getSQL } from "@/lib/db";
+import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
 // Language → target countries (ISO-3)
@@ -13,6 +13,17 @@ const LANG_COUNTRIES: Record<string, string[]> = {
 };
 
 export async function GET(request: NextRequest) {
+  if (!isDatabaseConfigured()) {
+    return NextResponse.json(
+      {
+        error: "missing_env",
+        message:
+          "DATABASE_URL est absent ou vide dans .env.local. Restaure les secrets (ex. npx vercel env pull .env.local) puis redémarre npm run dev.",
+      },
+      { status: 503 }
+    );
+  }
+
   const language = request.nextUrl.searchParams.get("language");
   const countryFilter = language && LANG_COUNTRIES[language] ? LANG_COUNTRIES[language] : null;
 

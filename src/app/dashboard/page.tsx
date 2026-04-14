@@ -97,15 +97,30 @@ export default function DashboardPage() {
   const [kwHistLoading, setKwHistLoading] = useState(false);
   const [deviceData, setDeviceData] = useState<Record<number, DeviceRow[]>>({});
   const [langFilter, setLangFilter] = useState<string>(""); // "" | "fr" | "en" | "de" | ...
+  const [configError, setConfigError] = useState<string | null>(null);
 
   useEffect(() => { fetchSites(); }, []);
 
   async function fetchSites(lang?: string) {
     setLoading(true);
+    setConfigError(null);
     try {
       const langQs = (lang || langFilter) ? `?language=${lang || langFilter}` : "";
       const res = await fetch(`/api/sites${langQs}`);
-      const data = await res.json();
+      const data = await res.json() as unknown;
+      if (data && typeof data === "object" && data !== null && "error" in data) {
+        const err = data as { error?: string; message?: string };
+        if (err.error === "missing_env") {
+          setConfigError(
+            typeof err.message === "string"
+              ? err.message
+              : "DATABASE_URL manquant dans .env.local."
+          );
+          setSites([]);
+          setLoading(false);
+          return;
+        }
+      }
       if (Array.isArray(data)) setSites(data);
     } catch { /* ignore */ }
     setLoading(false);
@@ -257,6 +272,42 @@ export default function DashboardPage() {
       <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
     </div>
   );
+
+  if (configError) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+        <div className="max-w-xl bg-amber-950/30 border border-amber-700/40 rounded-2xl p-8 shadow-xl">
+          <h1 className="text-xl font-bold text-amber-200 mb-3">Dashboard inaccessible en local</h1>
+          <p className="text-gray-300 mb-6">{configError}</p>
+          <p className="text-gray-400 text-sm mb-4">Le fichier <code className="bg-gray-800 px-1.5 py-0.5 rounded text-amber-100">.env.local</code> ne contient pas les variables (souvent après une réinitialisation de sécurité).</p>
+          <ol className="list-decimal list-inside text-gray-300 text-sm space-y-3 mb-6">
+            <li>
+              Depuis le dossier du projet :{" "}
+              <code className="bg-gray-800 px-2 py-1 rounded text-green-300">npx vercel env pull .env.local</code>
+              {" "}(compte Vercel lié au projet)
+            </li>
+            <li>
+              Ou copie les variables depuis le dashboard Vercel → Projet → Settings → Environment Variables.
+            </li>
+            <li>
+              Vérifie au minimum <code className="bg-gray-800 px-1 rounded">DATABASE_URL</code>,{" "}
+              <code className="bg-gray-800 px-1 rounded">NEXTAUTH_SECRET</code>,{" "}
+              <code className="bg-gray-800 px-1 rounded">GOOGLE_CLIENT_ID</code> / <code className="bg-gray-800 px-1 rounded">GOOGLE_CLIENT_SECRET</code>.
+            </li>
+            <li>
+              Puis <code className="bg-gray-800 px-1 rounded">npm run dev</code> et recharge la page.
+            </li>
+          </ol>
+          <a
+            href="/login"
+            className="inline-block text-blue-400 hover:text-blue-300 text-sm underline"
+          >
+            Page de connexion (Google)
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
