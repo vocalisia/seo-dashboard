@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { buildPublishedArticleUrl } from "@/lib/autopilot-published-url";
+import { buildPublishedArticleUrl, slugDateFromCreatedAt } from "@/lib/autopilot-published-url";
 import { resolveSiteRepoConfig } from "@/lib/autopilot-config";
 
 interface AutopilotRun {
@@ -75,9 +75,16 @@ export async function GET(req: NextRequest) {
       const repoConfig = resolveSiteRepoConfig(r.site_name ?? "").repoConfig;
       const computed =
         siteUrl && r.keyword
-          ? buildPublishedArticleUrl(siteUrl, r.keyword, r.language ?? "fr", repoConfig)
+          ? buildPublishedArticleUrl(
+              siteUrl,
+              r.keyword,
+              r.language ?? "fr",
+              repoConfig,
+              slugDateFromCreatedAt(r.created_at)
+            )
           : null;
-      const published_url = (r.published_url?.trim() || computed) ?? null;
+      // Toujours préférer le calcul (slug + date) — les anciennes entrées en base pouvaient être sans date → 404.
+      const published_url = computed ?? (r.published_url?.trim() || null);
       return {
         id: r.id,
         site_id: r.site_id,

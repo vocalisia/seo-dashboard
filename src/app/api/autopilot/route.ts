@@ -502,7 +502,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     /** URL publique de l’article (vérifiable dans le navigateur). */
     let publishedUrl: string | null = null;
     if (githubUrl && !dry_run && repoConfig) {
-      publishedUrl = buildPublishedArticleUrl(site.url, keyword, language, repoConfig);
+      publishedUrl = buildPublishedArticleUrl(site.url, keyword, language, repoConfig, today);
     }
 
     // 8. Request Google indexing for the new article
