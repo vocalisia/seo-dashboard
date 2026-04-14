@@ -1,5 +1,6 @@
-# Copy to .github/workflows/ci.yml when your Git token has the `workflow` scope,
-# or create the file in the GitHub UI. Same pipeline as local: npm ci, tsc, test.
+# Copy to .github/workflows/ci.yml when your token has the `workflow` scope.
+# Pipeline volontairement sans ESLint tant que le dépôt a des erreurs legacy ;
+# en local : npm run ci (vert) | npm run ci:full (lint + tout).
 
 name: CI
 
@@ -9,9 +10,17 @@ on:
   pull_request:
     branches: [master, main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  check:
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -28,3 +37,6 @@ jobs:
 
       - name: Unit tests
         run: npm run test
+
+      - name: Next.js build
+        run: npm run build

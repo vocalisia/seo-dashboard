@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "ci": "npx tsc --noEmit && npm run test && npm run build",
+    "ci:full": "npm run lint && npx tsc --noEmit && npm run test && npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "fix:internal-links": "node scripts/fix-internal-links.mjs",
