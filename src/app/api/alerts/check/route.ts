@@ -45,7 +45,7 @@ interface AlertPayload {
 const I18N_BLOG_PATHS: Record<string, Record<string, string>> = {
   "ai-due.com":      { fr: "/fr/blog", en: "/en/blog" },
   "iapmesuisse.ch":  { fr: "/fr/blog", en: "/en/blog" },
-  "lead-gene.com":   { fr: "/fr/blog", en: "/en/blog" },
+  "lead-gene.com":   { fr: "/blog", en: "/blog" },
   "tesla-mag.ch":    { fr: "/produit", en: "/product" },
 };
 

@@ -96,10 +96,9 @@ const SITE_REPO_MAP: Record<
     format: "mdx",
   },
   "lead-gene": {
-    repo: "vocalisia/geoleads",
+    repo: "vocalisia/lead-gene",
     articlePath: "content/blog",
     format: "mdx",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "seo-true": {
     repo: "vocalisia/seo-true",
