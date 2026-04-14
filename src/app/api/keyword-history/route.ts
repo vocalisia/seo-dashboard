@@ -1,4 +1,5 @@
 import { getSQL } from "@/lib/db";
+import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
@@ -9,6 +10,10 @@ export async function GET(request: NextRequest) {
   const days = parseInt(request.nextUrl.searchParams.get("days") || "90");
 
   if (!siteId || !query) return NextResponse.json({ error: "siteId + query required" }, { status: 400 });
+
+  if (isLocalDevDemoMode()) {
+    return NextResponse.json([]);
+  }
 
   try {
     const sql = getSQL();

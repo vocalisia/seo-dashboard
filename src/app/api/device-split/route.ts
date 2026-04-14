@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { isLocalDevDemoMode } from "@/lib/local-dev";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,10 @@ export async function GET(req: NextRequest) {
     const days = parseInt(searchParams.get("days") ?? "30", 10);
 
     if (!siteId) return NextResponse.json({ error: "site_id required" }, { status: 400 });
+
+    if (isLocalDevDemoMode()) {
+      return NextResponse.json({ overview: [], topQueriesByDevice: {} });
+    }
 
     const sql = getSQL();
     const siteIdNum = parseInt(siteId, 10);

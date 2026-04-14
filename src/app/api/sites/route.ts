@@ -1,4 +1,5 @@
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
+import { isLocalDevDemoMode, LOCAL_DEMO_SITES } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
 
 // Language → target countries (ISO-3)
@@ -13,12 +14,16 @@ const LANG_COUNTRIES: Record<string, string[]> = {
 };
 
 export async function GET(request: NextRequest) {
+  if (isLocalDevDemoMode()) {
+    return NextResponse.json(LOCAL_DEMO_SITES);
+  }
+
   if (!isDatabaseConfigured()) {
     return NextResponse.json(
       {
         error: "missing_env",
         message:
-          "DATABASE_URL est absent ou vide dans .env.local. Restaure les secrets (ex. npx vercel env pull .env.local) puis redémarre npm run dev.",
+          "DATABASE_URL est absent ou vide. En local, lance `npm run dev` (mode démo auto) ou configure une base PostgreSQL et DATABASE_URL dans .env.local.",
       },
       { status: 503 }
     );
@@ -107,6 +112,16 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: Request) {
+  if (isLocalDevDemoMode()) {
+    return NextResponse.json(
+      {
+        error: "demo_mode",
+        message:
+          "Ajout de site désactivé en mode démo (pas de base). Configure DATABASE_URL pour une vraie base, ou utilise l’app déployée.",
+      },
+      { status: 503 }
+    );
+  }
   try {
     const sql = getSQL();
     const { name, url, ga_property_id, gsc_property } = await request.json();

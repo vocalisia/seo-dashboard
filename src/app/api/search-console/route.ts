@@ -1,4 +1,5 @@
 import { getSQL } from "@/lib/db";
+import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
@@ -23,6 +24,10 @@ export async function GET(request: NextRequest) {
   const language = request.nextUrl.searchParams.get("language"); // fr/en/de/... or null
 
   if (!siteId) return NextResponse.json({ error: "siteId required" }, { status: 400 });
+
+  if (isLocalDevDemoMode()) {
+    return NextResponse.json([]);
+  }
 
   // Resolve filter: explicit country > language mapping > none
   const countryFilter: string[] | null = country
