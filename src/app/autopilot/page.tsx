@@ -18,6 +18,8 @@ interface AutopilotRun {
   keyword: string;
   article_title: string;
   github_url: string | null;
+  /** URL publique sur le site (blog) */
+  published_url: string | null;
   image_url: string | null;
   status: string;
   language?: string;
@@ -39,6 +41,7 @@ interface AutopilotResult {
   article_title?: string;
   article_preview?: string;
   github_url?: string | null;
+  published_url?: string | null;
   image_url?: string | null;
   dry_run?: boolean;
   status?: string;
@@ -441,16 +444,29 @@ export default function AutopilotPage() {
                     {LANG_FLAG[result.language] ?? ""} {result.language.toUpperCase()}
                   </span>
                 )}
-                {result.github_url && (
-                  <a
-                    href={result.github_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-auto flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
-                  >
-                    Voir sur GitHub <ExternalLink className="w-3 h-3" />
-                  </a>
-                )}
+                <span className="ml-auto flex items-center gap-3">
+                  {result.published_url && (
+                    <a
+                      href={result.published_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
+                    >
+                      <Globe className="w-3.5 h-3.5" />
+                      Article sur le site <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                  {result.github_url && (
+                    <a
+                      href={result.github_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+                    >
+                      GitHub <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </span>
               </div>
 
               <div className="space-y-1 text-sm">
@@ -570,7 +586,8 @@ export default function AutopilotPage() {
                     <th className="px-5 py-3 text-left font-medium">Date</th>
                     <th className="px-5 py-3 text-left font-medium">Statut</th>
                     <th className="px-5 py-3 text-left font-medium">Image</th>
-                    <th className="px-5 py-3 text-left font-medium">Lien</th>
+                    <th className="px-5 py-3 text-left font-medium">Article (site)</th>
+                    <th className="px-5 py-3 text-left font-medium">GitHub</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -631,6 +648,23 @@ export default function AutopilotPage() {
                           <span className="text-gray-600">—</span>
                         )}
                       </td>
+                      <td className="px-5 py-3 max-w-[220px]">
+                        {run.published_url ? (
+                          <a
+                            href={run.published_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={run.published_url}
+                            className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors break-all text-xs"
+                          >
+                            <Globe className="w-3.5 h-3.5 shrink-0" />
+                            Ouvrir l&apos;article
+                            <ExternalLink className="w-3 h-3 shrink-0" />
+                          </a>
+                        ) : (
+                          <span className="text-gray-600">—</span>
+                        )}
+                      </td>
                       <td className="px-5 py-3">
                         {run.github_url ? (
                           <a
@@ -639,7 +673,7 @@ export default function AutopilotPage() {
                             rel="noopener noreferrer"
                             className="flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors"
                           >
-                            GitHub <ExternalLink className="w-3 h-3" />
+                            Fichier <ExternalLink className="w-3 h-3" />
                           </a>
                         ) : (
                           <span className="text-gray-600">—</span>

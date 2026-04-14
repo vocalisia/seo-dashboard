@@ -10,6 +10,7 @@ import type { KeywordRow } from "@/lib/autopilot-keywords";
 import { pickFirstUsableKeyword } from "@/lib/autopilot-keywords";
 import { LANG_CONFIG, resolveSiteRepoConfig } from "@/lib/autopilot-config";
 import { logAutopilot } from "@/lib/autopilot-log";
+import { buildPublishedArticleUrl } from "@/lib/autopilot-published-url";
 import { slugify, todayISO } from "@/lib/autopilot-utils";
 
 interface Site {
@@ -498,17 +499,17 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       }
     }
 
+    /** URL publique de l’article (vérifiable dans le navigateur). */
+    let publishedUrl: string | null = null;
+    if (githubUrl && !dry_run && repoConfig) {
+      publishedUrl = buildPublishedArticleUrl(site.url, keyword, language, repoConfig);
+    }
+
     // 8. Request Google indexing for the new article
     let indexingRequested = false;
-    if (githubUrl && !dry_run) {
+    if (publishedUrl && !dry_run) {
       try {
-        // Determine blog URL path: use i18n-aware path if configured, else /blog
-        const blogPath = repoConfig?.i18nBlogPath
-          ? (repoConfig.i18nBlogPath[language] ?? repoConfig.i18nBlogPath["default"] ?? "/blog")
-          : "/blog";
-        // Strip date suffix: live URL uses slug only (no -YYYY-MM-DD)
-        const liveUrl = `${site.url.replace(/\/$/, "")}${blogPath}/${langPrefix}${articleSlug}`;
-        logAutopilot("indexing_request_start", { liveUrl });
+        logAutopilot("indexing_request_start", { liveUrl: publishedUrl });
 
         const auth = getGoogleAuth();
         const client = await (auth as { getClient: () => Promise<{ getAccessToken: () => Promise<{ token?: string | null }> }> }).getClient();
@@ -522,12 +523,12 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
               "Content-Type": "application/json",
               Authorization: `Bearer ${accessToken}`,
             },
-            body: JSON.stringify({ url: liveUrl, type: "URL_UPDATED" }),
+            body: JSON.stringify({ url: publishedUrl, type: "URL_UPDATED" }),
           });
 
           if (idxRes.ok) {
             indexingRequested = true;
-            logAutopilot("indexing_request_ok", { liveUrl });
+            logAutopilot("indexing_request_ok", { liveUrl: publishedUrl });
           } else {
             const errText = await idxRes.text();
             console.error(`[autopilot] indexing API error ${idxRes.status}:`, errText);
@@ -551,20 +552,30 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       }
     }
 
-    // 9. Store result in autopilot_runs (with language)
+    // 9. Store result in autopilot_runs (with language + published URL)
     const runStatus = dry_run ? "dry_run" : githubUrl ? "published" : "failed";
     try {
-      await sql`
-        INSERT INTO autopilot_runs (site_id, keyword, article_title, github_url, image_url, status, language)
-        VALUES (${site_id}, ${keyword}, ${articleTitle}, ${githubUrl ?? null}, ${imageUrl ?? null}, ${runStatus}, ${language})
-        ON CONFLICT DO NOTHING
-      `.catch(() =>
-        // Fallback if language column doesn't exist yet
-        sql`
-          INSERT INTO autopilot_runs (site_id, keyword, article_title, github_url, image_url, status)
-          VALUES (${site_id}, ${keyword}, ${articleTitle}, ${githubUrl ?? null}, ${imageUrl ?? null}, ${runStatus})
-        `
-      );
+      try {
+        await sql`ALTER TABLE autopilot_runs ADD COLUMN IF NOT EXISTS published_url VARCHAR(1500)`;
+      } catch {
+        /* ignore */
+      }
+      try {
+        await sql`
+          INSERT INTO autopilot_runs (site_id, keyword, article_title, github_url, image_url, status, language, published_url)
+          VALUES (${site_id}, ${keyword}, ${articleTitle}, ${githubUrl ?? null}, ${imageUrl ?? null}, ${runStatus}, ${language}, ${publishedUrl})
+        `;
+      } catch {
+        await sql`
+          INSERT INTO autopilot_runs (site_id, keyword, article_title, github_url, image_url, status, language)
+          VALUES (${site_id}, ${keyword}, ${articleTitle}, ${githubUrl ?? null}, ${imageUrl ?? null}, ${runStatus}, ${language})
+        `.catch(() =>
+          sql`
+            INSERT INTO autopilot_runs (site_id, keyword, article_title, github_url, image_url, status)
+            VALUES (${site_id}, ${keyword}, ${articleTitle}, ${githubUrl ?? null}, ${imageUrl ?? null}, ${runStatus})
+          `
+        );
+      }
     } catch (err) {
       console.error("Failed to store autopilot run:", err);
     }
@@ -587,6 +598,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       article_title: articleTitle,
       article_preview: articleContent,
       github_url: githubUrl,
+      published_url: publishedUrl,
       image_url: imageUrl,
       dry_run,
       status: runStatus,

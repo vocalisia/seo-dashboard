@@ -102,6 +102,7 @@ export async function initDB() {
   `;
 
   await sql`CREATE INDEX IF NOT EXISTS idx_autopilot_site ON autopilot_runs(site_id, created_at DESC)`;
+  await sql`ALTER TABLE autopilot_runs ADD COLUMN IF NOT EXISTS published_url VARCHAR(1500)`;
 
   await sql`
     CREATE TABLE IF NOT EXISTS pagespeed_scores (
