@@ -444,16 +444,18 @@ export default function AutopilotPage() {
                     {LANG_FLAG[result.language] ?? ""} {result.language.toUpperCase()}
                   </span>
                 )}
-                <span className="ml-auto flex items-center gap-3">
+                <span className="ml-auto flex flex-wrap items-center justify-end gap-3">
                   {result.published_url && (
                     <a
                       href={result.published_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300"
+                      title={result.published_url}
+                      className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-emerald-400 hover:text-emerald-300"
                     >
-                      <Globe className="w-3.5 h-3.5" />
-                      Article sur le site <ExternalLink className="w-3 h-3" />
+                      <Globe className="w-3.5 h-3.5 shrink-0" />
+                      Article sur le site
+                      <ExternalLink className="w-3 h-3 shrink-0" />
                     </a>
                   )}
                   {result.github_url && (
@@ -461,9 +463,10 @@ export default function AutopilotPage() {
                       href={result.github_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+                      className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-blue-400 hover:text-blue-300"
                     >
-                      GitHub <ExternalLink className="w-3 h-3" />
+                      GitHub
+                      <ExternalLink className="w-3 h-3 shrink-0" />
                     </a>
                   )}
                 </span>
@@ -648,18 +651,18 @@ export default function AutopilotPage() {
                           <span className="text-gray-600">—</span>
                         )}
                       </td>
-                      <td className="px-5 py-3 max-w-[220px]">
+                      <td className="px-5 py-3 whitespace-nowrap">
                         {run.published_url ? (
                           <a
                             href={run.published_url}
                             target="_blank"
                             rel="noopener noreferrer"
                             title={run.published_url}
-                            className="flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors break-all text-xs"
+                            className="inline-flex items-center gap-1.5 rounded-md text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/40 px-1 py-0.5 text-xs"
                           >
-                            <Globe className="w-3.5 h-3.5 shrink-0" />
-                            Ouvrir l&apos;article
-                            <ExternalLink className="w-3 h-3 shrink-0" />
+                            <Globe className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                            <span className="whitespace-nowrap">Voir l&apos;article</span>
+                            <ExternalLink className="w-3 h-3 shrink-0" aria-hidden />
                           </a>
                         ) : (
                           <span className="text-gray-600">—</span>
