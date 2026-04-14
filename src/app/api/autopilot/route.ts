@@ -8,9 +8,10 @@ import { publishToGitHub, listRepoFiles } from "@/lib/github";
 import { getGoogleAuth } from "@/lib/google-auth";
 
 // Site → GitHub repo mapping
+// i18nBlogPath: URL path prefix used for blog articles (with locale segment when site uses i18n routing)
 const SITE_REPO_MAP: Record<
   string,
-  { repo: string; articlePath: string; format: string }
+  { repo: string; articlePath: string; format: string; i18nBlogPath?: Record<string, string> }
 > = {
   "vocalis-blog": {
     repo: "vocalisia/vocalis-blog",
@@ -26,6 +27,7 @@ const SITE_REPO_MAP: Record<
     repo: "vocalisia/tesla-mag",
     articlePath: "src/data/articles",
     format: "mdx",
+    i18nBlogPath: { fr: "/produit", en: "/product", default: "/produit" },
   },
   "trust-vault": {
     repo: "vocalisia/trust-vault",
@@ -41,26 +43,31 @@ const SITE_REPO_MAP: Record<
     repo: "vocalisia/iapmesuisse",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "iapme-suisse": {
     repo: "vocalisia/iapmesuisse",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "iapme": {
     repo: "vocalisia/iapmesuisse",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "hub-ai": {
     repo: "vocalisia/hub-ai",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "ai-due": {
     repo: "vocalisia/hub-ai",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "vocalis-ai": {
     repo: "vocalisia/vocalis-ai",
@@ -91,6 +98,7 @@ const SITE_REPO_MAP: Record<
     repo: "vocalisia/geoleads",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "seo-true": {
     repo: "vocalisia/seo-true",
@@ -614,8 +622,14 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     let indexingRequested = false;
     if (githubUrl && !dry_run) {
       try {
-        const langPrefix = language !== "fr" ? `${language}-` : "";
-        const liveUrl = `${site.url}/blog/${langPrefix}${articleSlug}-${today}`;
+        // Determine blog URL path: use i18n-aware path if configured, else /blog
+        const blogPath = repoConfig?.i18nBlogPath
+          ? (repoConfig.i18nBlogPath[language] ?? repoConfig.i18nBlogPath["default"] ?? "/blog")
+          : "/blog";
+        // Language prefix in slug only for non-FR on non-i18n sites
+        const langPrefix = (!repoConfig?.i18nBlogPath && language !== "fr") ? `${language}-` : "";
+        // Strip date suffix: live URL uses slug only (no -YYYY-MM-DD)
+        const liveUrl = `${site.url.replace(/\/$/, "")}${blogPath}/${langPrefix}${articleSlug}`;
         console.log(`[autopilot] requesting indexing for: ${liveUrl}`);
 
         const auth = getGoogleAuth();
