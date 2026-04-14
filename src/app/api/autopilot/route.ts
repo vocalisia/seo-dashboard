@@ -8,154 +8,15 @@ import { publishToGitHub, listRepoFiles } from "@/lib/github";
 import { getGoogleAuth } from "@/lib/google-auth";
 import type { KeywordRow } from "@/lib/autopilot-keywords";
 import { pickFirstUsableKeyword } from "@/lib/autopilot-keywords";
-
-// Site → GitHub repo mapping
-// i18nBlogPath: URL path prefix used for blog articles (with locale segment when site uses i18n routing)
-const SITE_REPO_MAP: Record<
-  string,
-  { repo: string; articlePath: string; format: string; i18nBlogPath?: Record<string, string> }
-> = {
-  "vocalis-blog": {
-    repo: "vocalisia/vocalis-blog",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "vocalis-pro": {
-    repo: "vocalisia/vocalis-blog",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "tesla-mag": {
-    repo: "vocalisia/tesla-mag",
-    articlePath: "src/data/articles",
-    format: "mdx",
-    i18nBlogPath: { fr: "/produit", en: "/product", default: "/produit" },
-  },
-  "trust-vault": {
-    repo: "vocalisia/trust-vault",
-    articlePath: "content/posts",
-    format: "mdx",
-  },
-  "trustly": {
-    repo: "vocalisia/trust-ai-blog",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  iapmesuisse: {
-    repo: "vocalisia/iapmesuisse",
-    // iapmesuisse reads from content/blog/{locale}/ with .md extension
-    articlePath: "content/blog/fr",
-    format: "md",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
-  },
-  "iapme-suisse": {
-    repo: "vocalisia/iapmesuisse",
-    articlePath: "content/blog/fr",
-    format: "md",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
-  },
-  "iapme": {
-    repo: "vocalisia/iapmesuisse",
-    articlePath: "content/blog/fr",
-    format: "md",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
-  },
-  "hub-ai": {
-    repo: "vocalisia/hub-ai",
-    articlePath: "content/blog",
-    format: "mdx",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
-  },
-  "ai-due": {
-    repo: "vocalisia/hub-ai",
-    articlePath: "content/blog",
-    format: "mdx",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
-  },
-  "vocalis-ai": {
-    repo: "vocalisia/vocalis-ai",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "cbd": {
-    repo: "vocalisia/cbd-europa",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "agents-ia": {
-    repo: "vocalisia/agents-ia-pro",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "master-seller": {
-    repo: "vocalisia/master-seller",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "whatsapp": {
-    repo: "vocalisia/agent-whatsapp-ia-business",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "lead-gene": {
-    repo: "vocalisia/lead-gene",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "seo-true": {
-    repo: "vocalisia/seo-true",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "woman-cute": {
-    repo: "vocalisia/woman-cute",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-  "fitness": {
-    repo: "vocalisia/fitnessmaison",
-    articlePath: "content/blog",
-    format: "mdx",
-  },
-};
-
-// Language config: label, locale, instructions language, target countries (ISO-3)
-const LANG_CONFIG: Record<string, {
-  label: string;
-  locale: string;
-  serpLang: string;
-  articleLang: string;
-  countries: string[];
-}> = {
-  fr: { label: "Français",   locale: "fr-FR", serpLang: "French",     articleLang: "français",   countries: ["FRA","BEL","CHE","LUX","MCO","CAN"] },
-  en: { label: "English",    locale: "en-US", serpLang: "English",    articleLang: "English",    countries: ["GBR","USA","IRL","AUS","NZL","CAN"] },
-  de: { label: "Deutsch",    locale: "de-DE", serpLang: "German",     articleLang: "Deutsch",    countries: ["DEU","AUT","CHE","LIE"] },
-  es: { label: "Español",    locale: "es-ES", serpLang: "Spanish",    articleLang: "español",    countries: ["ESP","MEX","ARG","COL","CHL","PER"] },
-  it: { label: "Italiano",   locale: "it-IT", serpLang: "Italian",    articleLang: "italiano",   countries: ["ITA","CHE","SMR","VAT"] },
-  nl: { label: "Nederlands", locale: "nl-NL", serpLang: "Dutch",      articleLang: "Nederlands", countries: ["NLD","BEL"] },
-  pt: { label: "Português",  locale: "pt-PT", serpLang: "Portuguese", articleLang: "português",  countries: ["PRT","BRA","AGO","MOZ"] },
-};
+import { LANG_CONFIG, resolveSiteRepoConfig } from "@/lib/autopilot-config";
+import { logAutopilot } from "@/lib/autopilot-log";
+import { slugify, todayISO } from "@/lib/autopilot-utils";
 
 interface Site {
   id: number;
   name: string;
   url: string;
   gsc_property: string;
-}
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9\s-]/g, "")
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-");
-}
-
-function todayISO(): string {
-  return new Date().toISOString().split("T")[0];
 }
 
 export async function POST(req: NextRequest) {
@@ -183,21 +44,23 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    logAutopilot("run_start", { site_id, dry_run, language, source });
+
     // 1. Get site
     const siteRows = (await sql`SELECT * FROM sites WHERE id = ${site_id} LIMIT 1`) as Site[];
     if (siteRows.length === 0) {
+      logAutopilot("site_not_found", { site_id });
       return NextResponse.json({ success: false, error: "Site not found" }, { status: 404 });
     }
     const site = siteRows[0];
 
-    // Find repo config by matching site name — normalize dashes/spaces/case
-    const normalizedSiteName = site.name.toLowerCase().replace(/[\s_]+/g, "-");
-    const siteKey = Object.keys(SITE_REPO_MAP).find((k) => {
-      const normK = k.toLowerCase();
-      return normalizedSiteName.includes(normK) || normK.includes(normalizedSiteName);
+    const { normalizedSiteName, siteKey, repoConfig } = resolveSiteRepoConfig(site.name);
+    logAutopilot("site_repo_resolved", {
+      siteName: site.name,
+      normalizedSiteName,
+      siteKey,
+      repo: repoConfig?.repo ?? null,
     });
-    const repoConfig = siteKey ? SITE_REPO_MAP[siteKey] : null;
-    console.log(`[autopilot] site="${site.name}" → normalized="${normalizedSiteName}" → siteKey=${siteKey ?? "null"}`);
 
     // 2. Get top keyword opportunity
     //    source="gsc" → from GSC data (improve existing rankings)
@@ -221,7 +84,11 @@ export async function POST(req: NextRequest) {
         console.error("Failed to fetch used keywords (table may not exist yet):", err);
       }
     }
-    console.log(`[autopilot] dry_run=${dry_run} source=${source} usedKeywords=${usedKeywords.length}`);
+    logAutopilot("used_keywords_loaded", {
+      dry_run,
+      source,
+      usedKeywordCount: usedKeywords.length,
+    });
 
     let kwRows: KeywordRow[] = [];
 
@@ -243,13 +110,17 @@ export async function POST(req: NextRequest) {
         const usableGap = pickFirstUsableKeyword(gapRows, site, language);
         if (usableGap.length > 0) {
           kwRows = usableGap;
-          console.log(`[autopilot] COMPETITOR source: ${kwRows[0].query} vol=${kwRows[0].impressions}`);
+          logAutopilot("keyword_from_competitor_primary", {
+            query: kwRows[0].query,
+            volume: kwRows[0].impressions,
+          });
         }
       } catch {
         // competitor_research table may not exist
       }
 
       if (kwRows.length === 0) {
+        logAutopilot("no_keyword_competitor_only", { site_id, siteName: site.name });
         return NextResponse.json({
           success: false,
           error: `No competitor gap found for ${site.name}. Lance l'analyse concurrents d'abord (/competitors).`,
@@ -279,7 +150,7 @@ export async function POST(req: NextRequest) {
       LIMIT 100
     `) as KeywordRow[];
     kwRows = pickFirstUsableKeyword(rawA, site, language);
-    console.log(`[autopilot] step A (country-filtered): raw=${rawA.length} usable=${kwRows.length}`);
+    logAutopilot("gsc_step", { step: "A_country", rawCount: rawA.length, usableCount: kwRows.length });
 
     // Fallback 1: no country data → use all data, same position range
     if (kwRows.length === 0) {
@@ -299,7 +170,7 @@ export async function POST(req: NextRequest) {
         LIMIT 100
       `) as KeywordRow[];
       kwRows = pickFirstUsableKeyword(rawB, site, language);
-      console.log(`[autopilot] step B (all countries, pos 3-50): raw=${rawB.length} usable=${kwRows.length}`);
+      logAutopilot("gsc_step", { step: "B_all_countries", rawCount: rawB.length, usableCount: kwRows.length });
     }
 
     // Fallback 2: ultra relaxed — any keyword with any impression, any position
@@ -319,7 +190,7 @@ export async function POST(req: NextRequest) {
         LIMIT 100
       `) as KeywordRow[];
       kwRows = pickFirstUsableKeyword(rawC, site, language);
-      console.log(`[autopilot] step C (ultra relaxed, 90d): raw=${rawC.length} usable=${kwRows.length}`);
+      logAutopilot("gsc_step", { step: "C_relaxed_90d", rawCount: rawC.length, usableCount: kwRows.length });
     }
 
     } // end of source !== "competitor" block
@@ -342,7 +213,10 @@ export async function POST(req: NextRequest) {
         const usableD = pickFirstUsableKeyword(gapRowsD, site, language);
         if (usableD.length > 0) {
           kwRows = usableD;
-          console.log(`[autopilot] step D (competitor gap): ${kwRows[0].query} vol=${kwRows[0].impressions}`);
+          logAutopilot("keyword_from_competitor_fallback", {
+            query: kwRows[0].query,
+            volume: kwRows[0].impressions,
+          });
         }
       } catch {
         // competitor_research table may not exist yet
@@ -350,6 +224,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (kwRows.length === 0) {
+      logAutopilot("no_keyword_after_all_steps", { site_id, language, source });
       return NextResponse.json({
         success: false,
         error: `No keyword found for ${lang.label}. Lance une synchro GSC ou une analyse concurrents d'abord.`,
@@ -357,6 +232,13 @@ export async function POST(req: NextRequest) {
     }
 
     const { query: keyword, position, impressions } = kwRows[0];
+    logAutopilot("keyword_selected", {
+      keyword,
+      position: parseFloat(String(position)),
+      impressions: parseInt(String(impressions), 10),
+      language,
+      source,
+    });
 
     // 3. SERP analysis via Perplexity (in target language)
     let serpAnalysis = "";
@@ -383,19 +265,23 @@ Reply in JSON with keys: intent, topics, gaps, structure, faqs`,
     if (repoConfig) {
       try {
         existingArticles = await listRepoFiles(repoConfig.repo, repoConfig.articlePath);
-        console.log(`[autopilot] fetched ${existingArticles.length} articles from ${repoConfig.repo}/${repoConfig.articlePath}`);
+        logAutopilot("github_articles_listed", {
+          repo: repoConfig.repo,
+          path: repoConfig.articlePath,
+          count: existingArticles.length,
+        });
       } catch (err) {
         console.error("Failed to list repo files:", err);
       }
     } else {
-      console.warn(`[autopilot] no repoConfig for site "${site.name}" → no internal linking available`);
+      logAutopilot("no_repo_config", { siteName: site.name, hint: "internal_linking_disabled" });
     }
 
     // Pick up to 15 existing articles for internal linking — remove .mdx extension for slugs
     const linkCandidates = existingArticles
       .slice(0, 15)
       .map(f => f.replace(/\.mdx?$/, ""));
-    console.log(`[autopilot] linkCandidates (${linkCandidates.length}):`, linkCandidates.slice(0, 5));
+    logAutopilot("link_candidates", { count: linkCandidates.length, sample: linkCandidates.slice(0, 5) });
 
     // 5. Generate article via Claude Sonnet (in target language)
     const today = todayISO();
@@ -547,7 +433,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       } else {
         linkStats.skipped = 1;
       }
-      console.log(`[autopilot] link validation:`, linkStats);
+      logAutopilot("link_validation", { ...linkStats });
 
       // Extract title from frontmatter
       const titleMatch = articleContent.match(/^title:\s*["']?(.+?)["']?\s*$/m);
@@ -577,7 +463,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
         .filter(Boolean)
         .join(" ");
 
-      console.log(`[autopilot] image prompt: ${imagePrompt.slice(0, 200)}...`);
+      logAutopilot("image_prompt_preview", { preview: imagePrompt.slice(0, 240) });
       imageUrl = await generateImage(imagePrompt);
 
       // Inject image URL into frontmatter if we got one
@@ -605,8 +491,10 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
           articleContent,
           commitMsg
         );
+        logAutopilot("github_publish_ok", { repo: repoConfig.repo, filePath, githubUrl });
       } catch (err) {
         console.error("GitHub publish failed:", err);
+        logAutopilot("github_publish_error", { repo: repoConfig.repo, filePath, error: String(err) });
       }
     }
 
@@ -620,7 +508,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
           : "/blog";
         // Strip date suffix: live URL uses slug only (no -YYYY-MM-DD)
         const liveUrl = `${site.url.replace(/\/$/, "")}${blogPath}/${langPrefix}${articleSlug}`;
-        console.log(`[autopilot] requesting indexing for: ${liveUrl}`);
+        logAutopilot("indexing_request_start", { liveUrl });
 
         const auth = getGoogleAuth();
         const client = await (auth as { getClient: () => Promise<{ getAccessToken: () => Promise<{ token?: string | null }> }> }).getClient();
@@ -639,7 +527,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
 
           if (idxRes.ok) {
             indexingRequested = true;
-            console.log(`[autopilot] indexing requested successfully for: ${liveUrl}`);
+            logAutopilot("indexing_request_ok", { liveUrl });
           } else {
             const errText = await idxRes.text();
             console.error(`[autopilot] indexing API error ${idxRes.status}:`, errText);
@@ -657,7 +545,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       try {
         const sitemapUrl = `${site.url}/sitemap.xml`;
         await fetch(`https://www.google.com/ping?sitemap=${encodeURIComponent(sitemapUrl)}`);
-        console.log('[autopilot] sitemap ping:', site.url);
+        logAutopilot("sitemap_ping", { siteUrl: site.url });
       } catch (err) {
         console.error('[autopilot] sitemap ping failed (non-blocking):', err);
       }
@@ -680,6 +568,14 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     } catch (err) {
       console.error("Failed to store autopilot run:", err);
     }
+
+    logAutopilot("run_complete", {
+      site_id,
+      keyword,
+      status: dry_run ? "dry_run" : githubUrl ? "published" : "failed",
+      dry_run,
+      hasGithubUrl: Boolean(githubUrl),
+    });
 
     // 10. Return result
     return NextResponse.json({

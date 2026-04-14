@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "fix:internal-links": "node scripts/fix-internal-links.mjs",
     "sync:gsc": "node scripts/sync-gsc.mjs",
     "sync:ga4": "node scripts/sync-ga4.mjs"
   },

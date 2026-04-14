@@ -49,6 +49,26 @@ describe("isUnusableSeoKeyword", () => {
       isUnusableSeoKeyword("the best guide to seo for small business", genericSite, "fr")
     ).toBe(false);
   });
+
+  it("uses hostname for brand hints (rejects navigational single-token)", () => {
+    const site = { url: "https://www.acmestudio.io", name: "Acme Studio" };
+    expect(isUnusableSeoKeyword("acmestudio", site, "en")).toBe(true);
+  });
+
+  it("flags Italian-heavy query for German article target", () => {
+    const q = "come nella automazione aziendale intelligenza artificiale";
+    expect(isUnusableSeoKeyword(q, genericSite, "de")).toBe(true);
+  });
+
+  it("accepts query aligned with German article target", () => {
+    expect(
+      isUnusableSeoKeyword(
+        "marketing automatisierung für kleine unternehmen tipps",
+        genericSite,
+        "de"
+      )
+    ).toBe(false);
+  });
 });
 
 describe("pickFirstUsableKeyword", () => {
@@ -68,5 +88,13 @@ describe("pickFirstUsableKeyword", () => {
       { query: "site:yahoo.com", position: "2", impressions: "2", clicks: "0" },
     ];
     expect(pickFirstUsableKeyword(rows, site, "fr")).toEqual([]);
+  });
+
+  it("respects language when picking first usable row", () => {
+    const rows: KeywordRow[] = [
+      { query: "come nella automazione", position: "5", impressions: "100", clicks: "1" },
+      { query: "local seo checklist", position: "10", impressions: "50", clicks: "2" },
+    ];
+    expect(pickFirstUsableKeyword(rows, site, "de")).toEqual([rows[1]]);
   });
 });
