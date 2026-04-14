@@ -41,20 +41,21 @@ const SITE_REPO_MAP: Record<
   },
   iapmesuisse: {
     repo: "vocalisia/iapmesuisse",
-    articlePath: "content/blog",
-    format: "mdx",
+    // iapmesuisse reads from content/blog/{locale}/ with .md extension
+    articlePath: "content/blog/fr",
+    format: "md",
     i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "iapme-suisse": {
     repo: "vocalisia/iapmesuisse",
-    articlePath: "content/blog",
-    format: "mdx",
+    articlePath: "content/blog/fr",
+    format: "md",
     i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "iapme": {
     repo: "vocalisia/iapmesuisse",
-    articlePath: "content/blog",
-    format: "mdx",
+    articlePath: "content/blog/fr",
+    format: "md",
     i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "hub-ai": {
@@ -453,6 +454,7 @@ title: "H1 SEO-optimized in ${lang.articleLang}, 50-65 chars. Rules: (1) MUST co
 description: "Meta description 145-160 chars in ${lang.articleLang}. MUST contain '${keyword}' and summarize the SPECIFIC angle of the article (not generic). Include a call-to-action verb."
 date: "${today}"
 tags: ["${keyword.split(" ")[0]}", "tag2", "tag3", "tag4"]
+slug: "${langPrefix}${articleSlug}-${today}"
 image: "/placeholder.jpg"
 author: "SEO Autopilot"
 lang: "${language}"
@@ -591,7 +593,8 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     if (!dry_run && repoConfig) {
       // Add language prefix to filename if not French
       const langPrefix = language !== "fr" ? `${language}-` : "";
-      const filePath = `${repoConfig.articlePath}/${langPrefix}${articleSlug}-${today}.mdx`;
+      const ext = repoConfig.format === "md" ? "md" : "mdx";
+      const filePath = `${repoConfig.articlePath}/${langPrefix}${articleSlug}-${today}.${ext}`;
       const commitMsg = `feat: add ${lang.label} SEO article "${keyword}" via autopilot`;
 
       try {
