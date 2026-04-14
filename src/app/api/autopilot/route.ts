@@ -485,21 +485,6 @@ A: [answer 3 in ${lang.articleLang}]
 ## Conclusion
 [summary + call to action + 1 internal link, in ${lang.articleLang}]
 
-## Schema JSON-LD (MANDATORY — copy EXACTLY after the conclusion)
-At the very end of the article, add this FAQ schema block. Replace Q1/A1/Q2/A2/Q3/A3 with the EXACT questions and answers from the FAQ section above:
-
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
-    {"@type": "Question", "name": "Q1", "acceptedAnswer": {"@type": "Answer", "text": "A1"}},
-    {"@type": "Question", "name": "Q2", "acceptedAnswer": {"@type": "Answer", "text": "A2"}},
-    {"@type": "Question", "name": "Q3", "acceptedAnswer": {"@type": "Answer", "text": "A3"}}
-  ]
-}
-</script>
-
 REMINDER: integrate 4-6 internal links spread throughout the article with anchors containing "${keyword}" or its variants. WRITE THE ENTIRE ARTICLE IN ${lang.articleLang.toUpperCase()}.`,
           },
         ],
@@ -512,6 +497,9 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
         .replace(/^```(?:mdx|markdown)?\s*\n?/i, "")
         .replace(/\n?```\s*$/i, "")
         .trim();
+
+      // Strip any <script> tags — they break MDX compilation (JSX treats {} as expressions)
+      articleContent = articleContent.replace(/<script[\s\S]*?<\/script>/gi, "").trimEnd();
 
       // VALIDATE INTERNAL LINKS — replace any hallucinated slug with a real one from linkCandidates
       if (linkCandidates.length > 0) {
