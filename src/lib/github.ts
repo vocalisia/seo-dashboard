@@ -39,7 +39,7 @@ export async function publishToGitHub(
       }
     );
 
-    if (res.status === 422) return null; // branch not found → try fallback
+    if (res.status === 422 || res.status === 404) return null; // branch not found → try fallback
     if (!res.ok) {
       const err = (await res.json()) as GitHubErrorResponse;
       console.error(`GitHub PUT failed (${res.status}): ${err.message}`);
