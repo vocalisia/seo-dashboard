@@ -400,6 +400,9 @@ Reply in JSON with keys: intent, topics, gaps, structure, faqs`,
     // 5. Generate article via Claude Sonnet (in target language)
     const today = todayISO();
     const articleSlug = slugify(keyword);
+    // Language prefix for filenames/slugs (empty for French, else "en-", "de-", etc.)
+    // Defined here so it's available in both the article prompt and GitHub publish step
+    const langPrefix = (!repoConfig?.i18nBlogPath && language !== "fr") ? `${language}-` : "";
 
     let articleContent = "";
     let articleTitle = keyword;
@@ -591,8 +594,6 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     // 7. Publish to GitHub (if not dry_run and repo config exists)
     let githubUrl: string | null = null;
     if (!dry_run && repoConfig) {
-      // Add language prefix to filename if not French
-      const langPrefix = language !== "fr" ? `${language}-` : "";
       const ext = repoConfig.format === "md" ? "md" : "mdx";
       const filePath = `${repoConfig.articlePath}/${langPrefix}${articleSlug}-${today}.${ext}`;
       const commitMsg = `feat: add ${lang.label} SEO article "${keyword}" via autopilot`;
@@ -617,8 +618,6 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
         const blogPath = repoConfig?.i18nBlogPath
           ? (repoConfig.i18nBlogPath[language] ?? repoConfig.i18nBlogPath["default"] ?? "/blog")
           : "/blog";
-        // Language prefix in slug only for non-FR on non-i18n sites
-        const langPrefix = (!repoConfig?.i18nBlogPath && language !== "fr") ? `${language}-` : "";
         // Strip date suffix: live URL uses slug only (no -YYYY-MM-DD)
         const liveUrl = `${site.url.replace(/\/$/, "")}${blogPath}/${langPrefix}${articleSlug}`;
         console.log(`[autopilot] requesting indexing for: ${liveUrl}`);
