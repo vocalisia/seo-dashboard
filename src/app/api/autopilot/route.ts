@@ -10,7 +10,11 @@ import type { KeywordRow } from "@/lib/autopilot-keywords";
 import { pickFirstUsableKeyword } from "@/lib/autopilot-keywords";
 import { LANG_CONFIG, resolveSiteRepoConfig } from "@/lib/autopilot-config";
 import { logAutopilot } from "@/lib/autopilot-log";
-import { buildPublishedArticleUrl } from "@/lib/autopilot-published-url";
+import {
+  blogPathForLocale,
+  buildPublishedArticleUrl,
+  normalizeAutopilotMarkdownLinks,
+} from "@/lib/autopilot-published-url";
 import { slugify, todayISO } from "@/lib/autopilot-utils";
 
 interface Site {
@@ -298,17 +302,17 @@ Reply in JSON with keys: intent, topics, gaps, structure, faqs`,
     try {
       const serpContext = serpAnalysis.slice(0, 800);
 
-      // Build explicit internal link instructions with real slugs
-      const blogPrefix = "/blog";
+      // Même préfixe que l’URL publique (ex. /fr/blog sur Lead-Gene), pas /blog seul.
+      const blogPrefix = blogPathForLocale(repoConfig, language);
       const internalLinksBlock = linkCandidates.length > 0
         ? `## MANDATORY INTERNAL LINKING — STRICT RULES
 You MUST integrate 4 to 6 internal links in the body of the article.
 
 ⚠️ CRITICAL: You can ONLY use slugs from the EXACT list below. NEVER invent, guess, or modify slugs.
 ⚠️ If you hallucinate a slug not in this list, the article will be REJECTED.
-⚠️ ALWAYS prefix links with "${blogPrefix}/". No exceptions.
+⚠️ ALWAYS use paths exactly like "${blogPrefix}/<slug>" (full path prefix below). NEVER use only "/blog/" unless it appears in the list exactly like that.
 
-ALLOWED SLUGS (copy EXACTLY as shown, do not translate or modify):
+ALLOWED URL PATHS (copy EXACTLY — slug includes the date suffix as shown):
 ${linkCandidates.map((s, i) => `  ${i + 1}. ${blogPrefix}/${s}`).join("\n")}
 
 Link format: [optimized anchor](${blogPrefix}/EXACT-slug-from-list-above)
@@ -393,44 +397,73 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       // Strip any <script> tags — they break MDX compilation (JSX treats {} as expressions)
       articleContent = articleContent.replace(/<script[\s\S]*?<\/script>/gi, "").trimEnd();
 
+      // Liens `(fr/blog/...)` sans "/" → chemins relatifs cassés côté navigateur
+      articleContent = normalizeAutopilotMarkdownLinks(articleContent, language, repoConfig);
+
       // VALIDATE INTERNAL LINKS — replace any hallucinated slug with a real one from linkCandidates
       if (linkCandidates.length > 0) {
         const validSlugs = new Set(linkCandidates.map((s) => s.toLowerCase()));
-        // Match [anchor](/blog/slug) or [anchor](/slug) — only internal relative links
-        const internalLinkRegex = /\[([^\]]+)\]\((\/(?!\/)[^)]+)\)/g;
+        const blogBase = blogPathForLocale(repoConfig, language).replace(/\/$/, "");
+        const blogBaseLower = blogBase.toLowerCase();
+
+        /** Extrait le segment slug (avec date) depuis une URL relative /…/blog/… ou /blog/… */
+        const extractSlugFromRelativeUrl = (url: string): string => {
+          const path = url.replace(/\/$/, "").toLowerCase();
+          if (path.startsWith(blogBaseLower + "/")) {
+            return path.slice(blogBaseLower.length + 1);
+          }
+          // Liens erronés /blog/… (modèle sans locale)
+          const legacyBlog = /^\/blog\/(.+)$/i.exec(path);
+          if (legacyBlog) return legacyBlog[1];
+          // /fr/blog/, /en/blog/, etc. (modèle partiellement correct)
+          const localeBlog = /^\/[a-z]{2}\/blog\/(.+)$/i.exec(path);
+          if (localeBlog) return localeBlog[1];
+          return path.replace(/^\//, "");
+        };
+
+        // Tous les liens markdown sauf http(s) / mailto / # — pas seulement ceux qui commencent par "/"
         let replacementIndex = 0;
 
-        articleContent = articleContent.replace(internalLinkRegex, (_match, anchor: string, url: string) => {
-          linkStats.total++;
+        articleContent = articleContent.replace(
+          /\[([^\]]+)\]\(([^)]+)\)/g,
+          (match, anchor: string, rawHref: string) => {
+            const href = String(rawHref).trim();
+            if (/^https?:\/\//i.test(href) || /^mailto:/i.test(href) || /^tel:/i.test(href)) {
+              return match;
+            }
+            if (href.startsWith("#")) return match;
 
-          // Normalize: strip leading /, /blog/, trailing slash
-          const normalized = url
-            .replace(/^\/(?:blog\/)?/, "")
-            .replace(/\/$/, "")
-            .toLowerCase();
+            linkStats.total++;
 
-          // Already valid → ensure /blog/ prefix
-          if (validSlugs.has(normalized)) {
-            linkStats.valid++;
-            return `[${anchor}](/blog/${normalized})`;
+            const normalized = extractSlugFromRelativeUrl(href);
+
+            const canonicalFor = (slugKey: string) =>
+              linkCandidates.find((s) => s.toLowerCase() === slugKey) ?? slugKey;
+
+            // Already valid → enforce correct blog prefix + casing from repo
+            if (validSlugs.has(normalized)) {
+              linkStats.valid++;
+              const slug = canonicalFor(normalized);
+              return `[${anchor}](${blogBase}/${slug})`;
+            }
+
+            // Try fuzzy match: find a slug containing significant words from the invalid path
+            const words = normalized.split("-").filter((w) => w.length > 3);
+            const fuzzyMatch = linkCandidates.find((slug) =>
+              words.some((w) => slug.toLowerCase().includes(w))
+            );
+            if (fuzzyMatch) {
+              linkStats.fuzzy++;
+              return `[${anchor}](${blogBase}/${fuzzyMatch})`;
+            }
+
+            // Last resort: round-robin through linkCandidates to diversify
+            const replacement = linkCandidates[replacementIndex % linkCandidates.length];
+            replacementIndex++;
+            linkStats.roundRobin++;
+            return `[${anchor}](${blogBase}/${replacement})`;
           }
-
-          // Try fuzzy match: find a slug containing significant words from the invalid path
-          const words = normalized.split("-").filter((w) => w.length > 3);
-          const fuzzyMatch = linkCandidates.find((slug) =>
-            words.some((w) => slug.toLowerCase().includes(w))
-          );
-          if (fuzzyMatch) {
-            linkStats.fuzzy++;
-            return `[${anchor}](/blog/${fuzzyMatch})`;
-          }
-
-          // Last resort: round-robin through linkCandidates to diversify
-          const replacement = linkCandidates[replacementIndex % linkCandidates.length];
-          replacementIndex++;
-          linkStats.roundRobin++;
-          return `[${anchor}](/blog/${replacement})`;
-        });
+        );
       } else {
         linkStats.skipped = 1;
       }

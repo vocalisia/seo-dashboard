@@ -105,7 +105,9 @@ function fixLinks(content, { repo, selfSlug, articleLang }) {
   if (!cfg) return { content, stats: { skipped: true } };
 
   const cache = slugCache.get(`${repo}|${cfg.articlePath}`);
-  const validSlugs = (cache?.slugs || []).filter(s => s !== selfSlug);
+  let validSlugs = (cache?.slugs || []).filter(s => s !== selfSlug);
+  // Fallback: if repository only has one article, use self slug as replacement target.
+  if (validSlugs.length === 0 && selfSlug) validSlugs = [selfSlug];
   if (validSlugs.length === 0) return { content, stats: { skipped: true, reason: "no valid slugs" } };
 
   const correctPrefix = cfg.blogPath[articleLang] ?? cfg.blogPath.default ?? "/blog";
@@ -148,12 +150,16 @@ function fixLinks(content, { repo, selfSlug, articleLang }) {
   return { content: newContent, stats: { fixed, kept, replaced } };
 }
 
-async function getFile(repo, filePath, branch) {
-  const res = await gh(`/repos/${repo}/contents/${filePath}?ref=${branch}`);
-  if (!res.ok) return null;
-  const data = await res.json();
-  const content = Buffer.from(data.content, "base64").toString("utf8");
-  return { content, sha: data.sha };
+async function getFile(repo, filePath, branches) {
+  for (const branch of branches) {
+    if (!branch) continue;
+    const res = await gh(`/repos/${repo}/contents/${filePath}?ref=${branch}`);
+    if (!res.ok) continue;
+    const data = await res.json();
+    const content = Buffer.from(data.content, "base64").toString("utf8");
+    return { content, sha: data.sha, branch };
+  }
+  return null;
 }
 
 async function putFile(repo, filePath, branch, content, sha, message) {
@@ -171,17 +177,37 @@ async function putFile(repo, filePath, branch, content, sha, message) {
 }
 
 async function main() {
-  console.log("Loading today's published articles...");
-  const rows = await sql`
-    SELECT ar.id, ar.keyword, ar.github_url, s.name as site
-    FROM autopilot_runs ar
-    JOIN sites s ON s.id = ar.site_id
-    WHERE ar.created_at >= CURRENT_DATE
-      AND ar.status = 'published'
-      AND ar.github_url IS NOT NULL
-    ORDER BY s.name
-  `;
-  console.log(`Found ${rows.length} articles.\n`);
+  const runAll = process.argv.includes("--all");
+  const dryRun = process.argv.includes("--dry-run");
+
+  console.log(
+    runAll
+      ? "Loading all published articles..."
+      : "Loading today's published articles..."
+  );
+
+  const rows = runAll
+    ? await sql`
+      SELECT ar.id, ar.keyword, ar.github_url, s.name as site
+      FROM autopilot_runs ar
+      JOIN sites s ON s.id = ar.site_id
+      WHERE ar.status = 'published'
+        AND ar.github_url IS NOT NULL
+      ORDER BY s.name, ar.created_at DESC
+    `
+    : await sql`
+      SELECT ar.id, ar.keyword, ar.github_url, s.name as site
+      FROM autopilot_runs ar
+      JOIN sites s ON s.id = ar.site_id
+      WHERE ar.created_at >= CURRENT_DATE
+        AND ar.status = 'published'
+        AND ar.github_url IS NOT NULL
+      ORDER BY s.name, ar.created_at DESC
+    `;
+
+  console.log(
+    `Found ${rows.length} articles.${dryRun ? " (dry-run mode)" : ""}\n`
+  );
 
   const results = { fixed: 0, skipped: 0, errors: 0 };
 
@@ -195,8 +221,35 @@ async function main() {
     // Prime slug cache
     await listRepoSlugs(parsed.repo, cfg.articlePath);
 
-    // Load current content
-    const file = await getFile(parsed.repo, parsed.filePath, parsed.branch);
+    // Load current content (with fallback path if github_url is stale)
+    const cache = slugCache.get(`${parsed.repo}|${cfg.articlePath}`);
+    const candidateBranches = [parsed.branch, cache?.branch, "master", "main"];
+    let filePath = parsed.filePath;
+    let file = await getFile(parsed.repo, filePath, candidateBranches);
+    if (!file && cfg.articlePath) {
+      const altPath = `${cfg.articlePath}/${parsed.filename}`;
+      if (altPath !== filePath) {
+        const alt = await getFile(parsed.repo, altPath, candidateBranches);
+        if (alt) {
+          file = alt;
+          filePath = altPath;
+          console.log(`  ℹ️  ${row.site}/${parsed.slug} — used fallback path ${altPath}`);
+        }
+      }
+    }
+    if (!file && cfg.articlePath) {
+      for (const ext of ["mdx", "md"]) {
+        const altPath = `${cfg.articlePath}/${parsed.slug}.${ext}`;
+        if (altPath === filePath) continue;
+        const alt = await getFile(parsed.repo, altPath, candidateBranches);
+        if (alt) {
+          file = alt;
+          filePath = altPath;
+          console.log(`  ℹ️  ${row.site}/${parsed.slug} — used fallback path ${altPath}`);
+          break;
+        }
+      }
+    }
     if (!file) { console.log(`  ❌ ${row.site}/${parsed.slug} — fetch failed`); results.errors++; continue; }
 
     const articleLang = detectLang(parsed.slug);
@@ -218,11 +271,19 @@ async function main() {
       continue;
     }
 
+    if (dryRun) {
+      console.log(
+        `  🧪 ${row.site}/${parsed.slug} — would fix ${stats.fixed} prefix, replace ${stats.replaced} broken, keep ${stats.kept}`
+      );
+      results.fixed++;
+      continue;
+    }
+
     // Push fix
     const put = await putFile(
       parsed.repo,
-      parsed.filePath,
-      parsed.branch,
+      filePath,
+      file.branch,
       fixedContent,
       file.sha,
       `fix: correct internal links in ${parsed.slug}`
@@ -237,7 +298,9 @@ async function main() {
     }
   }
 
-  console.log(`\nDone. Fixed: ${results.fixed}, skipped: ${results.skipped}, errors: ${results.errors}`);
+  console.log(
+    `\nDone. ${dryRun ? "Would fix" : "Fixed"}: ${results.fixed}, skipped: ${results.skipped}, errors: ${results.errors}`
+  );
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

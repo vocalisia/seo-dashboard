@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { resolvePublishedArticleLiveUrl } from "@/lib/autopilot-published-url";
 
 interface AutopilotRow {
   id: number;
@@ -13,6 +14,7 @@ interface AutopilotRow {
 
 interface SiteRow {
   url: string;
+  name: string;
 }
 
 interface ArticleIndexation {
@@ -22,36 +24,6 @@ interface ArticleIndexation {
   url: string;
   status_code: number | null;
   indexed: boolean;
-}
-
-/**
- * Derive the live blog URL from a GitHub file URL.
- * GitHub URL pattern: https://github.com/{owner}/{repo}/blob/main/{path}/{lang-prefix}{slug}-{date}.mdx
- * Extract the slug portion and build: {siteUrl}/blog/{slug}
- */
-function deriveLiveUrl(siteUrl: string, githubUrl: string): string | null {
-  try {
-    // Extract filename from GitHub URL
-    // e.g. .../content/blog/en-my-keyword-2026-04-12.mdx
-    const parts = githubUrl.split("/");
-    const filename = parts[parts.length - 1]; // e.g. "en-my-keyword-2026-04-12.mdx"
-
-    if (!filename) return null;
-
-    // Remove .mdx extension
-    let slug = filename.replace(/\.mdx?$/, "");
-
-    // Remove language prefix if present (e.g. "en-", "de-", "es-")
-    slug = slug.replace(/^[a-z]{2}-/, "");
-
-    // Remove trailing date pattern (e.g. "-2026-04-12")
-    slug = slug.replace(/-\d{4}-\d{2}-\d{2}$/, "");
-
-    const baseUrl = siteUrl.replace(/\/$/, "");
-    return `${baseUrl}/blog/${slug}`;
-  } catch {
-    return null;
-  }
 }
 
 export async function GET(req: NextRequest) {
@@ -78,7 +50,7 @@ export async function GET(req: NextRequest) {
   try {
     // Get the site URL
     const siteRows = (await sql`
-      SELECT url FROM sites WHERE id = ${siteId} LIMIT 1
+      SELECT url, name FROM sites WHERE id = ${siteId} LIMIT 1
     `) as SiteRow[];
 
     if (siteRows.length === 0) {
@@ -89,6 +61,7 @@ export async function GET(req: NextRequest) {
     }
 
     const siteUrl = siteRows[0].url;
+    const siteName = siteRows[0].name;
 
     // Fetch published articles that have a github_url
     const runs = (await sql`
@@ -105,19 +78,13 @@ export async function GET(req: NextRequest) {
     const articles: ArticleIndexation[] = [];
 
     for (const run of runs) {
-      const liveUrl = deriveLiveUrl(siteUrl, run.github_url);
-
-      if (!liveUrl) {
-        articles.push({
-          id: run.id,
-          keyword: run.keyword,
-          language: run.language,
-          url: run.github_url,
-          status_code: null,
-          indexed: false,
-        });
-        continue;
-      }
+      const liveUrl = resolvePublishedArticleLiveUrl({
+        siteUrl,
+        siteName,
+        keyword: run.keyword,
+        language: run.language,
+        createdAt: run.created_at,
+      });
 
       let statusCode: number | null = null;
       let indexed = false;

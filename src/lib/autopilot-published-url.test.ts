@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildPublishedArticleUrl } from "./autopilot-published-url";
+import {
+  blogPathForLocale,
+  buildPublishedArticleUrl,
+  normalizeAutopilotMarkdownLinks,
+} from "./autopilot-published-url";
 import type { SiteRepoConfig } from "./autopilot-config";
 
 describe("buildPublishedArticleUrl", () => {
@@ -26,5 +30,31 @@ describe("buildPublishedArticleUrl", () => {
     expect(buildPublishedArticleUrl("https://hub.test", "cbd oil", "fr", cfg, d)).toBe(
       `https://hub.test/fr/blog/cbd-oil-${d}`
     );
+  });
+
+  it("blogPathForLocale matches locale", () => {
+    const cfg: SiteRepoConfig = {
+      repo: "x/y",
+      articlePath: "content/blog",
+      format: "mdx",
+      i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
+    };
+    expect(blogPathForLocale(cfg, "fr")).toBe("/fr/blog");
+    expect(blogPathForLocale(cfg, "en")).toBe("/en/blog");
+    expect(blogPathForLocale(null, "fr")).toBe("/blog");
+  });
+
+  it("normalizeAutopilotMarkdownLinks adds leading slash for locale paths", () => {
+    const cfg: SiteRepoConfig = {
+      repo: "x/y",
+      articlePath: "content/blog",
+      format: "mdx",
+      i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
+    };
+    const raw =
+      "Voir [autre](fr/blog/foo-bar-2026-01-01) et [legacy](blog/baz-2026-02-02).";
+    const out = normalizeAutopilotMarkdownLinks(raw, "fr", cfg);
+    expect(out).toContain("](/fr/blog/foo-bar-2026-01-01)");
+    expect(out).toContain("](/fr/blog/baz-2026-02-02)");
   });
 });

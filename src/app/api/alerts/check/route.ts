@@ -3,6 +3,7 @@ export const maxDuration = 60;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { resolvePublishedArticleLiveUrl } from "@/lib/autopilot-published-url";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,42 +41,6 @@ interface AlertPayload {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-// Sites that use locale-prefixed blog paths (e.g. /fr/blog/ instead of /blog/)
-const I18N_BLOG_PATHS: Record<string, Record<string, string>> = {
-  "ai-due.com":      { fr: "/fr/blog", en: "/en/blog" },
-  "iapmesuisse.ch":  { fr: "/fr/blog", en: "/en/blog" },
-  "lead-gene.com":   { fr: "/blog", en: "/blog" },
-  "tesla-mag.ch":    { fr: "/produit", en: "/product" },
-};
-
-function deriveLiveUrl(siteUrl: string, githubUrl: string): string | null {
-  try {
-    const parts = githubUrl.split("/");
-    const filename = parts[parts.length - 1];
-    if (!filename) return null;
-
-    // Strip language prefix (e.g. "en-") and date suffix
-    let slug = filename.replace(/\.mdx?$/, "");
-    const langMatch = slug.match(/^([a-z]{2})-(.+)$/);
-    const detectedLang = langMatch ? langMatch[1] : "fr";
-    if (langMatch) slug = langMatch[2];
-    slug = slug.replace(/-\d{4}-\d{2}-\d{2}$/, "");
-
-    const baseUrl = siteUrl.replace(/\/$/, "");
-
-    // Use i18n path if applicable
-    const hostname = new URL(baseUrl).hostname.replace(/^www\./, "");
-    const i18nPaths = I18N_BLOG_PATHS[hostname];
-    const blogPath = i18nPaths
-      ? (i18nPaths[detectedLang] ?? i18nPaths["fr"] ?? "/blog")
-      : "/blog";
-
-    return `${baseUrl}${blogPath}/${slug}`;
-  } catch {
-    return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Check A — Position drops (>= 5 positions in 7d vs previous 7d)
@@ -127,15 +92,20 @@ interface AutopilotRow {
   id: number;
   keyword: string;
   github_url: string;
+  language: string;
+  created_at: string;
 }
 
 async function checkIndexation(
   sql: ReturnType<typeof getSQL>,
   siteId: number,
-  siteUrl: string
+  siteUrl: string,
+  siteName: string
 ): Promise<UnindexedArticle[]> {
   const runs = (await sql`
-    SELECT id, keyword, github_url
+    SELECT id, keyword, github_url,
+           COALESCE(language, 'fr') AS language,
+           created_at
     FROM autopilot_runs
     WHERE site_id = ${siteId}
       AND status = 'published'
@@ -148,8 +118,13 @@ async function checkIndexation(
   const failures: UnindexedArticle[] = [];
 
   for (const run of runs) {
-    const liveUrl = deriveLiveUrl(siteUrl, run.github_url);
-    if (!liveUrl) continue;
+    const liveUrl = resolvePublishedArticleLiveUrl({
+      siteUrl,
+      siteName,
+      keyword: run.keyword,
+      language: run.language,
+      createdAt: run.created_at,
+    });
 
     let statusCode: number | null = null;
     try {
@@ -303,7 +278,7 @@ export async function POST() {
       }
 
       // B) Indexation failures
-      const failures = await checkIndexation(sql, site.id, site.url);
+      const failures = await checkIndexation(sql, site.id, site.url, site.name);
       for (const f of failures) {
         allAlerts.push({
           site_id: site.id,

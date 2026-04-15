@@ -96,6 +96,13 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     repo: "vocalisia/lead-gene",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: {
+      fr: "/fr/blog",
+      en: "/en/blog",
+      de: "/de/blog",
+      nl: "/nl/blog",
+      default: "/fr/blog",
+    },
   },
   "seo-true": {
     repo: "vocalisia/seo-true",
