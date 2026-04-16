@@ -2,15 +2,395 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 import { NextRequest, NextResponse } from "next/server";
-import { getSQL } from "@/lib/db";
+import { getSQL, initDB } from "@/lib/db";
 import { askAI } from "@/lib/ai";
+import { buildOpportunityCandidates, type OpportunityCandidate, type OpportunityKeywordRow } from "@/lib/opportunity-engine";
+import { buildExternalSignalRows, fetchGoogleSerpSnapshot } from "@/lib/opportunity-sources";
+import { requireApiSession } from "@/lib/api-auth";
 
-interface NicheData {
+interface AggregatedKeywordRow {
   query: string;
-  total_clicks: string;
-  total_impressions: string;
-  avg_position: string;
+  impressions_30d: string;
+  impressions_prev_30d: string;
+  clicks_30d: string;
+  avg_position_30d: string;
   site_count: string;
+}
+
+interface StoredOpportunity {
+  id?: number;
+  niche: string;
+  reason: string;
+  site_type: string;
+  core_keywords: string[];
+  monthly_volume: number;
+  competition: string;
+  monetization: string;
+  projected_traffic_6m: number;
+  projected_revenue_6m: number;
+  suggested_domains: string[];
+  seed_articles: string[];
+  target_countries: string[];
+  target_languages: string[];
+  competitors: { url: string; name: string }[];
+  success_rate: number;
+  revenue_timeline: { m1: number; m3: number; m6: number; m12: number };
+  business_model: Record<string, unknown>;
+  confidence_score: number;
+  signal_source?: string;
+  momentum_pct?: number;
+  average_position?: number;
+  opportunity_type?: string;
+  sample_queries?: string[];
+  status?: string;
+  score_breakdown?: {
+    growth: number;
+    volume: number;
+    weakness: number;
+    specificity: number;
+    business: number;
+    portfolioDistance: number;
+  };
+  serp_evidence?: {
+    relatedQuestions: string[];
+    relatedSearches: string[];
+    resultTitles: string[];
+  };
+}
+
+type OpportunityInsertable = StoredOpportunity;
+
+const PORTFOLIO_HINTS = [
+  "voice ai",
+  "tesla ev",
+  "cbd europe",
+  "crypto trust",
+  "business switzerland",
+  "sales training",
+  "ai hub",
+  "ai agents",
+  "lead generation",
+  "seo tools",
+  "beauty fashion",
+];
+
+function toNumber(value: string | number | null | undefined): number {
+  if (typeof value === "number") return value;
+  if (value == null) return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+function inferSiteType(candidate: OpportunityCandidate): string {
+  if (candidate.intent === "commercial") return "directory";
+  if (candidate.opportunityType === "question") return "blog";
+  if (candidate.keywords.some((keyword) => /logiciel|software|saas|tool/i.test(keyword))) return "saas";
+  return "magazine";
+}
+
+function inferMonetization(candidate: OpportunityCandidate): string {
+  if (candidate.intent === "commercial") return "lead-gen";
+  if (candidate.keywords.some((keyword) => /comparatif|best|meilleur|prix|tarif/i.test(keyword))) return "affiliate";
+  return "ads";
+}
+
+function inferCompetition(candidate: OpportunityCandidate): string {
+  if (candidate.averagePosition >= 18 && candidate.signalScore >= 0.7) return "low";
+  if (candidate.averagePosition >= 12) return "medium";
+  return "high";
+}
+
+function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity {
+  const siteType = inferSiteType(candidate);
+  const monetization = inferMonetization(candidate);
+  const competition = inferCompetition(candidate);
+  const root = slugify(candidate.clusterLabel.split(" ").slice(0, 3).join(" "));
+  const projectedTraffic6m = Math.round(candidate.monthlyVolume * 0.1);
+  const projectedRevenue6m = monetization === "lead-gen"
+    ? Math.round(projectedTraffic6m * 1.5)
+    : monetization === "affiliate"
+      ? Math.round(projectedTraffic6m * 0.7)
+      : Math.round(projectedTraffic6m * 0.25);
+  const confidence = Math.round(candidate.signalScore * 100);
+
+  return {
+    niche: candidate.clusterLabel,
+    reason: [
+      `${candidate.monthlyVolume.toLocaleString("en-US")} monthly impressions detected in GSC-like demand.`,
+      `${candidate.momentumPct}% momentum over the previous 30-day window.`,
+      candidate.rationale.join(". "),
+    ].join(" "),
+    site_type: siteType,
+    core_keywords: candidate.keywords.slice(0, 5),
+    monthly_volume: candidate.monthlyVolume,
+    competition,
+    monetization,
+    projected_traffic_6m: projectedTraffic6m,
+    projected_revenue_6m: projectedRevenue6m,
+    suggested_domains: [`${root}hub.com`, `${root}guide.com`].filter(Boolean),
+    seed_articles: candidate.keywords.slice(0, 5).map((keyword) => `Guide complet: ${keyword}`),
+    target_countries: ["FRA", "CHE", "BEL"],
+    target_languages: ["fr"],
+    competitors: [],
+    success_rate: Math.max(25, Math.round(confidence * 0.8)),
+    revenue_timeline: {
+      m1: 0,
+      m3: Math.round(projectedRevenue6m * 0.25),
+      m6: projectedRevenue6m,
+      m12: Math.round(projectedRevenue6m * 2.2),
+    },
+    business_model: {
+      type: `${siteType} focused on ${candidate.intent} demand`,
+      how_to_monetize: `Build a content moat around ${candidate.clusterLabel} and monetize through ${monetization}.`,
+      launch_angle: candidate.rationale,
+    },
+    confidence_score: confidence,
+    signal_source: candidate.portfolioDistance >= 0.7 ? "gsc+external" : "gsc",
+    momentum_pct: candidate.momentumPct,
+    average_position: candidate.averagePosition,
+    opportunity_type: candidate.opportunityType,
+    sample_queries: candidate.sampleQueries,
+    status: "pending",
+    score_breakdown: candidate.scoreBreakdown,
+    serp_evidence: candidate.serpEvidence ?? {
+      relatedQuestions: [],
+      relatedSearches: [],
+      resultTitles: [],
+    },
+  };
+}
+
+function cleanJsonBlock(input: string): string {
+  return input
+    .replace(/^```(?:json)?\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
+    .trim();
+}
+
+async function enrichCandidatesWithAI(candidates: OpportunityCandidate[]): Promise<StoredOpportunity[] | null> {
+  const shortlist = candidates.map((candidate, index) => ({
+    id: index + 1,
+    niche_hint: candidate.clusterLabel,
+    keywords: candidate.keywords.slice(0, 5),
+    monthly_volume: candidate.monthlyVolume,
+    momentum_pct: candidate.momentumPct,
+    average_position: candidate.averagePosition,
+    signal_score: candidate.signalScore,
+    opportunity_type: candidate.opportunityType,
+    intent: candidate.intent,
+    rationale: candidate.rationale,
+    score_breakdown: candidate.scoreBreakdown,
+  }));
+
+  const prompt = `You are enriching SEO niche opportunities from first-party search demand.
+
+The shortlist below is already computed from real query clusters. Do NOT invent random sectors.
+For each item, keep the same niche direction and keywords, but turn it into a launch-ready business opportunity.
+
+INPUT:
+${JSON.stringify(shortlist, null, 2)}
+
+RULES:
+- Stay close to the provided niche_hint and keywords.
+- monthly_volume must stay realistic and close to the input.
+- Prefer niches with clear content gaps, business intent, or rising long-tail demand.
+- Suggested domains must be simple and brandable.
+- Seed articles must directly attack the listed keywords.
+- Competitors can be empty if you are unsure. Never hallucinate weird URLs.
+- Return 5 to 8 items max.
+
+RESPOND IN STRICT JSON:
+{
+  "opportunities": [
+    {
+      "niche": "Specific niche",
+      "reason": "Concrete explanation based on rising demand, SERP gap, and portfolio distance",
+      "site_type": "blog | magazine | e-commerce | saas | directory",
+      "core_keywords": ["kw1", "kw2"],
+      "monthly_volume": 12000,
+      "competition": "low | medium | high",
+      "monetization": "ads | affiliate | e-commerce | subscription | lead-gen",
+      "projected_traffic_6m": 1800,
+      "projected_revenue_6m": 900,
+      "suggested_domains": ["example.com"],
+      "seed_articles": ["title 1", "title 2", "title 3", "title 4", "title 5"],
+      "target_countries": ["FRA", "CHE"],
+      "target_languages": ["fr"],
+      "competitors": [],
+      "success_rate": 65,
+      "revenue_timeline": {"m1": 0, "m3": 120, "m6": 900, "m12": 2200},
+      "business_model": {
+        "type": "short description",
+        "how_to_monetize": "practical monetization plan"
+      },
+      "confidence_score": 78
+    }
+  ]
+}`;
+
+  const aiResponse = await askAI([{ role: "user", content: prompt }], "search", 3200);
+  const cleaned = cleanJsonBlock(aiResponse);
+  if (!cleaned) {
+    throw new Error("AI returned an empty response");
+  }
+  const parsed = JSON.parse(cleaned) as { opportunities?: StoredOpportunity[] };
+  return parsed.opportunities?.length ? parsed.opportunities : null;
+}
+
+async function enrichCandidatesWithFreeSerpContext(candidates: OpportunityCandidate[]): Promise<OpportunityCandidate[]> {
+  const snapshots = await Promise.all(
+    candidates.slice(0, 4).map((candidate) => fetchGoogleSerpSnapshot(candidate.clusterLabel))
+  );
+
+  return candidates.map((candidate, index) => {
+    const snapshot = snapshots[index];
+    if (!snapshot) return candidate;
+
+    const extraQueries = [...candidate.sampleQueries, ...snapshot.relatedQuestions, ...snapshot.relatedSearches]
+      .filter(Boolean)
+      .slice(0, 8);
+    const extraRationale = [...candidate.rationale];
+
+    if (snapshot.relatedQuestions.length > 0) {
+      extraRationale.push(`${snapshot.relatedQuestions.length} PAA-style questions found`);
+    }
+    if (snapshot.relatedSearches.length > 0) {
+      extraRationale.push(`${snapshot.relatedSearches.length} related searches found`);
+    }
+
+    return {
+      ...candidate,
+      sampleQueries: extraQueries,
+      rationale: extraRationale.slice(0, 6),
+      serpEvidence: {
+        relatedQuestions: snapshot.relatedQuestions.slice(0, 8),
+        relatedSearches: snapshot.relatedSearches.slice(0, 8),
+        resultTitles: snapshot.resultTitles.slice(0, 8),
+      },
+    };
+  });
+}
+
+function sanitizeOpportunity(
+  raw: Partial<StoredOpportunity>,
+  fallback: StoredOpportunity
+): OpportunityInsertable {
+  return {
+    niche: typeof raw.niche === "string" && raw.niche.trim() ? raw.niche.trim() : fallback.niche,
+    reason: typeof raw.reason === "string" && raw.reason.trim() ? raw.reason.trim() : fallback.reason,
+    site_type: typeof raw.site_type === "string" && raw.site_type.trim() ? raw.site_type : fallback.site_type,
+    core_keywords: Array.isArray(raw.core_keywords) && raw.core_keywords.length
+      ? raw.core_keywords.filter((value): value is string => typeof value === "string" && value.trim().length > 0).slice(0, 5)
+      : fallback.core_keywords,
+    monthly_volume: Number.isFinite(raw.monthly_volume) ? Math.round(raw.monthly_volume as number) : fallback.monthly_volume,
+    competition: typeof raw.competition === "string" && raw.competition.trim() ? raw.competition : fallback.competition,
+    monetization: typeof raw.monetization === "string" && raw.monetization.trim() ? raw.monetization : fallback.monetization,
+    projected_traffic_6m: Number.isFinite(raw.projected_traffic_6m)
+      ? Math.round(raw.projected_traffic_6m as number)
+      : fallback.projected_traffic_6m,
+    projected_revenue_6m: Number.isFinite(raw.projected_revenue_6m)
+      ? Math.round(raw.projected_revenue_6m as number)
+      : fallback.projected_revenue_6m,
+    suggested_domains: Array.isArray(raw.suggested_domains) && raw.suggested_domains.length
+      ? raw.suggested_domains.filter((value): value is string => typeof value === "string" && value.trim().length > 0).slice(0, 3)
+      : fallback.suggested_domains,
+    seed_articles: Array.isArray(raw.seed_articles) && raw.seed_articles.length
+      ? raw.seed_articles.filter((value): value is string => typeof value === "string" && value.trim().length > 0).slice(0, 5)
+      : fallback.seed_articles,
+    target_countries: Array.isArray(raw.target_countries) && raw.target_countries.length
+      ? raw.target_countries.filter((value): value is string => typeof value === "string" && value.trim().length > 0).slice(0, 5)
+      : fallback.target_countries,
+    target_languages: Array.isArray(raw.target_languages) && raw.target_languages.length
+      ? raw.target_languages.filter((value): value is string => typeof value === "string" && value.trim().length > 0).slice(0, 5)
+      : fallback.target_languages,
+    competitors: Array.isArray(raw.competitors)
+      ? raw.competitors
+          .filter((value): value is { url: string; name: string } => (
+            typeof value === "object" &&
+            value !== null &&
+            typeof (value as { url?: unknown }).url === "string" &&
+            typeof (value as { name?: unknown }).name === "string"
+          ))
+          .slice(0, 5)
+      : fallback.competitors,
+    success_rate: Number.isFinite(raw.success_rate) ? Math.round(raw.success_rate as number) : fallback.success_rate,
+    revenue_timeline:
+      raw.revenue_timeline &&
+      typeof raw.revenue_timeline === "object" &&
+      !Array.isArray(raw.revenue_timeline)
+        ? (() => {
+            const timeline = raw.revenue_timeline as Record<string, string | number | null | undefined>;
+            return {
+              m1: toNumber(timeline.m1),
+              m3: toNumber(timeline.m3),
+              m6: toNumber(timeline.m6),
+              m12: toNumber(timeline.m12),
+            };
+          })()
+        : fallback.revenue_timeline,
+    business_model:
+      raw.business_model && typeof raw.business_model === "object" && !Array.isArray(raw.business_model)
+        ? raw.business_model
+        : fallback.business_model,
+    confidence_score: Number.isFinite(raw.confidence_score)
+      ? Math.round(raw.confidence_score as number)
+      : fallback.confidence_score,
+    signal_source: typeof raw.signal_source === "string" && raw.signal_source.trim() ? raw.signal_source : fallback.signal_source,
+    momentum_pct: Number.isFinite(raw.momentum_pct) ? Number(raw.momentum_pct) : fallback.momentum_pct,
+    average_position: Number.isFinite(raw.average_position) ? Number(raw.average_position) : fallback.average_position,
+    opportunity_type: typeof raw.opportunity_type === "string" && raw.opportunity_type.trim()
+      ? raw.opportunity_type
+      : fallback.opportunity_type,
+    sample_queries: Array.isArray(raw.sample_queries) && raw.sample_queries.length
+      ? raw.sample_queries.filter((value): value is string => typeof value === "string" && value.trim().length > 0).slice(0, 6)
+      : fallback.sample_queries,
+    status: typeof raw.status === "string" && raw.status.trim() ? raw.status : fallback.status,
+    score_breakdown:
+      raw.score_breakdown &&
+      typeof raw.score_breakdown === "object" &&
+      !Array.isArray(raw.score_breakdown)
+        ? {
+            growth: toNumber((raw.score_breakdown as Record<string, string | number | null | undefined>).growth),
+            volume: toNumber((raw.score_breakdown as Record<string, string | number | null | undefined>).volume),
+            weakness: toNumber((raw.score_breakdown as Record<string, string | number | null | undefined>).weakness),
+            specificity: toNumber((raw.score_breakdown as Record<string, string | number | null | undefined>).specificity),
+            business: toNumber((raw.score_breakdown as Record<string, string | number | null | undefined>).business),
+            portfolioDistance: toNumber((raw.score_breakdown as Record<string, string | number | null | undefined>).portfolioDistance),
+          }
+        : fallback.score_breakdown,
+    serp_evidence:
+      raw.serp_evidence &&
+      typeof raw.serp_evidence === "object" &&
+      !Array.isArray(raw.serp_evidence)
+        ? {
+            relatedQuestions: Array.isArray((raw.serp_evidence as Record<string, unknown>).relatedQuestions)
+              ? ((raw.serp_evidence as Record<string, unknown>).relatedQuestions as unknown[])
+                  .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+                  .slice(0, 8)
+              : fallback.serp_evidence?.relatedQuestions ?? [],
+            relatedSearches: Array.isArray((raw.serp_evidence as Record<string, unknown>).relatedSearches)
+              ? ((raw.serp_evidence as Record<string, unknown>).relatedSearches as unknown[])
+                  .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+                  .slice(0, 8)
+              : fallback.serp_evidence?.relatedSearches ?? [],
+            resultTitles: Array.isArray((raw.serp_evidence as Record<string, unknown>).resultTitles)
+              ? ((raw.serp_evidence as Record<string, unknown>).resultTitles as unknown[])
+                  .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+                  .slice(0, 8)
+              : fallback.serp_evidence?.resultTitles ?? [],
+          }
+        : fallback.serp_evidence,
+  };
 }
 
 /**
@@ -22,246 +402,146 @@ interface NicheData {
  * Returns scored opportunities with traffic projections.
  */
 export async function POST() {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized;
+  }
+
   const sql = getSQL();
 
   try {
-    // 1. Aggregate keyword themes across ALL sites (find cross-site patterns)
+    await initDB();
+
     const nicheData = (await sql`
+      WITH current_window AS (
+        SELECT
+          query,
+          SUM(impressions) AS impressions_30d,
+          SUM(clicks) AS clicks_30d,
+          AVG(position) AS avg_position_30d,
+          COUNT(DISTINCT site_id) AS site_count
+        FROM search_console_data
+        WHERE date >= NOW() - INTERVAL '30 days'
+          AND query IS NOT NULL
+          AND impressions >= 5
+        GROUP BY query
+      ),
+      previous_window AS (
+        SELECT
+          query,
+          SUM(impressions) AS impressions_prev_30d
+        FROM search_console_data
+        WHERE date >= NOW() - INTERVAL '60 days'
+          AND date < NOW() - INTERVAL '30 days'
+          AND query IS NOT NULL
+          AND impressions >= 5
+        GROUP BY query
+      )
       SELECT
-        query,
-        SUM(clicks) AS total_clicks,
-        SUM(impressions) AS total_impressions,
-        AVG(position) AS avg_position,
-        COUNT(DISTINCT site_id) AS site_count
-      FROM search_console_data
-      WHERE date >= NOW() - INTERVAL '30 days'
-        AND query IS NOT NULL
-        AND country IS NULL
-        AND impressions >= 10
-      GROUP BY query
-      ORDER BY SUM(impressions) DESC
-      LIMIT 100
-    `) as NicheData[];
+        c.query,
+        c.impressions_30d,
+        COALESCE(p.impressions_prev_30d, 0) AS impressions_prev_30d,
+        c.clicks_30d,
+        c.avg_position_30d,
+        c.site_count
+      FROM current_window c
+      LEFT JOIN previous_window p ON p.query = c.query
+      WHERE c.impressions_30d >= 25
+      ORDER BY c.impressions_30d DESC
+      LIMIT 500
+    `) as AggregatedKeywordRow[];
 
-    // 2. Get existing site names to know what's already covered
     const sites = await sql`SELECT name, url FROM sites WHERE is_active = true`;
-    const siteNames = sites.map((s) => `${s.name} (${s.url})`).join(", ");
+    const keywordRows: OpportunityKeywordRow[] = nicheData.map((row) => ({
+      query: row.query,
+      impressions_30d: toNumber(row.impressions_30d),
+      impressions_prev_30d: toNumber(row.impressions_prev_30d),
+      clicks_30d: toNumber(row.clicks_30d),
+      avg_position_30d: toNumber(row.avg_position_30d),
+      site_count: toNumber(row.site_count),
+    }));
 
-    // 3. Build keyword themes (top 20 by impressions — keep prompt short for sonar-pro)
-    const topKeywords = nicheData
-      .slice(0, 20)
-      .map((n) => `"${n.query}" (${n.total_impressions} impr, pos ${parseFloat(n.avg_position).toFixed(1)})`)
-      .join(", ");
+    const existingQueries = new Set(keywordRows.map((row) => row.query.toLowerCase().trim()));
+    const baseKeywordSeeds = keywordRows
+      .sort((a, b) => b.impressions_30d - a.impressions_30d)
+      .slice(0, 12)
+      .map((row) => row.query);
+    const externalRows = await buildExternalSignalRows(baseKeywordSeeds, existingQueries);
+    const mergedRows = [...keywordRows, ...externalRows];
 
-    // 4. Ask Perplexity for market opportunities
-    const prompt = `I own these websites: ${siteNames}
+    const candidates = await enrichCandidatesWithFreeSerpContext(
+      buildOpportunityCandidates(mergedRows, {
+      minVolume: 5000,
+      maxCandidates: 8,
+      existingPortfolioHints: [...PORTFOLIO_HINTS, ...sites.map((site) => `${site.name ?? ""} ${site.url ?? ""}`)],
+    })
+    );
 
-My sites cover: voice AI, Tesla/EV magazine, CBD Europe, crypto/trust, business Switzerland, sales training, AI hub, AI agents, lead generation, SEO tools, beauty/fashion.
-
-My top 50 keywords across all sites (with impressions and position):
-${topKeywords}
-
-TASK: Analyze my current portfolio and identify 5 NEW BUSINESS OPPORTUNITIES where I should create a DEDICATED website, blog, magazine, or e-commerce store.
-
-CRITICAL RULES:
-- DIVERSIFY across DIFFERENT sectors (NOT all in the same niche)
-- Each opportunity must be in a DIFFERENT industry/sector
-- Cover a MIX of: health/wellness, education, real estate, food/nutrition, travel, legal, insurance, SaaS tools, finance (non-crypto), B2B services, lifestyle, tech, automotive, energy, fitness, parenting, pets, home improvement
-- Maximum 2 opportunities related to existing niches (AI, crypto, CBD)
-- The rest MUST be in completely NEW sectors
-
-For each opportunity:
-1. The niche/market (be specific and UNIQUE from other opportunities)
-2. Why it's an opportunity (gap in my portfolio, growing market, connection to existing sites)
-3. Recommended site type: blog | magazine | e-commerce | saas | directory
-4. Estimated monthly search volume for the core keywords (be realistic, based on real search data)
-5. Competition level: low | medium | high
-6. Monetization model: ads | affiliate | e-commerce | subscription | lead-gen
-7. Estimated monthly traffic at 6 months (realistic projection)
-8. Estimated monthly revenue potential (EUR)
-9. Suggested domain name (2-3 options, .com or .ch or .fr)
-10. First 5 article titles to seed the site
-11. TARGET COUNTRIES: which 2-5 countries have the most demand for this niche (ISO codes: FRA, DEU, CHE, GBR, USA, etc.)
-12. TARGET LANGUAGES: which languages to publish in (fr, en, de, es, it, nl, pt)
-13. TOP 3-5 EXISTING COMPETITORS: real competitor website URLs (full URLs like https://example.com) that are already ranking well in this niche — these must be REAL, EXISTING websites
-
-RESPOND IN STRICT JSON ONLY:
-{
-  "opportunities": [
-    {
-      "niche": "Specific niche name",
-      "reason": "Why this is a good opportunity",
-      "site_type": "blog",
-      "core_keywords": ["kw1", "kw2", "kw3"],
-      "monthly_volume": 50000,
-      "competition": "medium",
-      "monetization": "affiliate",
-      "projected_traffic_6m": 5000,
-      "projected_revenue_6m": 1500,
-      "suggested_domains": ["domain1.com", "domain2.ch"],
-      "seed_articles": ["Title 1", "Title 2", "Title 3", "Title 4", "Title 5"],
-      "target_countries": ["FRA", "CHE", "BEL"],
-      "target_languages": ["fr", "en"],
-      "competitors": [
-        {"url": "https://competitor1.com", "name": "Competitor 1"},
-        {"url": "https://competitor2.com", "name": "Competitor 2"}
-      ],
-      "success_rate": 72,
-      "revenue_timeline": {"m1": 0, "m3": 200, "m6": 1500, "m12": 3000},
-      "business_model": {
-        "type": "affiliate blog with e-commerce upsell",
-        "how_to_monetize": "Short explanation of monetization strategy",
-        "affiliate_programs": ["Program1", "Program2"],
-        "products_to_sell": ["Product 29€", "Abo 9.99€/m"],
-        "tools_needed": ["Shopify", "Stripe"]
-      },
-      "confidence_score": 85
+    if (candidates.length === 0) {
+      return NextResponse.json({
+        success: true,
+        opportunities: [],
+        keywords_analyzed: mergedRows.length,
+        sites_analyzed: sites.length,
+      });
     }
-  ]
-}
 
-Additional fields explained:
-- success_rate: estimated % chance of reaching page 1 within 12 months (0-100). Factor in: competition level, content quality advantage, niche specificity, keyword difficulty.
-- revenue_timeline: projected monthly revenue in EUR at month 1, 3, 6, 12. Be REALISTIC. Month 1 is almost always 0 for a new site.
-- business_model: DETAILED monetization strategy. Be SPECIFIC about which affiliate programs, what products to create, pricing, tools needed. Not generic — actionable.
+    let opportunities: StoredOpportunity[] =
+      candidates.map((candidate) => fallbackOpportunity(candidate));
 
-Rules:
-- Only suggest niches NOT already covered by my current sites
-- monthly_volume must be >= 10000 for the combined core keywords
-- Be realistic with projections (not overly optimistic)
-- confidence_score: 0-100 based on data quality and market viability
-- Competitor URLs MUST be real, existing websites (verify they exist)
-- Sort by confidence_score DESC`;
-
-    let aiResponse = "";
     try {
-      console.log(`[scanner] prompt length: ${prompt.length} chars`);
-      aiResponse = await askAI([{ role: "user", content: prompt }], "search", 4000);
-      console.log(`[scanner] AI response length: ${aiResponse.length} chars`);
+      const enriched = await enrichCandidatesWithAI(candidates);
+      if (enriched?.length) {
+        opportunities = enriched
+          .slice(0, candidates.length)
+          .map((opp, index) => sanitizeOpportunity(opp, fallbackOpportunity(candidates[index]!)));
+      }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown";
-      console.error("Opportunity scan failed:", msg);
-      return NextResponse.json({ success: false, error: `AI research failed: ${msg.slice(0, 200)}` });
+      console.error("Opportunity enrichment failed, using deterministic fallback:", err);
     }
 
-    // 5. Parse response
-    const cleaned = aiResponse
-      .replace(/^```(?:json)?\s*\n?/i, "")
-      .replace(/\n?```\s*$/i, "")
-      .trim();
-
-    let parsed: {
-      opportunities: {
-        niche: string;
-        reason: string;
-        site_type: string;
-        core_keywords: string[];
-        monthly_volume: number;
-        competition: string;
-        monetization: string;
-        projected_traffic_6m: number;
-        projected_revenue_6m: number;
-        suggested_domains: string[];
-        seed_articles: string[];
-        target_countries?: string[];
-        target_languages?: string[];
-        competitors?: { url: string; name: string }[];
-        success_rate?: number;
-        revenue_timeline?: { m1: number; m3: number; m6: number; m12: number };
-        business_model?: Record<string, unknown>;
-        confidence_score: number;
-      }[];
-    };
-
     try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      // Try to fix truncated JSON by closing open brackets
-      let fixed = cleaned;
-      // Count open/close braces and brackets
-      const openBraces = (fixed.match(/{/g) || []).length;
-      const closeBraces = (fixed.match(/}/g) || []).length;
-      const openBrackets = (fixed.match(/\[/g) || []).length;
-      const closeBrackets = (fixed.match(/]/g) || []).length;
-
-      // Remove trailing comma if present
-      fixed = fixed.replace(/,\s*$/, "");
-
-      // Close unclosed structures
-      for (let i = 0; i < openBrackets - closeBrackets; i++) fixed += "]";
-      for (let i = 0; i < openBraces - closeBraces; i++) fixed += "}";
-
-      try {
-        parsed = JSON.parse(fixed);
-        console.log("[scanner] Fixed truncated JSON successfully");
-      } catch {
-        return NextResponse.json({ success: false, error: "AI returned invalid JSON (truncated)", raw: cleaned.slice(0, 1000) });
-      }
-    }
-
-    // 6. Store in DB
-    try {
-      await sql`
-        CREATE TABLE IF NOT EXISTS market_opportunities (
-          id SERIAL PRIMARY KEY,
-          niche VARCHAR(200),
-          reason TEXT,
-          site_type VARCHAR(50),
-          core_keywords JSONB,
-          monthly_volume INTEGER,
-          competition VARCHAR(20),
-          monetization VARCHAR(50),
-          projected_traffic_6m INTEGER,
-          projected_revenue_6m INTEGER,
-          suggested_domains JSONB,
-          seed_articles JSONB,
-          target_countries JSONB,
-          target_languages JSONB,
-          competitors JSONB,
-          confidence_score INTEGER,
-          status VARCHAR(20) DEFAULT 'pending',
-          validation JSONB,
-          created_at TIMESTAMP DEFAULT NOW()
-        )
-      `;
-
-      // Add columns if missing (migration-safe)
-      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS target_countries JSONB`;
-      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS target_languages JSONB`;
-      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS competitors JSONB`;
-      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS validation JSONB`;
-      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS business_model JSONB`;
-      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS success_rate INTEGER`;
-      await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS revenue_timeline JSONB`;
-
-      // Clear old scan
-      await sql`DELETE FROM market_opportunities WHERE status = 'pending'`;
-
-      for (const opp of (parsed.opportunities || [])) {
-        await sql`
-          INSERT INTO market_opportunities
-          (niche, reason, site_type, core_keywords, monthly_volume, competition, monetization,
-           projected_traffic_6m, projected_revenue_6m, suggested_domains, seed_articles,
-           target_countries, target_languages, competitors, business_model, success_rate, revenue_timeline, confidence_score)
-          VALUES (${opp.niche}, ${opp.reason}, ${opp.site_type}, ${JSON.stringify(opp.core_keywords)},
-                  ${opp.monthly_volume}, ${opp.competition}, ${opp.monetization},
-                  ${opp.projected_traffic_6m}, ${opp.projected_revenue_6m},
-                  ${JSON.stringify(opp.suggested_domains)}, ${JSON.stringify(opp.seed_articles)},
-                  ${JSON.stringify(opp.target_countries ?? [])}, ${JSON.stringify(opp.target_languages ?? [])},
-                  ${JSON.stringify(opp.competitors ?? [])}, ${JSON.stringify(opp.business_model ?? {})},
-                  ${opp.success_rate ?? 0}, ${JSON.stringify(opp.revenue_timeline ?? {})},
-                  ${opp.confidence_score})
-        `;
-      }
+      await sql.transaction(
+        [
+          sql`DELETE FROM market_opportunities WHERE status = 'pending'`,
+          ...opportunities.map((opp) => sql`
+            INSERT INTO market_opportunities
+            (niche, reason, site_type, core_keywords, monthly_volume, competition, monetization,
+             projected_traffic_6m, projected_revenue_6m, suggested_domains, seed_articles,
+             target_countries, target_languages, competitors, business_model, success_rate, revenue_timeline, confidence_score,
+             signal_source, momentum_pct, average_position, opportunity_type, sample_queries, score_breakdown, serp_evidence)
+            VALUES (${opp.niche}, ${opp.reason}, ${opp.site_type}, ${JSON.stringify(opp.core_keywords)},
+                    ${opp.monthly_volume}, ${opp.competition}, ${opp.monetization},
+                    ${opp.projected_traffic_6m}, ${opp.projected_revenue_6m},
+                    ${JSON.stringify(opp.suggested_domains)}, ${JSON.stringify(opp.seed_articles)},
+                    ${JSON.stringify(opp.target_countries ?? [])}, ${JSON.stringify(opp.target_languages ?? [])},
+                    ${JSON.stringify(opp.competitors ?? [])}, ${JSON.stringify(opp.business_model ?? {})},
+                    ${opp.success_rate ?? 0}, ${JSON.stringify(opp.revenue_timeline ?? {})},
+                    ${opp.confidence_score}, ${opp.signal_source ?? "gsc"},
+                    ${opp.momentum_pct ?? 0}, ${opp.average_position ?? 0},
+                    ${opp.opportunity_type ?? "emerging"}, ${JSON.stringify(opp.sample_queries ?? [])},
+                    ${JSON.stringify(opp.score_breakdown ?? {})}, ${JSON.stringify(opp.serp_evidence ?? {})})
+          `),
+        ]
+      );
     } catch (err) {
       console.error("Failed to store opportunities:", err);
     }
 
+    const persistedRows = await sql`
+      SELECT *
+      FROM market_opportunities
+      ORDER BY confidence_score DESC, created_at DESC
+      LIMIT 100
+    `;
+
     return NextResponse.json({
       success: true,
-      opportunities: parsed.opportunities || [],
-      keywords_analyzed: nicheData.length,
+      opportunities: persistedRows,
+      keywords_analyzed: mergedRows.length,
       sites_analyzed: sites.length,
+      candidate_count: candidates.length,
+      external_signals_added: externalRows.length,
     });
   } catch (err) {
     return NextResponse.json({ success: false, error: err instanceof Error ? err.message : "Unknown" }, { status: 500 });
@@ -272,14 +552,23 @@ Rules:
  * GET /api/opportunities/scan — Returns cached opportunities from DB
  */
 export async function GET() {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized;
+  }
+
   const sql = getSQL();
   try {
     const rows = await sql`
       SELECT * FROM market_opportunities
       ORDER BY confidence_score DESC
+      LIMIT 100
     `;
     return NextResponse.json({ success: true, opportunities: rows });
-  } catch {
-    return NextResponse.json({ success: true, opportunities: [] });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : "Failed to load opportunities", opportunities: [] },
+      { status: 500 }
+    );
   }
 }

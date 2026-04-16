@@ -4,6 +4,7 @@ export const maxDuration = 120;
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { publishToGitHub } from "@/lib/github";
+import { requireApiSession } from "@/lib/api-auth";
 
 /**
  * POST /api/opportunities/deploy
@@ -18,6 +19,11 @@ import { publishToGitHub } from "@/lib/github";
  * 6. Mark opportunity as "deployed"
  */
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized;
+  }
+
   let body: { opportunity_id?: number; domain?: string };
   try {
     body = (await req.json()) as { opportunity_id?: number; domain?: string };
@@ -66,14 +72,29 @@ export async function POST(req: NextRequest) {
       }),
     });
 
-    let repoFullName = `vocalisia/${repoName}`;
+    let repoFullName = repoName;
     if (createRes.ok) {
       const repoData = (await createRes.json()) as { full_name: string };
       repoFullName = repoData.full_name;
-    } else if (createRes.status !== 422) {
-      // 422 = already exists, which is fine
+    } else if (createRes.status === 422) {
+      const userRes = await fetch("https://api.github.com/user", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+        },
+      });
+      if (!userRes.ok) {
+        return NextResponse.json({ success: false, error: "Impossible de déterminer le compte GitHub" }, { status: 502 });
+      }
+      const userData = (await userRes.json()) as { login?: string };
+      if (!userData.login) {
+        return NextResponse.json({ success: false, error: "Compte GitHub invalide" }, { status: 502 });
+      }
+      repoFullName = `${userData.login}/${repoName}`;
+    } else {
       const err = await createRes.text();
       console.error("Repo creation failed:", err);
+      return NextResponse.json({ success: false, error: "La création du repo GitHub a échoué" }, { status: 502 });
     }
 
     // 3. Init content/blog directory
@@ -85,8 +106,9 @@ export async function POST(req: NextRequest) {
         readmeContent,
         "init: setup blog directory for SEO autopilot"
       );
-    } catch {
-      // May already exist
+    } catch (err) {
+      console.error("Initial GitHub content publish failed:", err);
+      return NextResponse.json({ success: false, error: "Le repo GitHub existe mais l'initialisation a échoué" }, { status: 502 });
     }
 
     // 4. Add site to DB

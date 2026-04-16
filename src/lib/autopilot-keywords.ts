@@ -38,6 +38,18 @@ function collectBrandHints(site: { url: string; name: string }): Set<string> {
   } catch {
     /* ignore invalid URL */
   }
+
+  // Expand common acronyms in site brand → their long form counts as brand too
+  // "ia" → "intelligenceartificielle" tokens so brand-only queries are caught
+  const normalized = (site.name + " " + site.url).toLowerCase();
+  if (/\bia\b/.test(normalized) || /\bia[-. ]/.test(normalized)) {
+    hints.add("intelligence");
+    hints.add("artificielle");
+  }
+  if (/\bai\b/.test(normalized) || /\bai[-. ]/.test(normalized)) {
+    hints.add("artificial");
+    hints.add("intelligence");
+  }
   return hints;
 }
 
@@ -101,6 +113,12 @@ const LANG_INDICATOR_WORDS: Record<string, Set<string>> = {
     "ihre",
     "ihren",
     "dsgvo",
+    "gmbh",
+    "datenschutz",
+    "geschaft",
+    "agentur",
+    "preise",
+    "kosten",
   ]),
   it: new Set([
     "come",
@@ -198,6 +216,28 @@ const LANG_INDICATOR_WORDS: Record<string, Set<string>> = {
     "about",
     "using",
     "guide",
+    "home",
+    "news",
+    "gym",
+    "tips",
+    "top",
+    "vs",
+    "for",
+    "review",
+    "reviews",
+    "free",
+    "cheap",
+    "buy",
+    "celebrity",
+    "fitness",
+    "workout",
+    "workouts",
+    "women",
+    "men",
+    "kids",
+    "outreach",
+    "marketing",
+    "business",
   ]),
   nl: new Set([
     "het",
@@ -235,9 +275,10 @@ const LANG_INDICATOR_WORDS: Record<string, Set<string>> = {
 
 /** Substrings / compounds that strongly imply a language (1 hit = conflict if target differs). */
 const LANG_STRONG_PATTERNS: { lang: string; re: RegExp }[] = [
-  { lang: "de", re: /\b(kampagnen|automatisierung|unternehmens|künstliche|fürs|furs)\b/i },
+  { lang: "de", re: /\b(kampagnen|automatisierung|unternehmens|künstliche|fürs|furs|dsgvo|gmbh|datenschutz|agentur)\b/i },
   { lang: "it", re: /\b(automazione|aziendale|intelligenza\s+artificiale)\b/i },
   { lang: "es", re: /\b(cómo|anos|también|tambien)\b/i },
+  { lang: "en", re: /\b(best\s+\w+|home\s+gym|celebrity\s+news|how\s+to|top\s+\d+|\w+\s+review(s)?|vs\b|ai\s+outreach)\b/i },
 ];
 
 function keywordConflictsArticleLanguage(raw: string, articleLang: string): boolean {
@@ -290,6 +331,9 @@ export function isUnusableSeoKeyword(
   if (/^[a-z0-9.-]+\.(com|net|org|io|fr|ch|de|ai|pro|blog|eu|co\.uk)\b/i.test(lower) && !/\s/.test(q))
     return true;
 
+  // Truncated/spaced URL-like: "guidecbd com", "xyz fr", "xyz ch" — 2 tokens, second is a TLD
+  if (/^[a-z0-9-]{3,}\s+(com|net|org|io|fr|ch|de|ai|pro|blog|eu)$/i.test(lower.trim())) return true;
+
   if (/^\d+$/.test(q.replace(/\s/g, ""))) return true;
 
   const brandHints = collectBrandHints(site);
@@ -318,6 +362,22 @@ export function isUnusableSeoKeyword(
       return [...brandHints].some((h) => a === h || (h.length >= 4 && (a.includes(h) || h.includes(a))));
     });
     if (allBrand && tokens.length <= 3) return true;
+
+    // Site-name-like query (≤4 tokens, majority match brand tokens) → navigational
+    if (tokens.length <= 4) {
+      let brandMatches = 0;
+      for (const tok of tokens) {
+        const a = alphaOnly(tok);
+        if (a.length < 3) continue;
+        for (const h of brandHints) {
+          if (a === h || (h.length >= 4 && (a.includes(h) || h.includes(a)))) {
+            brandMatches++;
+            break;
+          }
+        }
+      }
+      if (brandMatches >= Math.ceil(tokens.length * 0.6)) return true;
+    }
   }
 
   if (articleLang && keywordConflictsArticleLanguage(q, articleLang)) return true;

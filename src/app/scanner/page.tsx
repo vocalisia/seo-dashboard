@@ -34,6 +34,24 @@ interface Opportunity {
   };
   confidence_score: number;
   status: string;
+  signal_source?: string;
+  momentum_pct?: number;
+  average_position?: number;
+  opportunity_type?: string;
+  sample_queries?: string[];
+  score_breakdown?: {
+    growth: number;
+    volume: number;
+    weakness: number;
+    specificity: number;
+    business: number;
+    portfolioDistance: number;
+  };
+  serp_evidence?: {
+    relatedQuestions: string[];
+    relatedSearches: string[];
+    resultTitles: string[];
+  };
 }
 
 const COUNTRY_FLAG: Record<string, string> = {
@@ -73,6 +91,7 @@ export default function ScannerPage() {
   async function fetchCached() {
     try {
       const res = await fetch("/api/opportunities/scan");
+      if (!res.ok) return;
       const d = await res.json() as { opportunities?: Opportunity[] };
       setOpportunities(d.opportunities ?? []);
     } catch { /* ignore */ }
@@ -82,10 +101,17 @@ export default function ScannerPage() {
     setLoading(true);
     try {
       const res = await fetch("/api/opportunities/scan", { method: "POST" });
+      if (!res.ok) {
+        setDeployResult("Le scan a échoué.");
+        return;
+      }
       const d = await res.json() as { opportunities?: Opportunity[] };
       setOpportunities(d.opportunities ?? []);
-    } catch { /* ignore */ }
-    setLoading(false);
+    } catch {
+      setDeployResult("Erreur réseau pendant le scan.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function validateNiche(oppId: number) {
@@ -106,7 +132,10 @@ export default function ScannerPage() {
 
   async function deploySite(opp: Opportunity) {
     const domain = opp.suggested_domains?.[0];
-    if (!domain) return;
+    if (!domain) {
+      setDeployResult("Aucun domaine suggéré pour cette opportunité.");
+      return;
+    }
     setDeploying(opp.id);
     setDeployResult(null);
     try {
@@ -142,7 +171,7 @@ export default function ScannerPage() {
             <h2 className="font-medium text-white">Détection prédictive de niches</h2>
             <p className="text-xs text-gray-500 mt-1">
               Analyse tes données GSC + Perplexity pour trouver des niches rentables où tu n&apos;as pas encore de site dédié.
-              Volume minimum: 10K recherches/mois. Projection trafic et revenus à 6 mois.
+              Volume minimum: 5K recherches/mois. Projection trafic et revenus à 6 mois.
             </p>
           </div>
           <button
@@ -225,6 +254,23 @@ export default function ScannerPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div className="bg-gray-800/40 rounded-lg px-3 py-2">
+                    <div className="text-xs text-gray-400">Signal source</div>
+                    <div className="text-sm font-semibold text-cyan-300 mt-1">{opp.signal_source ?? "gsc"}</div>
+                  </div>
+                  <div className="bg-gray-800/40 rounded-lg px-3 py-2">
+                    <div className="text-xs text-gray-400">Momentum</div>
+                    <div className="text-sm font-semibold text-emerald-300 mt-1">
+                      {typeof opp.momentum_pct === "number" ? `${opp.momentum_pct.toFixed(1)}%` : "—"}
+                    </div>
+                  </div>
+                  <div className="bg-gray-800/40 rounded-lg px-3 py-2">
+                    <div className="text-xs text-gray-400">Type</div>
+                    <div className="text-sm font-semibold text-violet-300 mt-1">{opp.opportunity_type ?? "emerging"}</div>
+                  </div>
+                </div>
+
                 {/* Success rate + Revenue timeline */}
                 <div className="grid grid-cols-2 gap-3 mb-4">
                   {/* Success rate bar */}
@@ -275,6 +321,85 @@ export default function ScannerPage() {
                     <span key={i} className="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-xs text-gray-300">{kw}</span>
                   ))}
                 </div>
+
+                {opp.sample_queries && opp.sample_queries.length > 0 && (
+                  <details className="mb-4">
+                    <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">
+                      📡 Requêtes sources ({opp.sample_queries.length})
+                    </summary>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {opp.sample_queries.map((query, i) => (
+                        <span key={i} className="bg-cyan-900/20 border border-cyan-900/40 rounded px-2 py-0.5 text-xs text-cyan-200">
+                          {query}
+                        </span>
+                      ))}
+                    </div>
+                  </details>
+                )}
+
+                {opp.score_breakdown && (
+                  <details className="mb-4">
+                    <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">
+                      🧮 Décomposition du score
+                    </summary>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {[
+                        ["Growth", opp.score_breakdown.growth],
+                        ["Volume", opp.score_breakdown.volume],
+                        ["Weakness", opp.score_breakdown.weakness],
+                        ["Specificity", opp.score_breakdown.specificity],
+                        ["Business", opp.score_breakdown.business],
+                        ["Distance", opp.score_breakdown.portfolioDistance],
+                      ].map(([label, value]) => (
+                        <div key={label} className="bg-gray-800/40 rounded px-3 py-2">
+                          <div className="text-[10px] text-gray-500">{label}</div>
+                          <div className="text-sm font-semibold text-white mt-1">
+                            {typeof value === "number" ? value.toFixed(2) : "—"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+
+                {opp.serp_evidence &&
+                  (
+                    (opp.serp_evidence.relatedQuestions?.length ?? 0) > 0 ||
+                    (opp.serp_evidence.relatedSearches?.length ?? 0) > 0 ||
+                    (opp.serp_evidence.resultTitles?.length ?? 0) > 0
+                  ) && (
+                  <details className="mb-4">
+                    <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">
+                      🔎 Preuves SERP
+                    </summary>
+                    <div className="mt-3 grid grid-cols-3 gap-3">
+                      <div className="bg-gray-800/30 rounded-lg p-3">
+                        <div className="text-[10px] text-gray-500 mb-2">Questions liées</div>
+                        <div className="space-y-1">
+                          {(opp.serp_evidence.relatedQuestions || []).slice(0, 5).map((item, i) => (
+                            <div key={i} className="text-xs text-cyan-200">{item}</div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="bg-gray-800/30 rounded-lg p-3">
+                        <div className="text-[10px] text-gray-500 mb-2">Recherches associées</div>
+                        <div className="space-y-1">
+                          {(opp.serp_evidence.relatedSearches || []).slice(0, 5).map((item, i) => (
+                            <div key={i} className="text-xs text-emerald-200">{item}</div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="bg-gray-800/30 rounded-lg p-3">
+                        <div className="text-[10px] text-gray-500 mb-2">Titres SERP observés</div>
+                        <div className="space-y-1">
+                          {(opp.serp_evidence.resultTitles || []).slice(0, 5).map((item, i) => (
+                            <div key={i} className="text-xs text-violet-200">{item}</div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+                )}
 
                 {/* Business Model */}
                 {opp.business_model && (
@@ -374,7 +499,7 @@ export default function ScannerPage() {
                 <div className="flex items-center gap-2 mb-3 text-xs">
                   <span className="text-gray-500">Domaines suggérés:</span>
                   {(opp.suggested_domains || []).map((d, i) => (
-                    <a key={i} href={`https://www.namecheap.com/domains/registration/results/?domain=${d}`} target="_blank" rel="noopener noreferrer"
+                    <a key={i} href={`https://www.namecheap.com/domains/registration/results/?domain=${encodeURIComponent(d)}`} target="_blank" rel="noopener noreferrer"
                       className="text-cyan-400 bg-cyan-900/20 hover:bg-cyan-900/40 rounded px-2 py-0.5 underline decoration-cyan-800 hover:decoration-cyan-400 transition-colors"
                       title="Vérifier disponibilité + acheter">
                       {d} ↗

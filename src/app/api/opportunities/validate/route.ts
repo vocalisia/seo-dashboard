@@ -4,6 +4,7 @@ export const maxDuration = 60;
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAI } from "@/lib/ai";
+import { requireApiSession } from "@/lib/api-auth";
 
 /**
  * POST /api/opportunities/validate
@@ -16,6 +17,11 @@ import { askAI } from "@/lib/ai";
  * 4. Returns a GO / RISKY / NO-GO verdict
  */
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized;
+  }
+
   let body: { opportunity_id?: number };
   try {
     body = (await req.json()) as { opportunity_id?: number };
@@ -83,7 +89,10 @@ BE HONEST. If this niche is too competitive, say NO_GO. I prefer honest analysis
     try {
       aiResponse = await askAI([{ role: "user", content: prompt }], "search", 3000);
     } catch (err) {
-      return NextResponse.json({ success: false, error: "AI analysis failed: " + (err instanceof Error ? err.message : "unknown") });
+      return NextResponse.json(
+        { success: false, error: "AI analysis failed: " + (err instanceof Error ? err.message : "unknown") },
+        { status: 502 }
+      );
     }
 
     const cleaned = aiResponse
