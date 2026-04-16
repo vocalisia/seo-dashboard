@@ -29,6 +29,7 @@ export default function ClustersPage() {
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => { void fetchSites(); }, []);
   useEffect(() => { if (selectedSite) void fetchCached(); }, [selectedSite]);
@@ -45,22 +46,42 @@ export default function ClustersPage() {
   async function fetchCached() {
     if (!selectedSite) return;
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(`/api/keyword-clusters?site_id=${selectedSite}&cached=true`);
       const d = await res.json() as { clusters?: Cluster[] };
+      if (!res.ok) {
+        const err = d as { error?: string };
+        setError(err.error ?? "Impossible de charger les clusters en cache.");
+        setClusters([]);
+        setLoading(false);
+        return;
+      }
       setClusters(d.clusters ?? []);
-    } catch { setClusters([]); }
+    } catch {
+      setError("Erreur réseau pendant le chargement des clusters.");
+      setClusters([]);
+    }
     setLoading(false);
   }
 
   async function generateClusters() {
     if (!selectedSite) return;
     setGenerating(true);
+    setError(null);
     try {
       const res = await fetch(`/api/keyword-clusters?site_id=${selectedSite}`);
-      const d = await res.json() as { clusters?: Cluster[] };
+      const d = await res.json() as { clusters?: Cluster[]; error?: string };
+      if (!res.ok) {
+        setError(d.error ?? "La génération des clusters a échoué.");
+        setClusters([]);
+        setGenerating(false);
+        return;
+      }
       setClusters(d.clusters ?? []);
-    } catch { /* ignore */ }
+    } catch {
+      setError("Erreur réseau pendant la génération des clusters.");
+    }
     setGenerating(false);
   }
 
@@ -95,6 +116,12 @@ export default function ClustersPage() {
             {generating ? "Clustering IA..." : "Générer clusters"}
           </button>
         </div>
+
+        {error && (
+          <div className="bg-red-950/30 border border-red-800/50 text-red-300 rounded-xl px-4 py-3 text-sm">
+            {error}
+          </div>
+        )}
 
         {/* Stats */}
         {clusters.length > 0 && (

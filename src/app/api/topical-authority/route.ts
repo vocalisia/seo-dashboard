@@ -107,7 +107,27 @@ export async function GET(request: NextRequest) {
       cluster_count: clusterCount,
     };
 
-    return NextResponse.json({ site, scores, stats });
+    return NextResponse.json({
+      success: true,
+      site,
+      scores,
+      stats,
+      // Backward-compatible aliases expected by the page UI.
+      scores_ui: {
+        coverage: scores.coverage_score,
+        authority: scores.authority_score,
+        content: scores.content_score,
+        overall: scores.overall_score,
+      },
+      stats_ui: {
+        queries: stats.unique_queries,
+        avg_position: stats.avg_position,
+        clicks: stats.total_clicks,
+        impressions: stats.total_impressions,
+        articles: stats.article_count,
+        clusters: stats.cluster_count,
+      },
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

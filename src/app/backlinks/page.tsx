@@ -22,22 +22,29 @@ interface BacklinksResult {
   totalLinks: number;
   authorityScore: number;
   source: string;
+  sourceLabel?: string;
+  scoreLabel?: string;
 }
 
 export default function BacklinksPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<Site | null>(null);
+  const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacklinksResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const selectedSite = selectedSiteId
+    ? sites.find((site) => site.id === selectedSiteId) ?? null
+    : null;
 
   useEffect(() => {
     fetch("/api/sites")
       .then((r) => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) {
-          setSites(data as Site[]);
-          if ((data as Site[]).length > 0) setSelectedSite((data as Site[])[0]);
+          const list = data as Site[];
+          setSites(list);
+          if (list.length > 0) setSelectedSiteId(list[0].id);
         }
       })
       .catch(() => {});
@@ -74,10 +81,9 @@ export default function BacklinksPage() {
       <div className="px-6 py-6 max-w-5xl mx-auto">
         <div className="flex flex-wrap gap-3 mb-8">
           <select
-            value={selectedSite?.id ?? ""}
+            value={selectedSiteId ?? ""}
             onChange={(e) => {
-              const s = sites.find((site) => site.id === parseInt(e.target.value, 10));
-              setSelectedSite(s ?? null);
+              setSelectedSiteId(e.target.value ? parseInt(e.target.value, 10) : null);
               setResult(null);
             }}
             className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
@@ -128,7 +134,7 @@ export default function BacklinksPage() {
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="flex items-center gap-2 text-gray-400 text-xs mb-2">
-                  <Shield className="w-3 h-3" /> Score autorité (estimé)
+                  <Shield className="w-3 h-3" /> {result.scoreLabel ?? "Score autorité"}
                 </div>
                 <div className={`text-3xl font-bold ${result.authorityScore >= 50 ? "text-green-400" : result.authorityScore >= 25 ? "text-yellow-400" : "text-red-400"}`}>
                   {result.authorityScore}/100
@@ -140,11 +146,9 @@ export default function BacklinksPage() {
             <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Liens entrants</h2>
-                {result.source === "gsc_impressions_fallback" && (
-                  <span className="text-xs text-yellow-400 bg-yellow-500/10 px-2 py-1 rounded">
-                    Fallback: données impressions GSC
-                  </span>
-                )}
+                <span className={`text-xs px-2 py-1 rounded ${result.source === "gsc_impressions_fallback" ? "text-yellow-400 bg-yellow-500/10" : "text-green-400 bg-green-500/10"}`}>
+                  {result.sourceLabel ?? result.source}
+                </span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -169,7 +173,9 @@ export default function BacklinksPage() {
             </div>
 
             <p className="text-xs text-gray-600 text-center">
-              Données via Google Search Console · Mise à jour hebdomadaire
+              {result.source === "gsc_impressions_fallback"
+                ? "Estimation basée sur les impressions GSC, pas sur de vrais backlinks exportés."
+                : "Données backlinks récupérées via Google Search Console."}
             </p>
           </div>
         )}

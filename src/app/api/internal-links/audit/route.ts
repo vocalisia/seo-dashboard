@@ -4,40 +4,7 @@ export const maxDuration = 60;
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { listRepoFiles } from "@/lib/github";
-
-// Minimal site → repo map (duplicated from autopilot for independence)
-const SITE_REPO_MAP: Record<string, { repo: string; articlePath: string }> = {
-  "vocalis-blog": {
-    repo: "vocalisia/vocalis-blog",
-    articlePath: "content/blog",
-  },
-  "vocalis-pro": {
-    repo: "vocalisia/vocalis-blog",
-    articlePath: "content/blog",
-  },
-  "tesla-mag": {
-    repo: "vocalisia/tesla-mag",
-    articlePath: "src/data/articles",
-  },
-  "trust-vault": {
-    repo: "vocalisia/trust-vault",
-    articlePath: "content/posts",
-  },
-  trustly: {
-    repo: "vocalisia/trust-ai-blog",
-    articlePath: "content/blog",
-  },
-  iapmesuisse: {
-    repo: "vocalisia/iapmesuisse",
-    articlePath: "content/blog",
-  },
-  "hub-ai": { repo: "vocalisia/hub-ai", articlePath: "content/blog" },
-  "ai-due": { repo: "vocalisia/hub-ai", articlePath: "content/blog" },
-  "vocalis-ai": {
-    repo: "vocalisia/vocalis-ai",
-    articlePath: "content/blog",
-  },
-};
+import { resolveSiteRepoConfig, SITE_REPO_MAP } from "@/lib/autopilot-config";
 
 const ARTICLE_LIMIT = 30;
 const LINK_POOR_THRESHOLD = 2;
@@ -178,17 +145,17 @@ export async function POST(request: NextRequest) {
 
     // 2. Find repo config
     const siteName = site.name as string;
-    const repoConfig = SITE_REPO_MAP[siteName];
+    const { repoConfig, siteKey, normalizedSiteName } = resolveSiteRepoConfig(siteName);
     if (!repoConfig) {
       return NextResponse.json(
         {
-          error: `No repo config for site "${siteName}". Available: ${Object.keys(SITE_REPO_MAP).join(", ")}`,
+          error: `No repo config for site "${siteName}" (normalized: "${normalizedSiteName}"). Available: ${Object.keys(SITE_REPO_MAP).join(", ")}`,
         },
         { status: 400 }
       );
     }
 
-    const { repo, articlePath } = repoConfig;
+    const { repo, articlePath, format } = repoConfig;
 
     // 3. List article slugs from GitHub
     const allSlugs = await listRepoFiles(repo, articlePath);
@@ -206,7 +173,7 @@ export async function POST(request: NextRequest) {
     const fetchPromises = slugsToAudit.map(async (slug) => {
       const content = await fetchRawContent(
         repo,
-        `${articlePath}/${slug}.mdx`
+        `${articlePath}/${slug}.${format}`
       );
       if (!content) return null;
 
@@ -311,6 +278,8 @@ export async function POST(request: NextRequest) {
         : 0;
 
     return NextResponse.json({
+      success: true,
+      site_key: siteKey,
       total_articles: articles.length,
       total_internal_links: totalInternalLinks,
       avg_links_per_article: avgLinks,

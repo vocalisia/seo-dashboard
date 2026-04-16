@@ -8,8 +8,53 @@ interface Site { id: number; name: string; }
 
 interface AuthorityData {
   success: boolean;
-  scores: { coverage: number; authority: number; content: number; overall: number };
-  stats: { queries: number; avg_position: number; clicks: number; articles: number; clusters: number };
+  scores_ui?: { coverage: number; authority: number; content: number; overall: number };
+  stats_ui?: { queries: number; avg_position: number; clicks: number; articles: number; clusters: number };
+  scores?: {
+    coverage?: number;
+    authority?: number;
+    content?: number;
+    overall?: number;
+    coverage_score?: number;
+    authority_score?: number;
+    content_score?: number;
+    overall_score?: number;
+  };
+  stats?: {
+    queries?: number;
+    avg_position: number;
+    clicks?: number;
+    articles?: number;
+    clusters?: number;
+    unique_queries?: number;
+    total_clicks?: number;
+    article_count?: number;
+    cluster_count?: number;
+  };
+}
+
+function normalizeAuthorityData(raw: AuthorityData): AuthorityData {
+  const scores = raw.scores_ui ?? {
+    coverage: raw.scores?.coverage ?? raw.scores?.coverage_score ?? 0,
+    authority: raw.scores?.authority ?? raw.scores?.authority_score ?? 0,
+    content: raw.scores?.content ?? raw.scores?.content_score ?? 0,
+    overall: raw.scores?.overall ?? raw.scores?.overall_score ?? 0,
+  };
+
+  const stats = raw.stats_ui ?? {
+    queries: raw.stats?.queries ?? raw.stats?.unique_queries ?? 0,
+    avg_position: raw.stats?.avg_position ?? 0,
+    clicks: raw.stats?.clicks ?? raw.stats?.total_clicks ?? 0,
+    articles: raw.stats?.articles ?? raw.stats?.article_count ?? 0,
+    clusters: raw.stats?.clusters ?? raw.stats?.cluster_count ?? 0,
+  };
+
+  return {
+    ...raw,
+    success: raw.success,
+    scores_ui: scores,
+    stats_ui: stats,
+  };
 }
 
 function ScoreRing({ score, label, color }: { score: number; label: string; color: string }) {
@@ -53,8 +98,8 @@ export default function AuthorityPage() {
         for (const s of list.slice(0, 16)) {
           try {
             const r = await fetch(`/api/topical-authority?site_id=${s.id}`);
-            const dd = await r.json() as AuthorityData;
-            if (dd.success) scores.push({ site: s.name, overall: dd.scores.overall, id: s.id });
+            const dd = normalizeAuthorityData(await r.json() as AuthorityData);
+            if (dd.success) scores.push({ site: s.name, overall: dd.scores_ui?.overall ?? 0, id: s.id });
           } catch { /* skip */ }
         }
         setAllScores(scores.sort((a, b) => b.overall - a.overall));
@@ -67,7 +112,7 @@ export default function AuthorityPage() {
     setLoading(true);
     try {
       const res = await fetch(`/api/topical-authority?site_id=${selectedSite}`);
-      const d = await res.json() as AuthorityData;
+      const d = normalizeAuthorityData(await res.json() as AuthorityData);
       if (d.success) setData(d);
     } catch { setData(null); }
     setLoading(false);
@@ -106,16 +151,16 @@ export default function AuthorityPage() {
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-8">
               <div className="flex justify-center gap-12">
                 <div className="relative flex flex-col items-center">
-                  <ScoreRing score={data.scores.overall} label="Score Global" color={scoreColor(data.scores.overall)} />
+                  <ScoreRing score={data.scores_ui?.overall ?? 0} label="Score Global" color={scoreColor(data.scores_ui?.overall ?? 0)} />
                 </div>
                 <div className="relative flex flex-col items-center">
-                  <ScoreRing score={data.scores.coverage} label="Couverture" color={scoreColor(data.scores.coverage)} />
+                  <ScoreRing score={data.scores_ui?.coverage ?? 0} label="Couverture" color={scoreColor(data.scores_ui?.coverage ?? 0)} />
                 </div>
                 <div className="relative flex flex-col items-center">
-                  <ScoreRing score={data.scores.authority} label="Autorité" color={scoreColor(data.scores.authority)} />
+                  <ScoreRing score={data.scores_ui?.authority ?? 0} label="Autorité" color={scoreColor(data.scores_ui?.authority ?? 0)} />
                 </div>
                 <div className="relative flex flex-col items-center">
-                  <ScoreRing score={data.scores.content} label="Contenu" color={scoreColor(data.scores.content)} />
+                  <ScoreRing score={data.scores_ui?.content ?? 0} label="Contenu" color={scoreColor(data.scores_ui?.content ?? 0)} />
                 </div>
               </div>
             </div>
@@ -123,23 +168,23 @@ export default function AuthorityPage() {
             {/* Stats */}
             <div className="grid grid-cols-5 gap-3">
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold text-white">{data.stats.queries}</div>
+                <div className="text-2xl font-bold text-white">{data.stats_ui?.queries ?? 0}</div>
                 <div className="text-xs text-gray-400">Requêtes uniques</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold text-white">{data.stats.avg_position.toFixed(1)}</div>
+                <div className="text-2xl font-bold text-white">{(data.stats_ui?.avg_position ?? 0).toFixed(1)}</div>
                 <div className="text-xs text-gray-400">Position moy.</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold text-blue-400">{data.stats.clicks}</div>
+                <div className="text-2xl font-bold text-blue-400">{data.stats_ui?.clicks ?? 0}</div>
                 <div className="text-xs text-gray-400">Clics 30j</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold text-green-400">{data.stats.articles}</div>
+                <div className="text-2xl font-bold text-green-400">{data.stats_ui?.articles ?? 0}</div>
                 <div className="text-xs text-gray-400">Articles publiés</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold text-violet-400">{data.stats.clusters}</div>
+                <div className="text-2xl font-bold text-violet-400">{data.stats_ui?.clusters ?? 0}</div>
                 <div className="text-xs text-gray-400">Clusters</div>
               </div>
             </div>

@@ -3,6 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+interface CompareSitePayload {
+  name: string;
+  clicks: number;
+  impressions: number;
+  avg_position: number;
+  sessions: number;
+  users: number;
+  articles: number;
+  top_keywords: string[];
+}
+
 interface SiteStats {
   site: Record<string, unknown>;
   gsc: {
@@ -159,9 +170,36 @@ export async function GET(request: NextRequest) {
       articles: statsA.article_count - statsB.article_count,
     };
 
+    const siteAUi: CompareSitePayload = {
+      name: String(statsA.site.name ?? ""),
+      clicks: statsA.gsc.total_clicks,
+      impressions: statsA.gsc.total_impressions,
+      avg_position: statsA.gsc.avg_position,
+      sessions: statsA.analytics.total_sessions,
+      users: statsA.analytics.total_users,
+      articles: statsA.article_count,
+      top_keywords: statsA.top_keywords.map((kw) => String(kw.query ?? "")),
+    };
+
+    const siteBUi: CompareSitePayload = {
+      name: String(statsB.site.name ?? ""),
+      clicks: statsB.gsc.total_clicks,
+      impressions: statsB.gsc.total_impressions,
+      avg_position: statsB.gsc.avg_position,
+      sessions: statsB.analytics.total_sessions,
+      users: statsB.analytics.total_users,
+      articles: statsB.article_count,
+      top_keywords: statsB.top_keywords.map((kw) => String(kw.query ?? "")),
+    };
+
     return NextResponse.json({
-      site_a: statsA,
-      site_b: statsB,
+      success: true,
+      site_a: siteAUi,
+      site_b: siteBUi,
+      raw: {
+        site_a: statsA,
+        site_b: statsB,
+      },
       delta,
     });
   } catch (error: unknown) {

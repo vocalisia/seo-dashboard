@@ -224,8 +224,12 @@ Rules:
     });
   } catch (err) {
     console.error("keyword-clusters error:", err);
+    const message =
+      process.env.NODE_ENV === "development" && err instanceof Error
+        ? err.message
+        : "Internal server error";
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: message },
       { status: 500 }
     );
   }

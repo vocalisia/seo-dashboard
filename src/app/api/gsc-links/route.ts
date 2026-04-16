@@ -104,6 +104,14 @@ export async function GET(req: NextRequest) {
       totalLinks,
       authorityScore,
       source,
+      sourceLabel:
+        source === "gsc_impressions_fallback"
+          ? "Estimation via impressions GSC"
+          : "Backlinks GSC",
+      scoreLabel:
+        source === "gsc_impressions_fallback"
+          ? "Score visibilité (estimé)"
+          : "Score autorité",
     });
   } catch (err) {
     console.error(err);

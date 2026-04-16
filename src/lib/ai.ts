@@ -8,7 +8,7 @@ export const MODELS = {
   // Tâches SEO assignées
   fast:        "gemini-2.5-flash",            // briefs rapides → Gemini Flash
   smart:       "claude-sonnet-4-6",           // rapports hebdo → Sonnet (meilleur FR)
-  cluster:     "deepseek-v3",                 // clustering mots clés → logique pure
+  cluster:     "gemini-2.5-flash",            // clustering mots clés → stable via Mammouth
   search:      "sonar-pro",                    // recherche SERP temps réel → Perplexity
   creative:    "mistral-large-latest",        // rédaction créative → Mistral
 
