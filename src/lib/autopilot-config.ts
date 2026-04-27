@@ -8,6 +8,19 @@ export type SiteRepoConfig = {
   articlePath: string;
   format: string;
   i18nBlogPath?: Record<string, string>;
+  /**
+   * Si false, l'autopilot n'écrit rien : le repo n'est pas la source de
+   * déploiement du site public, ou le site n'a pas de pipeline MDX → toute
+   * publication fabriquerait des URLs 404. `disabledReason` est remontée à l'UI.
+   */
+  enabled?: boolean;
+  disabledReason?: string;
+  /**
+   * Override l'URL publique utilisée pour `published_url`. Utile quand un site
+   * partage un repo avec un autre domaine (ex. vocalis.pro publie via le repo
+   * vocalis-blog → contenu rendu sur vocalis.blog).
+   */
+  publicUrlOverride?: string;
 };
 
 export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
@@ -20,17 +33,25 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     repo: "vocalisia/vocalis-blog",
     articlePath: "content/blog",
     format: "mdx",
+    publicUrlOverride: "https://vocalis.blog",
   },
   "tesla-mag": {
     repo: "vocalisia/tesla-mag",
     articlePath: "src/data/articles",
     format: "mdx",
     i18nBlogPath: { fr: "/produit", en: "/product", default: "/produit" },
+    enabled: false,
+    disabledReason:
+      "tesla-mag.ch est sur WordPress Infomaniak avec pipeline Make.com (RSS → ChatGPT → WP). Le repo GitHub n'est pas la source de production.",
   },
   "trust-vault": {
     repo: "vocalisia/trust-vault",
     articlePath: "content/posts",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
+    enabled: false,
+    disabledReason:
+      "trust-vault.com renvoie HTTP 200 mais affiche un titre 'Article introuvable' pour les nouveaux articles : le pipeline Next.js du site ne pré-build pas les MDX poussés en autopilot. Re-active uniquement après avoir vérifié qu'un nouvel MDX y rend correctement.",
   },
   trustly: {
     repo: "vocalisia/trust-ai-blog",
@@ -71,26 +92,39 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     repo: "vocalisia/vocalis-ai",
     articlePath: "content/blog",
     format: "mdx",
+    enabled: false,
+    disabledReason:
+      "vocalis-ai.org est une ancienne version archivée. Le repo vocalisia/vocalis-ai ne reflète plus le déploiement public (sitemap a 600+ URLs, repo en a 1).",
   },
   cbd: {
     repo: "vocalisia/cbd-europa",
     articlePath: "content/blog",
     format: "mdx",
+    enabled: false,
+    disabledReason:
+      "cbdeuropa.com n'a pas de route /blog rendue (sitemap = 5 URLs, 0 article). Pas de pipeline MDX déployé.",
   },
   "agents-ia": {
     repo: "vocalisia/agents-ia-pro",
     articlePath: "content/blog",
     format: "mdx",
+    enabled: false,
+    disabledReason:
+      "agents-ia.pro sert des fichiers HTML statiques (.html dans le sitemap). Le repo vocalisia/agents-ia-pro n'est pas le source de déploiement effectif du blog.",
   },
   "master-seller": {
     repo: "vocalisia/master-seller",
     articlePath: "content/blog",
     format: "mdx",
+    enabled: false,
+    disabledReason:
+      "master-seller.fr est servi en HTML+Tailwind+VanillaJS (sans pipeline MDX). Les MDX poussés ne sont jamais rendus → 404.",
   },
   whatsapp: {
     repo: "vocalisia/agent-whatsapp-ia-business",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
   "lead-gene": {
     repo: "vocalisia/lead-gene",
@@ -108,11 +142,15 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     repo: "vocalisia/seo-true",
     articlePath: "content/blog",
     format: "mdx",
+    enabled: false,
+    disabledReason:
+      "seo-true.com est servi en HTML statique depuis public/index.html — pas de pipeline MDX déployé. Les fichiers MDX du repo n'arrivent jamais en prod.",
   },
   "woman-cute": {
     repo: "vocalisia/woman-cute",
     articlePath: "content/blog",
     format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", default: "/fr/blog" },
   },
   fitness: {
     repo: "vocalisia/fitnessmaison",
@@ -189,11 +227,25 @@ export function resolveSiteRepoConfig(siteDisplayName: string): {
   repoConfig: SiteRepoConfig | null;
 } {
   const normalizedSiteName = siteDisplayName.toLowerCase().replace(/[\s_]+/g, "-");
-  const siteKey =
-    Object.keys(SITE_REPO_MAP).find((k) => {
-      const normK = k.toLowerCase();
-      return normalizedSiteName.includes(normK) || normK.includes(normalizedSiteName);
-    }) ?? null;
+  const keys = Object.keys(SITE_REPO_MAP);
+
+  // 1. Match exact (vocalis-pro → "vocalis-pro" pas "vocalis-blog")
+  let siteKey: string | null =
+    keys.find((k) => k.toLowerCase() === normalizedSiteName) ?? null;
+
+  // 2. Sinon match prefix par clé la plus longue (évite "vocalis" → "vocalis-blog"
+  // quand "vocalis-pro" existe). Trier par longueur décroissante.
+  if (!siteKey) {
+    siteKey =
+      keys
+        .slice()
+        .sort((a, b) => b.length - a.length)
+        .find((k) => {
+          const normK = k.toLowerCase();
+          return normalizedSiteName.includes(normK) || normK.includes(normalizedSiteName);
+        }) ?? null;
+  }
+
   return {
     normalizedSiteName,
     siteKey,

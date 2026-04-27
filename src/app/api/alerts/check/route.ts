@@ -4,6 +4,7 @@ export const maxDuration = 60;
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { resolvePublishedArticleLiveUrl } from "@/lib/autopilot-published-url";
+import { requireCronSecret } from "@/lib/cron-auth";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -92,6 +93,7 @@ interface AutopilotRow {
   id: number;
   keyword: string;
   github_url: string;
+  published_url: string | null;
   language: string;
   created_at: string;
 }
@@ -103,7 +105,7 @@ async function checkIndexation(
   siteName: string
 ): Promise<UnindexedArticle[]> {
   const runs = (await sql`
-    SELECT id, keyword, github_url,
+    SELECT id, keyword, github_url, published_url,
            COALESCE(language, 'fr') AS language,
            created_at
     FROM autopilot_runs
@@ -118,7 +120,10 @@ async function checkIndexation(
   const failures: UnindexedArticle[] = [];
 
   for (const run of runs) {
-    const liveUrl = resolvePublishedArticleLiveUrl({
+    // Source de vérité = published_url stockée au moment de la publication.
+    // Reconstruire via resolvePublishedArticleLiveUrl peut échouer si la config
+    // de mapping (publicUrlOverride, prefix match) a changé depuis la création.
+    const liveUrl = run.published_url ?? resolvePublishedArticleLiveUrl({
       siteUrl,
       siteName,
       keyword: run.keyword,
@@ -246,7 +251,10 @@ async function sendAlertEmail(alerts: AlertPayload[], sites: SiteRow[]): Promise
 // POST handler (cron-triggered)
 // ---------------------------------------------------------------------------
 
-export async function POST() {
+export async function POST(request: Request) {
+  const unauthorized = requireCronSecret(request);
+  if (unauthorized) return unauthorized;
+
   const sql = getSQL();
 
   try {
