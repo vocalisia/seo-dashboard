@@ -47,6 +47,15 @@ interface AlertPayload {
 // Check A — Position drops (>= 5 positions in 7d vs previous 7d)
 // ---------------------------------------------------------------------------
 
+/**
+ * Position drops sur 7j vs 7j-precedents.
+ *
+ * Filtre bruit :
+ * - drop >= 5 positions
+ * - keyword avec >= 30 impressions cumulees sur la fenetre 14j
+ *   (sinon bruit pur : KW long-tail ou hors-perimetre langues)
+ * - position de depart <= 60 (chuter de 80 -> 90 n'est pas exploitable)
+ */
 async function checkPositionDrops(
   sql: ReturnType<typeof getSQL>,
   siteId: number
@@ -54,7 +63,8 @@ async function checkPositionDrops(
   const rows = (await sql`
     WITH current_week AS (
       SELECT query,
-             AVG(position) AS avg_pos
+             AVG(position) AS avg_pos,
+             SUM(impressions) AS impressions
       FROM search_console_data
       WHERE site_id = ${siteId}
         AND date >= CURRENT_DATE - INTERVAL '7 days'
@@ -63,7 +73,8 @@ async function checkPositionDrops(
     ),
     previous_week AS (
       SELECT query,
-             AVG(position) AS avg_pos
+             AVG(position) AS avg_pos,
+             SUM(impressions) AS impressions
       FROM search_console_data
       WHERE site_id = ${siteId}
         AND date >= CURRENT_DATE - INTERVAL '14 days'
@@ -78,6 +89,8 @@ async function checkPositionDrops(
     FROM current_week cw
     INNER JOIN previous_week pw ON pw.query = cw.query
     WHERE (cw.avg_pos - pw.avg_pos) >= 5
+      AND (COALESCE(cw.impressions, 0) + COALESCE(pw.impressions, 0)) >= 30
+      AND pw.avg_pos <= 60
     ORDER BY (cw.avg_pos - pw.avg_pos) DESC
     LIMIT 50
   `) as PositionDrop[];
@@ -180,6 +193,12 @@ async function ensureAlertsTable(sql: ReturnType<typeof getSQL>): Promise<void> 
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_seo_alerts_site ON seo_alerts(site_id, created_at DESC)`;
+  // Bucket par jour : une alerte par (site, type, keyword) et par jour calendaire UTC.
+  // Empeche les doublons quand le cron est trigger plusieurs fois le meme jour.
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_seo_alerts_dedup
+    ON seo_alerts (site_id, alert_type, keyword, (created_at::date))
+  `;
 }
 
 async function insertAlerts(
@@ -190,6 +209,10 @@ async function insertAlerts(
     await sql`
       INSERT INTO seo_alerts (site_id, alert_type, severity, keyword, message, data)
       VALUES (${a.site_id}, ${a.alert_type}, ${a.severity}, ${a.keyword}, ${a.message}, ${JSON.stringify(a.data)})
+      ON CONFLICT (site_id, alert_type, keyword, (created_at::date))
+      DO UPDATE SET severity = EXCLUDED.severity,
+                    message = EXCLUDED.message,
+                    data = EXCLUDED.data
     `;
   }
 }
