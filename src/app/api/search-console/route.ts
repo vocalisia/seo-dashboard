@@ -1,5 +1,4 @@
 import { getSQL } from "@/lib/db";
-import { requireApiSession } from "@/lib/api-auth";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -17,11 +16,6 @@ const LANG_COUNTRIES: Record<string, string[]> = {
 };
 
 export async function GET(request: NextRequest) {
-  const authState = await requireApiSession();
-  if (authState.unauthorized) {
-    return authState.unauthorized;
-  }
-
   const siteId = request.nextUrl.searchParams.get("siteId");
   const type = request.nextUrl.searchParams.get("type") || "queries";
   const days = parseInt(request.nextUrl.searchParams.get("days") || "30");
