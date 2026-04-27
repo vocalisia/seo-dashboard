@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import {
-  Globe, Search, ArrowUp, ArrowDown, MousePointerClick,
+  Globe, Search, MousePointerClick,
   BarChart3, RefreshCw, Loader2, ChevronDown, ChevronRight,
-  PlaySquare, TrendingUp, TrendingDown, Minus, X, Smartphone
+  PlaySquare, TrendingUp, TrendingDown, X, Smartphone
 } from "lucide-react";
 import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
@@ -20,9 +20,15 @@ interface QueryData {
 }
 
 interface GainData {
-  query: string; position_now: number; position_prev: number;
-  gain: number; clicks_now: number; clicks_prev: number; clicks_gain: number;
+  query: string;
+  position_now: number; position_prev: number;
+  position_w2: number | null; position_w3: number | null; position_w4: number | null;
+  gain: number;
+  gain_w1_w2: number | null; gain_w2_w3: number | null; gain_w3_w4: number | null;
+  clicks_now: number; clicks_prev: number; clicks_gain: number;
 }
+
+interface GainLabels { w0: string; w1: string; w2: string; w3: string; w4: string }
 
 const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec4899","#f97316","#14b8a6","#6366f1","#84cc16","#f43f5e","#a855f7","#0ea5e9","#22c55e","#eab308"];
 
@@ -83,6 +89,7 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>("30");
   const [keywords, setKeywords] = useState<Record<string, QueryData[]>>({});
   const [gains, setGains] = useState<Record<number, GainData[]>>({});
+  const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
   const [kwLoading, setKwLoading] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [siteSortCol, setSiteSortCol] = useState<"clicks"|"impressions"|"position">("clicks");
@@ -98,8 +105,6 @@ export default function DashboardPage() {
   const [deviceData, setDeviceData] = useState<Record<number, DeviceRow[]>>({});
   const [langFilter, setLangFilter] = useState<string>(""); // "" | "fr" | "en" | "de" | ...
   const [configError, setConfigError] = useState<string | null>(null);
-
-  useEffect(() => { fetchSites(); }, []);
 
   async function fetchSites(lang?: string) {
     setLoading(true);
@@ -126,6 +131,8 @@ export default function DashboardPage() {
     setLoading(false);
   }
 
+  useEffect(() => { fetchSites(); }, []); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+
   async function loadKeywords(siteId: number, p: Period) {
     const key = `${siteId}-${p}-${langFilter || "all"}`;
     if (keywords[key]) return;
@@ -139,16 +146,19 @@ export default function DashboardPage() {
     setKwLoading(null);
   }
 
-  async function loadGains(siteId: number) {
-    const key = `${siteId}-${langFilter || "all"}`;
-    if (gains[siteId] && !langFilter) return;
+  async function loadGains(siteId: number, force = false) {
+    if (gains[siteId] && !force) return;
     try {
       const langQs = langFilter ? `&language=${langFilter}` : "";
       const res = await fetch(`/api/search-console?siteId=${siteId}&type=gains&limit=200${langQs}`);
-      const data = await res.json();
-      if (Array.isArray(data)) setGains(prev => ({ ...prev, [siteId]: data }));
+      const data = await res.json() as { rows?: GainData[]; labels?: GainLabels } | GainData[];
+      if (Array.isArray(data)) {
+        setGains(prev => ({ ...prev, [siteId]: data }));
+      } else if (data && Array.isArray(data.rows)) {
+        setGains(prev => ({ ...prev, [siteId]: data.rows as GainData[] }));
+        if (data.labels) setGainLabels(data.labels);
+      }
     } catch { /* ignore */ }
-    void key;
   }
 
   async function changeLangFilter(lang: string) {
@@ -176,6 +186,8 @@ export default function DashboardPage() {
         }
       } catch { /* ignore */ }
       setKwLoading(null);
+      // Re-fetch gains aussi (4 semaines)
+      void loadGains(expanded, true);
     }
   }
 
@@ -187,19 +199,6 @@ export default function DashboardPage() {
       await loadKeywords(siteId, period);
       loadGains(siteId); // load gains silently for delta display
     } else await loadGains(siteId);
-  }
-
-  async function switchTab(siteId: number, tab: TabType) {
-    setActiveTab(prev => ({ ...prev, [siteId]: tab }));
-    if (tab === "keywords") { await loadKeywords(siteId, period); loadGains(siteId); }
-    else if (tab === "gains") await loadGains(siteId);
-    else if (tab === "analytics") await loadAnalytics(siteId, period);
-    else if (tab === "device") await loadDeviceSplit(siteId, period);
-  }
-
-  async function changePeriod(p: Period) {
-    setPeriod(p);
-    if (expanded) await loadKeywords(expanded, p);
   }
 
   async function loadAnalytics(siteId: number, p: Period) {
@@ -220,6 +219,19 @@ export default function DashboardPage() {
         setDeviceData(prev => ({ ...prev, [siteId]: data.overview as DeviceRow[] }));
       }
     } catch { /* ignore */ }
+  }
+
+  async function switchTab(siteId: number, tab: TabType) {
+    setActiveTab(prev => ({ ...prev, [siteId]: tab }));
+    if (tab === "keywords") { await loadKeywords(siteId, period); loadGains(siteId); }
+    else if (tab === "gains") await loadGains(siteId);
+    else if (tab === "analytics") await loadAnalytics(siteId, period);
+    else if (tab === "device") await loadDeviceSplit(siteId, period);
+  }
+
+  async function changePeriod(p: Period) {
+    setPeriod(p);
+    if (expanded) await loadKeywords(expanded, p);
   }
 
   async function openKwHistory(siteId: number, query: string) {
@@ -652,50 +664,110 @@ export default function DashboardPage() {
                         <thead>
                           <tr className="text-gray-500 text-xs bg-gray-800/50">
                             <th className="text-left py-2 px-5">Mot clé</th>
-                            {([
-                              { col: "position_now" as const, label: "Position cette sem." },
-                              { col: "gain" as const, label: "Gain positions" },
-                              { col: "clicks_gain" as const, label: "Clics +/-" },
-                            ]).map(({ col, label }) => {
-                              const active = gainSortCol === col;
-                              return (
-                                <th key={col} className="text-right py-2 px-3 cursor-pointer select-none"
-                                  onClick={() => { if (active) setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol(col); setGainSortDir("desc"); } }}>
-                                  <span className={`inline-flex items-center justify-end gap-1 ${active ? "text-white" : "hover:text-gray-300"}`}>
-                                    {label}
-                                    <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
-                                      <span className={active && gainSortDir === "asc" ? "text-blue-400" : "opacity-30"}>▲</span>
-                                      <span className={active && gainSortDir === "desc" ? "text-blue-400" : "opacity-30"}>▼</span>
-                                    </span>
-                                  </span>
-                                </th>
-                              );
-                            })}
-                            <th className="text-right py-2 px-3 text-gray-500">Sem. dernière</th>
+                            <th className="text-right py-2 px-2 cursor-pointer select-none"
+                              onClick={() => { if (gainSortCol === "position_now") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("position_now"); setGainSortDir("asc"); } }}>
+                              <div className={`inline-flex flex-col items-end ${gainSortCol === "position_now" ? "text-white" : "hover:text-gray-300"}`}>
+                                <span>Cette sem.</span>
+                                <span className="text-[9px] text-gray-600">{gainLabels?.w0 || ""}</span>
+                              </div>
+                            </th>
+                            <th className="text-right py-2 px-2 cursor-pointer select-none"
+                              onClick={() => { if (gainSortCol === "gain") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("gain"); setGainSortDir("desc"); } }}>
+                              <div className={`inline-flex flex-col items-end ${gainSortCol === "gain" ? "text-white" : "hover:text-gray-300"}`}>
+                                <span>S-1</span>
+                                <span className="text-[9px] text-gray-600">{gainLabels?.w1 || ""}</span>
+                              </div>
+                            </th>
+                            <th className="text-right py-2 px-2">
+                              <div className="inline-flex flex-col items-end text-gray-400">
+                                <span>S-2</span>
+                                <span className="text-[9px] text-gray-600">{gainLabels?.w2 || ""}</span>
+                              </div>
+                            </th>
+                            <th className="text-right py-2 px-2">
+                              <div className="inline-flex flex-col items-end text-gray-400">
+                                <span>S-3</span>
+                                <span className="text-[9px] text-gray-600">{gainLabels?.w3 || ""}</span>
+                              </div>
+                            </th>
+                            <th className="text-right py-2 px-2">
+                              <div className="inline-flex flex-col items-end text-gray-400">
+                                <span>S-4</span>
+                                <span className="text-[9px] text-gray-600">{gainLabels?.w4 || ""}</span>
+                              </div>
+                            </th>
+                            <th className="text-right py-2 px-3 cursor-pointer select-none"
+                              onClick={() => { if (gainSortCol === "clicks_gain") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("clicks_gain"); setGainSortDir("desc"); } }}>
+                              <span className={gainSortCol === "clicks_gain" ? "text-white" : "hover:text-gray-300"}>Clics +/-</span>
+                            </th>
+                            <th className="text-right py-2 px-3">Tendance 5 sem.</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {gainList.slice(0, 100).map((g, j) => (
-                            <tr key={j} className="border-b border-gray-800/40 hover:bg-gray-800/20">
-                              <td className="py-2 px-5 font-medium text-gray-200">{g.query}</td>
-                              <td className="text-right py-2 px-3 font-semibold text-white">{g.position_now}</td>
-                              <td className="text-right py-2 px-3">
-                                {Number(g.gain) > 0 ? (
-                                  <span className="text-green-400 font-bold flex items-center justify-end gap-1"><TrendingUp className="w-3 h-3" />+{g.gain}</span>
-                                ) : Number(g.gain) < 0 ? (
-                                  <span className="text-red-400 font-bold flex items-center justify-end gap-1"><TrendingDown className="w-3 h-3" />{g.gain}</span>
-                                ) : (
-                                  <span className="text-gray-500 flex items-center justify-end gap-1"><Minus className="w-3 h-3" />0</span>
-                                )}
-                              </td>
-                              <td className="text-right py-2 px-3">
-                                <span className={Number(g.clicks_gain) > 0 ? "text-green-400" : Number(g.clicks_gain) < 0 ? "text-red-400" : "text-gray-500"}>
-                                  {Number(g.clicks_gain) > 0 ? "+" : ""}{g.clicks_gain}
-                                </span>
-                              </td>
-                              <td className="text-right py-2 px-3 text-gray-500">{g.position_prev}</td>
-                            </tr>
-                          ))}
+                          {gainList.slice(0, 100).map((g, j) => {
+                            const fmtPos = (v: number | null | undefined) => (v === null || v === undefined ? "—" : Number(v).toFixed(1));
+                            const colorPos = (v: number | null | undefined) => v == null ? "text-gray-600" : Number(v) <= 10 ? "text-green-400" : Number(v) <= 20 ? "text-yellow-400" : "text-gray-300";
+                            const renderCell = (now: number | null | undefined, prev: number | null | undefined) => {
+                              if (now == null) return <span className="text-gray-600">—</span>;
+                              const delta = prev == null ? null : Number(prev) - Number(now);
+                              return (
+                                <div className="inline-flex flex-col items-end gap-0.5">
+                                  <span className={`font-semibold ${colorPos(now)}`}>{fmtPos(now)}</span>
+                                  {delta !== null && (
+                                    delta > 0.1 ? <span className="text-[10px] text-green-400">↑+{delta.toFixed(1)}</span> :
+                                    delta < -0.1 ? <span className="text-[10px] text-red-400">↓{delta.toFixed(1)}</span> :
+                                    <span className="text-[10px] text-gray-600">=</span>
+                                  )}
+                                </div>
+                              );
+                            };
+                            const series: Array<number | null> = [
+                              g.position_w4 == null ? null : Number(g.position_w4),
+                              g.position_w3 == null ? null : Number(g.position_w3),
+                              g.position_w2 == null ? null : Number(g.position_w2),
+                              g.position_prev == null ? null : Number(g.position_prev),
+                              g.position_now == null ? null : Number(g.position_now),
+                            ];
+                            const valid = series.filter((v): v is number => v != null);
+                            const minV = valid.length ? Math.min(...valid) : 0;
+                            const maxV = valid.length ? Math.max(...valid) : 1;
+                            const range = Math.max(0.1, maxV - minV);
+                            return (
+                              <tr key={j} className="border-b border-gray-800/40 hover:bg-gray-800/20">
+                                <td className="py-2 px-5 font-medium text-gray-200">{g.query}</td>
+                                <td className="text-right py-2 px-2">{renderCell(g.position_now, g.position_prev)}</td>
+                                <td className="text-right py-2 px-2">{renderCell(g.position_prev, g.position_w2)}</td>
+                                <td className="text-right py-2 px-2">{renderCell(g.position_w2, g.position_w3)}</td>
+                                <td className="text-right py-2 px-2">{renderCell(g.position_w3, g.position_w4)}</td>
+                                <td className="text-right py-2 px-2">{renderCell(g.position_w4, null)}</td>
+                                <td className="text-right py-2 px-3">
+                                  <span className={Number(g.clicks_gain) > 0 ? "text-green-400" : Number(g.clicks_gain) < 0 ? "text-red-400" : "text-gray-500"}>
+                                    {Number(g.clicks_gain) > 0 ? "+" : ""}{Number(g.clicks_gain)}
+                                  </span>
+                                </td>
+                                <td className="text-right py-2 px-3">
+                                  <svg width="80" height="22" className="inline-block">
+                                    {series.map((v, k) => {
+                                      if (v == null) return null;
+                                      const x = (k / 4) * 76 + 2;
+                                      const y = 20 - ((maxV - v) / range) * 18;
+                                      const next = series[k + 1];
+                                      if (next == null) return <circle key={k} cx={x} cy={y} r="2" fill="#3b82f6" />;
+                                      const x2 = ((k + 1) / 4) * 76 + 2;
+                                      const y2 = 20 - ((maxV - next) / range) * 18;
+                                      const stroke = next < v ? "#10b981" : next > v ? "#ef4444" : "#6b7280";
+                                      return (
+                                        <g key={k}>
+                                          <line x1={x} y1={y} x2={x2} y2={y2} stroke={stroke} strokeWidth="1.5" />
+                                          <circle cx={x} cy={y} r="1.8" fill="#3b82f6" />
+                                        </g>
+                                      );
+                                    })}
+                                  </svg>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     )
@@ -806,7 +878,7 @@ export default function DashboardPage() {
                     <div className="border-t border-gray-800 bg-gray-950 px-5 py-4">
                       <div className="flex items-center justify-between mb-3">
                         <div>
-                          <span className="text-sm font-semibold text-white">"{activeKw.query}"</span>
+                          <span className="text-sm font-semibold text-white">&quot;{activeKw.query}&quot;</span>
                           <span className="text-xs text-gray-500 ml-2">— évolution position 90 jours</span>
                         </div>
                         <button onClick={() => setActiveKw(null)} className="text-gray-500 hover:text-white"><X className="w-4 h-4" /></button>

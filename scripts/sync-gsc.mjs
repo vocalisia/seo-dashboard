@@ -31,7 +31,8 @@ const auth = new google.auth.GoogleAuth({
 const gsc = google.searchconsole({ version: 'v1', auth });
 
 const endDate = new Date().toISOString().split('T')[0];
-const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+// 45j pour couvrir W4 (29-35j) du tableau Gains/semaine
+const startDate = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
 async function syncSite(site) {
   console.log(`\n→ ${site.name} (${site.gsc_property})`);

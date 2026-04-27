@@ -1,4 +1,5 @@
 import { getSQL } from "@/lib/db";
+import { requireApiSession } from "@/lib/api-auth";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -16,6 +17,11 @@ const LANG_COUNTRIES: Record<string, string[]> = {
 };
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized;
+  }
+
   const siteId = request.nextUrl.searchParams.get("siteId");
   const type = request.nextUrl.searchParams.get("type") || "queries";
   const days = parseInt(request.nextUrl.searchParams.get("days") || "30");
@@ -75,11 +81,11 @@ export async function GET(request: NextRequest) {
     }
 
     if (type === "gains") {
-      // Position cette semaine vs semaine dernière
+      // 5 buckets hebdo : W0 (cette sem.) → W4 (il y a 4 sem.) + dates
       const rows = countryFilter
         ? await sql`
-            WITH current_week AS (
-              SELECT query, AVG(position) as pos_now, SUM(clicks) as clicks_now
+            WITH w0 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
               FROM search_console_data
               WHERE site_id = ${id}
                 AND date >= NOW() - INTERVAL '7 days'
@@ -87,65 +93,156 @@ export async function GET(request: NextRequest) {
                 AND country = ANY(${countryFilter})
               GROUP BY query
             ),
-            prev_week AS (
-              SELECT query, AVG(position) as pos_prev, SUM(clicks) as clicks_prev
+            w1 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
               FROM search_console_data
               WHERE site_id = ${id}
                 AND date >= NOW() - INTERVAL '14 days'
-                AND date < NOW() - INTERVAL '7 days'
+                AND date <  NOW() - INTERVAL '7 days'
+                AND query IS NOT NULL
+                AND country = ANY(${countryFilter})
+              GROUP BY query
+            ),
+            w2 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
+              FROM search_console_data
+              WHERE site_id = ${id}
+                AND date >= NOW() - INTERVAL '21 days'
+                AND date <  NOW() - INTERVAL '14 days'
+                AND query IS NOT NULL
+                AND country = ANY(${countryFilter})
+              GROUP BY query
+            ),
+            w3 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
+              FROM search_console_data
+              WHERE site_id = ${id}
+                AND date >= NOW() - INTERVAL '28 days'
+                AND date <  NOW() - INTERVAL '21 days'
+                AND query IS NOT NULL
+                AND country = ANY(${countryFilter})
+              GROUP BY query
+            ),
+            w4 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
+              FROM search_console_data
+              WHERE site_id = ${id}
+                AND date >= NOW() - INTERVAL '35 days'
+                AND date <  NOW() - INTERVAL '28 days'
                 AND query IS NOT NULL
                 AND country = ANY(${countryFilter})
               GROUP BY query
             )
             SELECT
-              c.query,
-              ROUND(c.pos_now::numeric, 1) as position_now,
-              ROUND(p.pos_prev::numeric, 1) as position_prev,
-              ROUND((p.pos_prev - c.pos_now)::numeric, 1) as gain,
-              c.clicks_now,
-              p.clicks_prev,
-              (c.clicks_now - COALESCE(p.clicks_prev, 0)) as clicks_gain
-            FROM current_week c
-            LEFT JOIN prev_week p ON p.query = c.query
-            WHERE p.pos_prev IS NOT NULL
-              AND ABS(p.pos_prev - c.pos_now) > 0.5
-            ORDER BY gain DESC
+              w0.query,
+              ROUND(w0.pos::numeric, 1) AS position_now,
+              ROUND(w1.pos::numeric, 1) AS position_prev,
+              ROUND(w2.pos::numeric, 1) AS position_w2,
+              ROUND(w3.pos::numeric, 1) AS position_w3,
+              ROUND(w4.pos::numeric, 1) AS position_w4,
+              ROUND((w1.pos - w0.pos)::numeric, 1) AS gain,
+              ROUND((w2.pos - w1.pos)::numeric, 1) AS gain_w1_w2,
+              ROUND((w3.pos - w2.pos)::numeric, 1) AS gain_w2_w3,
+              ROUND((w4.pos - w3.pos)::numeric, 1) AS gain_w3_w4,
+              w0.clicks AS clicks_now,
+              w1.clicks AS clicks_prev,
+              (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain
+            FROM w0
+            LEFT JOIN w1 ON w1.query = w0.query
+            LEFT JOIN w2 ON w2.query = w0.query
+            LEFT JOIN w3 ON w3.query = w0.query
+            LEFT JOIN w4 ON w4.query = w0.query
+            WHERE w1.pos IS NOT NULL
+              AND ABS(w1.pos - w0.pos) > 0.5
+            ORDER BY (w1.pos - w0.pos) DESC NULLS LAST
             LIMIT ${limit}
           `
         : await sql`
-            WITH current_week AS (
-              SELECT query, AVG(position) as pos_now, SUM(clicks) as clicks_now
+            WITH w0 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
               FROM search_console_data
               WHERE site_id = ${id}
                 AND date >= NOW() - INTERVAL '7 days'
                 AND query IS NOT NULL
               GROUP BY query
             ),
-            prev_week AS (
-              SELECT query, AVG(position) as pos_prev, SUM(clicks) as clicks_prev
+            w1 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
               FROM search_console_data
               WHERE site_id = ${id}
                 AND date >= NOW() - INTERVAL '14 days'
-                AND date < NOW() - INTERVAL '7 days'
+                AND date <  NOW() - INTERVAL '7 days'
+                AND query IS NOT NULL
+              GROUP BY query
+            ),
+            w2 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
+              FROM search_console_data
+              WHERE site_id = ${id}
+                AND date >= NOW() - INTERVAL '21 days'
+                AND date <  NOW() - INTERVAL '14 days'
+                AND query IS NOT NULL
+              GROUP BY query
+            ),
+            w3 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
+              FROM search_console_data
+              WHERE site_id = ${id}
+                AND date >= NOW() - INTERVAL '28 days'
+                AND date <  NOW() - INTERVAL '21 days'
+                AND query IS NOT NULL
+              GROUP BY query
+            ),
+            w4 AS (
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
+              FROM search_console_data
+              WHERE site_id = ${id}
+                AND date >= NOW() - INTERVAL '35 days'
+                AND date <  NOW() - INTERVAL '28 days'
                 AND query IS NOT NULL
               GROUP BY query
             )
             SELECT
-              c.query,
-              ROUND(c.pos_now::numeric, 1) as position_now,
-              ROUND(p.pos_prev::numeric, 1) as position_prev,
-              ROUND((p.pos_prev - c.pos_now)::numeric, 1) as gain,
-              c.clicks_now,
-              p.clicks_prev,
-              (c.clicks_now - COALESCE(p.clicks_prev, 0)) as clicks_gain
-            FROM current_week c
-            LEFT JOIN prev_week p ON p.query = c.query
-            WHERE p.pos_prev IS NOT NULL
-              AND ABS(p.pos_prev - c.pos_now) > 0.5
-            ORDER BY gain DESC
+              w0.query,
+              ROUND(w0.pos::numeric, 1) AS position_now,
+              ROUND(w1.pos::numeric, 1) AS position_prev,
+              ROUND(w2.pos::numeric, 1) AS position_w2,
+              ROUND(w3.pos::numeric, 1) AS position_w3,
+              ROUND(w4.pos::numeric, 1) AS position_w4,
+              ROUND((w1.pos - w0.pos)::numeric, 1) AS gain,
+              ROUND((w2.pos - w1.pos)::numeric, 1) AS gain_w1_w2,
+              ROUND((w3.pos - w2.pos)::numeric, 1) AS gain_w2_w3,
+              ROUND((w4.pos - w3.pos)::numeric, 1) AS gain_w3_w4,
+              w0.clicks AS clicks_now,
+              w1.clicks AS clicks_prev,
+              (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain
+            FROM w0
+            LEFT JOIN w1 ON w1.query = w0.query
+            LEFT JOIN w2 ON w2.query = w0.query
+            LEFT JOIN w3 ON w3.query = w0.query
+            LEFT JOIN w4 ON w4.query = w0.query
+            WHERE w1.pos IS NOT NULL
+              AND ABS(w1.pos - w0.pos) > 0.5
+            ORDER BY (w1.pos - w0.pos) DESC NULLS LAST
             LIMIT ${limit}
           `;
-      return NextResponse.json(rows);
+
+      // Date labels (TZ serveur — affichage frontend)
+      const today = new Date();
+      const fmt = (offset: number) => {
+        const d = new Date(today);
+        d.setDate(d.getDate() - offset);
+        return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
+      };
+      const labels = {
+        w0: `${fmt(7)}–${fmt(0)}`,
+        w1: `${fmt(14)}–${fmt(8)}`,
+        w2: `${fmt(21)}–${fmt(15)}`,
+        w3: `${fmt(28)}–${fmt(22)}`,
+        w4: `${fmt(35)}–${fmt(29)}`,
+      };
+
+      return NextResponse.json({ rows, labels });
     }
 
     if (type === "pages") {

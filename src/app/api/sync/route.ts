@@ -82,7 +82,8 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: 
   const sql = getSQL();
   const searchConsole = getSearchConsoleClient(accessToken);
   const endDate = new Date().toISOString().split("T")[0];
-  const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  // 45j pour couvrir W4 (29-35j) du tableau Gains/semaine
+  const startDate = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
   // Query 1: query + page + date (aggregate, no country breakdown)
   const response = await searchConsole.searchanalytics.query({
