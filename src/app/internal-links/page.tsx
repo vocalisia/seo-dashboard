@@ -24,8 +24,6 @@ export default function InternalLinksPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { void fetchSites(); }, []);
-
   async function fetchSites() {
     try {
       const res = await fetch("/api/sites");
@@ -34,6 +32,12 @@ export default function InternalLinksPage() {
       if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
     } catch { /* ignore */ }
   }
+
+  useEffect(() => {
+    const id = setTimeout(() => { void fetchSites(); }, 0);
+    return () => clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function runAudit() {
     if (!selectedSite) return;

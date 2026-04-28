@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSQL, initDB } from "@/lib/db";
 import { askAI } from "@/lib/ai";
 import { generateImage } from "@/lib/ai";
+import { requireApiSession } from "@/lib/api-auth";
+import { hasValidCronSecret } from "@/lib/cron-auth";
 import { publishToGitHub, listRepoFiles } from "@/lib/github";
 import { getGoogleAuth } from "@/lib/google-auth";
 import type { KeywordRow } from "@/lib/autopilot-keywords";
@@ -25,6 +27,14 @@ interface Site {
 }
 
 export async function POST(req: NextRequest) {
+  const cronAuthorized = hasValidCronSecret(req);
+  if (!cronAuthorized) {
+    const authState = await requireApiSession();
+    if (authState.unauthorized) {
+      return authState.unauthorized;
+    }
+  }
+
   let body: { site_id?: number; dry_run?: boolean; language?: string; source?: "gsc" | "competitor" };
   try {
     body = (await req.json()) as { site_id?: number; dry_run?: boolean; language?: string; source?: "gsc" | "competitor" };
@@ -65,7 +75,30 @@ export async function POST(req: NextRequest) {
       normalizedSiteName,
       siteKey,
       repo: repoConfig?.repo ?? null,
+      enabled: repoConfig?.enabled !== false,
     });
+
+    // Garde-fou : si le repo est marqué disabled, on n'écrit rien — sinon
+    // on génère des fichiers MDX dans un repo qui n'est pas la source de
+    // déploiement et on fabrique des URLs 404 publiques.
+    if (repoConfig && repoConfig.enabled === false) {
+      logAutopilot("publication_disabled", {
+        site_id,
+        siteName: site.name,
+        siteKey,
+        reason: repoConfig.disabledReason ?? "publication désactivée",
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Publication désactivée pour ${site.name} : ${repoConfig.disabledReason ?? "site sans pipeline MDX déployé."}`,
+          disabled: true,
+          site_name: site.name,
+          repo: repoConfig.repo,
+        },
+        { status: 422 }
+      );
+    }
 
     // 2. Get top keyword opportunity
     //    source="gsc" → from GSC data (improve existing rankings)

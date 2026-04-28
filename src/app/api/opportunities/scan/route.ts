@@ -17,6 +17,8 @@ interface AggregatedKeywordRow {
   site_count: string;
 }
 
+type DiscoveryMode = "A" | "B" | "C";
+
 interface StoredOpportunity {
   id?: number;
   niche: string;
@@ -55,6 +57,7 @@ interface StoredOpportunity {
     relatedQuestions: string[];
     relatedSearches: string[];
     resultTitles: string[];
+    resultUrls?: string[];
   };
 }
 
@@ -72,6 +75,21 @@ const PORTFOLIO_HINTS = [
   "lead generation",
   "seo tools",
   "beauty fashion",
+];
+
+const GLOBAL_DISCOVERY_SEEDS = [
+  "ai workflow",
+  "remote work setup",
+  "pet accessories",
+  "home gym recovery",
+  "beauty device",
+  "eco cleaning product",
+  "sleep gadget",
+  "smart kitchen tool",
+  "travel organizer",
+  "car accessory",
+  "creator economy tool",
+  "senior wellness",
 ];
 
 function toNumber(value: string | number | null | undefined): number {
@@ -123,6 +141,18 @@ function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity
       : Math.round(projectedTraffic6m * 0.25);
   const confidence = Math.round(candidate.signalScore * 100);
 
+  const competitors = (candidate.serpEvidence?.resultUrls ?? [])
+    .slice(0, 4)
+    .map((url) => {
+      try {
+        const host = new URL(url).hostname.replace(/^www\./i, "");
+        return { url, name: host };
+      } catch {
+        return null;
+      }
+    })
+    .filter((item): item is { url: string; name: string } => item !== null);
+
   return {
     niche: candidate.clusterLabel,
     reason: [
@@ -141,7 +171,7 @@ function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity
     seed_articles: candidate.keywords.slice(0, 5).map((keyword) => `Guide complet: ${keyword}`),
     target_countries: ["FRA", "CHE", "BEL"],
     target_languages: ["fr"],
-    competitors: [],
+    competitors,
     success_rate: Math.max(25, Math.round(confidence * 0.8)),
     revenue_timeline: {
       m1: 0,
@@ -166,6 +196,7 @@ function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity
       relatedQuestions: [],
       relatedSearches: [],
       resultTitles: [],
+      resultUrls: [],
     },
   };
 }
@@ -177,11 +208,33 @@ function cleanJsonBlock(input: string): string {
     .trim();
 }
 
-async function enrichCandidatesWithAI(candidates: OpportunityCandidate[]): Promise<StoredOpportunity[] | null> {
+function looksLikeRedditFragment(text: string): boolean {
+  if (!text) return true;
+  const trimmed = text.trim();
+  if (trimmed.length < 10) return true;
+  if (trimmed.length > 80) return true;
+  if (/[?!]/.test(trimmed)) return true;
+  const startsWithVerb = /^(how|why|what|when|where|who|did|do|does|can|should|would|have|has|is|are|was|were|drop|launched|built|built|after|tell|share|why is|comment|pourquoi|quels?|que|qui|est-il|est-ce|how many|i (built|launched|made|sold|tried|got|stopped|quit))\b/i.test(trimmed);
+  if (startsWithVerb) return true;
+  const wordCount = trimmed.split(/\s+/).length;
+  if (wordCount > 9) return true;
+  const words = trimmed.split(/\s+/);
+  const properNouns = words.filter((w) => /^[A-Z]/.test(w)).length;
+  if (properNouns >= 4 && wordCount <= 6) {
+    return false;
+  }
+  return false;
+}
+
+async function enrichCandidatesWithAI(
+  candidates: OpportunityCandidate[],
+  preferredCategories: string[] = []
+): Promise<StoredOpportunity[] | null> {
   const shortlist = candidates.map((candidate, index) => ({
     id: index + 1,
     niche_hint: candidate.clusterLabel,
     keywords: candidate.keywords.slice(0, 5),
+    sample_queries: candidate.sampleQueries.slice(0, 8),
     monthly_volume: candidate.monthlyVolume,
     momentum_pct: candidate.momentumPct,
     average_position: candidate.averagePosition,
@@ -190,53 +243,73 @@ async function enrichCandidatesWithAI(candidates: OpportunityCandidate[]): Promi
     intent: candidate.intent,
     rationale: candidate.rationale,
     score_breakdown: candidate.scoreBreakdown,
+    serp_evidence: candidate.serpEvidence ?? null,
   }));
 
-  const prompt = `You are enriching SEO niche opportunities from first-party search demand.
+  const categoryDirective = preferredCategories.length > 0
+    ? `\n\n🎯 CONTRAINTE OBLIGATOIRE site_type :
+Les niches DOIVENT être de type : ${preferredCategories.map((c) => `"${c}"`).join(" OU ")}.
+NE PROPOSE AUCUNE niche en dehors de ces types. Si un signal ne se prête pas à ${preferredCategories.join("/")}, IGNORE-le.
+${preferredCategories.includes("e-commerce") ? "Pour e-commerce : pense produits physiques (DTC, dropshipping, marques de niche, accessoires, gadgets, abonnement physique, alimentation spécialisée, beauté, lifestyle, maison)." : ""}
+${preferredCategories.includes("saas") ? "Pour saas : pense outils logiciels, dashboards, agents IA, automation, API, productivité, integration, AI tools." : ""}
+${preferredCategories.includes("course") ? "Pour course : pense formations en ligne, certifications, coaching, infoproduits, cohort-based courses." : ""}
+${preferredCategories.includes("marketplace") ? "Pour marketplace : pense plateformes 2-sided (offre/demande), aggregateurs, places de marché de niche." : ""}`
+    : "";
 
-The shortlist below is already computed from real query clusters. Do NOT invent random sectors.
-For each item, keep the same niche direction and keywords, but turn it into a launch-ready business opportunity.
+  const prompt = `Tu es analyste SEO + business senior. À partir de signaux multi-sources (Amazon Best Sellers Rising, Indie Hackers revenus vérifiés, AppSumo nouveautés, Kickstarter trending, Reddit, HN, Product Hunt, Google Trends), tu dois SYNTHÉTISER des **niches business réelles à fort potentiel commercial**, pas répéter les titres bruts.
 
-INPUT:
+🎯 PRIORITÉ AUX SIGNAUX COMMERCIAUX :
+- Amazon Best Sellers = vraie demande consommateurs (e-commerce / produit physique)
+- Indie Hackers verified revenue = SaaS qui font vraiment €€€ → modèle à reproduire
+- AppSumo = SaaS validés par marché (ils paient pour être listés)
+- Kickstarter = produits financés (validation marché précoce)
+- Ces sources sont 3× plus importantes que Reddit/HN pour identifier de VRAIS business.${categoryDirective}
+
+⚠️ RÈGLE CAPITALE :
+- Une niche n'est JAMAIS une question. JAMAIS un titre Reddit. JAMAIS une phrase.
+- Une niche = un MARCHÉ ou un SECTEUR (2-5 mots, type "Outils SaaS pour freelances", "Gadgets cuisine zéro déchet", "Formation IA pour PME").
+- Si le signal brut est "Quels sont vos tips de vie adulte que personne ne t'apprend ?" → la niche réelle est "Conseils pratiques jeunes adultes" ou "Education financière 18-25 ans".
+- Si le signal brut est "Drop your SaaS and I'll tell you how to get 100 users" → la niche réelle est "Acquisition utilisateurs early-stage SaaS".
+
+INPUT (signaux bruts à analyser, PAS à recopier):
 ${JSON.stringify(shortlist, null, 2)}
 
-RULES:
-- Stay close to the provided niche_hint and keywords.
-- monthly_volume must stay realistic and close to the input.
-- Prefer niches with clear content gaps, business intent, or rising long-tail demand.
-- Suggested domains must be simple and brandable.
-- Seed articles must directly attack the listed keywords.
-- Competitors can be empty if you are unsure. Never hallucinate weird URLs.
-- Return 5 to 8 items max.
+MÉTHODE :
+1. Lis tous les signaux. Identifie les **PATTERNS** (groupes de signaux qui pointent vers le même besoin/marché).
+2. Pour chaque pattern, crée 1 niche commerciale précise (2-5 mots).
+3. Choisis des niches avec un VRAI potentiel business (pas anecdotique).
+4. Mots-clés = termes commerciaux que les gens cherchent dans Google (pas le titre Reddit brut).
 
-RESPOND IN STRICT JSON:
+FORMAT JSON STRICT, 5 à 8 niches max :
 {
   "opportunities": [
     {
-      "niche": "Specific niche",
-      "reason": "Concrete explanation based on rising demand, SERP gap, and portfolio distance",
+      "niche": "Nom court 2-5 mots (ex: 'Outils acquisition early SaaS')",
+      "reason": "Pourquoi cette niche, basée sur 2-3 signaux concrets que tu cites",
       "site_type": "blog | magazine | e-commerce | saas | directory",
-      "core_keywords": ["kw1", "kw2"],
+      "core_keywords": ["mot-cle commercial 1", "mot-cle commercial 2", "..."],
       "monthly_volume": 12000,
       "competition": "low | medium | high",
       "monetization": "ads | affiliate | e-commerce | subscription | lead-gen",
       "projected_traffic_6m": 1800,
       "projected_revenue_6m": 900,
-      "suggested_domains": ["example.com"],
-      "seed_articles": ["title 1", "title 2", "title 3", "title 4", "title 5"],
+      "suggested_domains": ["nicheguide.com", "nichelab.com"],
+      "seed_articles": ["Titre article 1 en FR", "Titre article 2", "Titre 3", "Titre 4", "Titre 5"],
       "target_countries": ["FRA", "CHE"],
       "target_languages": ["fr"],
       "competitors": [],
       "success_rate": 65,
       "revenue_timeline": {"m1": 0, "m3": 120, "m6": 900, "m12": 2200},
       "business_model": {
-        "type": "short description",
-        "how_to_monetize": "practical monetization plan"
+        "type": "Type business court",
+        "how_to_monetize": "Plan monétisation concret"
       },
       "confidence_score": 78
     }
   ]
-}`;
+}
+
+Tout le contenu texte doit être en FRANÇAIS si les signaux sont francophones, sinon en ANGLAIS.`;
 
   const aiResponse = await askAI([{ role: "user", content: prompt }], "search", 3200);
   const cleaned = cleanJsonBlock(aiResponse);
@@ -248,9 +321,10 @@ RESPOND IN STRICT JSON:
 }
 
 async function enrichCandidatesWithFreeSerpContext(candidates: OpportunityCandidate[]): Promise<OpportunityCandidate[]> {
-  const snapshots = await Promise.all(
+  const snapshotResults = await Promise.allSettled(
     candidates.slice(0, 4).map((candidate) => fetchGoogleSerpSnapshot(candidate.clusterLabel))
   );
+  const snapshots = snapshotResults.map((result) => (result.status === "fulfilled" ? result.value : null));
 
   return candidates.map((candidate, index) => {
     const snapshot = snapshots[index];
@@ -279,6 +353,37 @@ async function enrichCandidatesWithFreeSerpContext(candidates: OpportunityCandid
       },
     };
   });
+}
+
+function parseDiscoveryMode(value: unknown): DiscoveryMode {
+  return value === "A" || value === "B" || value === "C" ? value : "B";
+}
+
+function buildModeConfig(mode: DiscoveryMode) {
+  if (mode === "A") {
+    return {
+      portfolioPreference: "close" as const,
+      signalLabel: "portfolio",
+      keywordRowsMode: "portfolio" as const,
+      externalSeedMode: "portfolio" as const,
+    };
+  }
+
+  if (mode === "C") {
+    return {
+      portfolioPreference: "distant" as const,
+      signalLabel: "global-discovery",
+      keywordRowsMode: "external-only" as const,
+      externalSeedMode: "global" as const,
+    };
+  }
+
+  return {
+    portfolioPreference: "balanced" as const,
+    signalLabel: "portfolio+global",
+    keywordRowsMode: "mixed" as const,
+    externalSeedMode: "hybrid" as const,
+  };
 }
 
 function sanitizeOpportunity(
@@ -401,7 +506,7 @@ function sanitizeOpportunity(
  *
  * Returns scored opportunities with traffic projections.
  */
-export async function POST() {
+export async function POST(request: NextRequest) {
   const authState = await requireApiSession();
   if (authState.unauthorized) {
     return authState.unauthorized;
@@ -410,6 +515,32 @@ export async function POST() {
   const sql = getSQL();
 
   try {
+    let requestedMode: DiscoveryMode = "B";
+    let requestedCountries: string[] = ["GLOBAL"];
+    let requestedCategories: string[] = [];
+    try {
+      const body = await request.json() as { discovery_mode?: unknown; country?: unknown; countries?: unknown; categories?: unknown };
+      requestedMode = parseDiscoveryMode(body.discovery_mode);
+      if (Array.isArray(body.countries) && body.countries.length > 0) {
+        requestedCountries = body.countries
+          .filter((c): c is string => typeof c === "string" && c.trim().length > 0)
+          .map((c) => c.trim().toUpperCase());
+      } else if (typeof body.country === "string" && body.country.trim()) {
+        requestedCountries = [body.country.trim().toUpperCase()];
+      }
+      if (requestedCountries.length === 0) requestedCountries = ["GLOBAL"];
+
+      if (Array.isArray(body.categories)) {
+        requestedCategories = body.categories
+          .filter((c): c is string => typeof c === "string" && c.trim().length > 0)
+          .map((c) => c.trim().toLowerCase())
+          .filter((c) => c !== "all");
+      }
+    } catch {
+      requestedMode = "B";
+    }
+    const modeConfig = buildModeConfig(requestedMode);
+
     await initDB();
 
     const nicheData = (await sql`
@@ -462,19 +593,52 @@ export async function POST() {
     }));
 
     const existingQueries = new Set(keywordRows.map((row) => row.query.toLowerCase().trim()));
-    const baseKeywordSeeds = keywordRows
+    const portfolioSeeds = keywordRows
       .sort((a, b) => b.impressions_30d - a.impressions_30d)
       .slice(0, 12)
       .map((row) => row.query);
-    const externalRows = await buildExternalSignalRows(baseKeywordSeeds, existingQueries);
-    const mergedRows = [...keywordRows, ...externalRows];
+    const externalSeedPool =
+      modeConfig.externalSeedMode === "portfolio"
+        ? portfolioSeeds
+        : modeConfig.externalSeedMode === "global"
+          ? GLOBAL_DISCOVERY_SEEDS
+          : [...portfolioSeeds.slice(0, 6), ...GLOBAL_DISCOVERY_SEEDS.slice(0, 6)];
+    const safeExternalSeedPool = externalSeedPool.length
+      ? externalSeedPool
+      : PORTFOLIO_HINTS.slice(0, 8);
+    const perCountryRows = await Promise.all(
+      requestedCountries.map((cc) =>
+        buildExternalSignalRows(
+          safeExternalSeedPool,
+          modeConfig.keywordRowsMode === "external-only" ? new Set<string>() : existingQueries,
+          cc
+        )
+      )
+    );
+    const seenExternalQueries = new Set<string>();
+    const externalRows: typeof perCountryRows[number] = [];
+    for (const rows of perCountryRows) {
+      for (const row of rows) {
+        const key = row.query.toLowerCase().trim();
+        if (seenExternalQueries.has(key)) continue;
+        seenExternalQueries.add(key);
+        externalRows.push(row);
+      }
+    }
+    const mergedRows =
+      modeConfig.keywordRowsMode === "portfolio"
+        ? (keywordRows.length > 0 ? keywordRows : externalRows)
+        : modeConfig.keywordRowsMode === "external-only"
+          ? externalRows
+          : [...keywordRows, ...externalRows];
 
     const candidates = await enrichCandidatesWithFreeSerpContext(
       buildOpportunityCandidates(mergedRows, {
-      minVolume: 5000,
-      maxCandidates: 8,
-      existingPortfolioHints: [...PORTFOLIO_HINTS, ...sites.map((site) => `${site.name ?? ""} ${site.url ?? ""}`)],
-    })
+        minVolume: 5000,
+        maxCandidates: 8,
+        existingPortfolioHints: [...PORTFOLIO_HINTS, ...sites.map((site) => `${site.name ?? ""} ${site.url ?? ""}`)],
+        portfolioPreference: modeConfig.portfolioPreference,
+      })
     );
 
     if (candidates.length === 0) {
@@ -483,27 +647,59 @@ export async function POST() {
         opportunities: [],
         keywords_analyzed: mergedRows.length,
         sites_analyzed: sites.length,
+        discovery_mode: requestedMode,
       });
     }
 
     let opportunities: StoredOpportunity[] =
-      candidates.map((candidate) => fallbackOpportunity(candidate));
+      candidates.map((candidate) => {
+        const opportunity = fallbackOpportunity(candidate);
+        return {
+          ...opportunity,
+          signal_source: `${modeConfig.signalLabel}:${opportunity.signal_source ?? "gsc"}`,
+        };
+      });
 
     try {
-      const enriched = await enrichCandidatesWithAI(candidates);
+      const enriched = await enrichCandidatesWithAI(candidates, requestedCategories);
       if (enriched?.length) {
-        opportunities = enriched
+        const aiOpps = enriched
           .slice(0, candidates.length)
           .map((opp, index) => sanitizeOpportunity(opp, fallbackOpportunity(candidates[index]!)));
+
+        const acceptable = aiOpps.filter((opp) => !looksLikeRedditFragment(opp.niche));
+
+        if (acceptable.length === 0) {
+          throw new Error("AI returned only fragment-style niches, retrying not available; using fallback");
+        }
+        opportunities = acceptable;
+
+        if (requestedCategories.length > 0) {
+          const allowed = new Set(requestedCategories);
+          opportunities = opportunities.filter((opp) => allowed.has(opp.site_type));
+        }
+      } else {
+        throw new Error("AI returned empty");
       }
     } catch (err) {
-      console.error("Opportunity enrichment failed, using deterministic fallback:", err);
+      console.error("Opportunity enrichment failed:", err);
+      opportunities = opportunities.filter((opp) => !looksLikeRedditFragment(opp.niche));
     }
+
+    opportunities = opportunities.map((opp, index) => {
+      if ((opp.competitors ?? []).length > 0) return opp;
+      const candidateFallback = candidates[index];
+      if (!candidateFallback) return opp;
+      return {
+        ...opp,
+        competitors: fallbackOpportunity(candidateFallback).competitors,
+      };
+    });
 
     try {
       await sql.transaction(
         [
-          sql`DELETE FROM market_opportunities WHERE status = 'pending'`,
+          sql`DELETE FROM market_opportunities WHERE status IN ('pending', 'rejected') OR status IS NULL`,
           ...opportunities.map((opp) => sql`
             INSERT INTO market_opportunities
             (niche, reason, site_type, core_keywords, monthly_volume, competition, monetization,
@@ -542,6 +738,8 @@ export async function POST() {
       sites_analyzed: sites.length,
       candidate_count: candidates.length,
       external_signals_added: externalRows.length,
+      discovery_mode: requestedMode,
+      countries: requestedCountries,
     });
   } catch (err) {
     return NextResponse.json({ success: false, error: err instanceof Error ? err.message : "Unknown" }, { status: 500 });
@@ -561,7 +759,7 @@ export async function GET() {
   try {
     const rows = await sql`
       SELECT * FROM market_opportunities
-      ORDER BY confidence_score DESC
+      ORDER BY confidence_score DESC, created_at DESC
       LIMIT 100
     `;
     return NextResponse.json({ success: true, opportunities: rows });

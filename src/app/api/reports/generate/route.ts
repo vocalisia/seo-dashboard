@@ -1,6 +1,7 @@
 import { getSQL, initDB } from "@/lib/db";
 import { NextResponse } from "next/server";
 import { askAI } from "@/lib/ai";
+import { requireCronSecret } from "@/lib/cron-auth";
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -42,7 +43,10 @@ Sois très concret et actionnable. Format markdown.`;
   return await askAI([{ role: "user", content: prompt }], "smart", 1500);
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  const unauthorized = requireCronSecret(request);
+  if (unauthorized) return unauthorized;
+
   try {
     await initDB(); // ensure weekly_reports table exists
     const sql = getSQL();

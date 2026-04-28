@@ -3,6 +3,7 @@ export const maxDuration = 300; // 5 min max (Vercel Pro)
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { requireCronSecret } from "@/lib/cron-auth";
 
 interface Site {
   id: number;
@@ -31,6 +32,7 @@ interface ApiResponse {
   image_url?: string | null;
   status?: string;
   error?: string;
+  disabled?: boolean;
 }
 
 const LANG_FLAG: Record<string, string> = {
@@ -45,9 +47,15 @@ async function runAutopilotForSite(siteId: number, language: string, source: "gs
     : process.env.NEXT_PUBLIC_SITE_URL
       ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
+  const cronSecret = process.env.CRON_SECRET?.trim();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (cronSecret) {
+    headers["x-cron-secret"] = cronSecret;
+  }
+
   const res = await fetch(`${baseUrl}/api/autopilot`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ site_id: siteId, dry_run: false, language, source }),
   });
 
@@ -61,7 +69,8 @@ async function sendEmailRecap(results: AutopilotResult[]): Promise<void> {
   if (!resendKey || !alertEmail) return;
 
   const published = results.filter((r) => r.status === "published");
-  const failed = results.filter((r) => r.status !== "published");
+  const skipped = results.filter((r) => r.status === "skipped_disabled");
+  const failed = results.filter((r) => r.status !== "published" && r.status !== "skipped_disabled");
 
   // Group by language for the recap
   const byLang: Record<string, AutopilotResult[]> = {};
@@ -86,7 +95,7 @@ async function sendEmailRecap(results: AutopilotResult[]): Promise<void> {
 
   const html = `
 <h2>SEO Autopilot — Récap hebdomadaire multi-pays</h2>
-<p>${published.length} article(s) publié(s) sur ${Object.keys(byLang).length} langue(s)</p>
+<p>${published.length} article(s) publié(s) sur ${Object.keys(byLang).length} langue(s)${skipped.length > 0 ? ` — ${skipped.length} site(s) ignoré(s) (publication désactivée)` : ""}</p>
 
 ${langBlocks}
 
@@ -95,6 +104,15 @@ ${
     ? `<h3>❌ Échecs (${failed.length})</h3>
 <ul>
   ${failed.map((r) => `<li><strong>${r.site}</strong> [${r.language}]: ${r.error ?? r.status}</li>`).join("")}
+</ul>`
+    : ""
+}
+
+${
+  skipped.length > 0
+    ? `<h3>⏭️ Sites désactivés (${skipped.length})</h3>
+<ul>
+  ${skipped.map((r) => `<li><strong>${r.site}</strong>: ${r.error ?? "publication désactivée"}</li>`).join("")}
 </ul>`
     : ""
 }
@@ -121,7 +139,10 @@ ${
   }
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  const unauthorized = requireCronSecret(request);
+  if (unauthorized) return unauthorized;
+
   const sql = getSQL();
 
   try {
@@ -154,6 +175,10 @@ export async function POST() {
       for (const language of languages) {
         try {
           const result = await runAutopilotForSite(site.id, language, "gsc");
+          const status =
+            result.disabled
+              ? "skipped_disabled"
+              : (result.status ?? (result.error ? "failed" : "unknown"));
           results.push({
             site: site.name,
             site_id: site.id,
@@ -162,9 +187,10 @@ export async function POST() {
             article_title: result.article_title,
             github_url: result.github_url,
             image_url: result.image_url,
-            status: result.status ?? (result.error ? "failed" : "unknown"),
+            status,
             error: result.error,
           });
+          if (result.disabled) break; // n'essaie pas les autres langues si site désactivé
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unknown error";
           results.push({ site: site.name, site_id: site.id, language, status: "failed", error: message });
@@ -180,6 +206,7 @@ export async function POST() {
 
       try {
         const result = await runAutopilotForSite(site.id, mainLang, "competitor");
+        if (result.disabled) continue; // déjà signalé en pass 1
         results.push({
           site: site.name + " [COMPETITOR]",
           site_id: site.id,
@@ -202,6 +229,7 @@ export async function POST() {
 
     const published = results.filter((r) => r.status === "published").length;
     const failed = results.filter((r) => r.status === "failed").length;
+    const skippedDisabled = results.filter((r) => r.status === "skipped_disabled").length;
 
     return NextResponse.json({
       success: true,
@@ -209,6 +237,7 @@ export async function POST() {
       total_runs: results.length,
       published,
       failed,
+      skipped_disabled: skippedDisabled,
       results,
     });
   } catch (err) {

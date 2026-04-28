@@ -1,4 +1,5 @@
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
+import { requireApiSession } from "@/lib/api-auth";
 import { isLocalDevDemoMode, LOCAL_DEMO_SITES } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -14,6 +15,11 @@ const LANG_COUNTRIES: Record<string, string[]> = {
 };
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized;
+  }
+
   if (isLocalDevDemoMode()) {
     return NextResponse.json(LOCAL_DEMO_SITES);
   }
@@ -112,6 +118,11 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: Request) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized;
+  }
+
   if (isLocalDevDemoMode()) {
     return NextResponse.json(
       {

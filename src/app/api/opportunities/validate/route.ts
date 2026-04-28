@@ -45,45 +45,47 @@ export async function POST(req: NextRequest) {
     const keywords = Array.isArray(opp.core_keywords) ? opp.core_keywords : JSON.parse(opp.core_keywords as string);
     const competitors = opp.competitors ? (Array.isArray(opp.competitors) ? opp.competitors : JSON.parse(opp.competitors as string)) : [];
 
-    const prompt = `I want to create a website about "${opp.niche}".
+    const prompt = `Je veux créer un site sur "${opp.niche}".
 
-Core keywords: ${keywords.join(", ")}
+Mots-clés principaux : ${keywords.join(", ")}
 
-Known competitors: ${competitors.map((c: { url: string; name: string }) => c.url || c.name).join(", ")}
+Concurrents connus : ${competitors.map((c: { url: string; name: string }) => c.url || c.name).join(", ")}
 
-TASK: Do a DEEP competitive analysis to determine if this niche is REALISTICALLY attackable.
+MISSION : Fais une analyse concurrentielle APPROFONDIE pour savoir si cette niche est ATTAQUABLE de manière réaliste.
 
-Analyze for EACH core keyword:
-1. What types of sites currently rank in top 10? (big brands, small blogs, forums, reddit, news sites, niche sites)
-2. Are there WEAK results in the top 10-20? (reddit threads, quora answers, old articles from 2020, thin content, forums = EASY to beat)
-3. What is the estimated Domain Rating (DR) of the top 3 ranking sites? (DR < 30 = easy, 30-50 = medium, > 50 = hard)
-4. Is there a clear CONTENT GAP? (topics not well covered, outdated info, missing angles)
-5. How long would it take a new site to reach page 1? (months estimate)
+Pour CHAQUE mot-clé principal, analyse :
+1. Quels types de sites rankent actuellement dans le top 10 ? (grosses marques, petits blogs, forums, Reddit, sites d'actu, sites de niche)
+2. Y a-t-il des résultats FAIBLES dans le top 10-20 ? (threads Reddit, réponses Quora, articles vieux de 2020, contenu mince, forums = FACILES à battre)
+3. Quel est le Domain Rating (DR) estimé des 3 sites du top 3 ? (DR < 30 = facile, 30-50 = moyen, > 50 = difficile)
+4. Y a-t-il un GAP DE CONTENU clair ? (sujets mal couverts, infos obsolètes, angles manquants)
+5. Combien de temps faudrait-il à un nouveau site pour atteindre la page 1 ? (estimation en mois)
 
-Then give an OVERALL VERDICT:
+Donne ensuite un VERDICT GLOBAL.
 
-RESPOND IN STRICT JSON:
+⚠️ TOUTES LES RÉPONSES TEXTE DOIVENT ÊTRE EN FRANÇAIS NATUREL.
+
+Réponds en JSON STRICT :
 {
   "verdict": "GO" | "RISKY" | "NO_GO",
-  "verdict_reason": "Clear explanation why",
+  "verdict_reason": "Explication claire EN FRANÇAIS",
   "attackability_score": 0-100,
   "time_to_page1_months": 6,
   "keyword_analysis": [
     {
-      "keyword": "the keyword",
-      "top_results_type": "mix of blogs and forums",
+      "keyword": "le mot-clé",
+      "top_results_type": "mélange blogs et forums (en français)",
       "weak_results_found": true,
-      "weak_results_examples": ["reddit thread ranking #4", "2019 article at #7"],
+      "weak_results_examples": ["thread Reddit en position 4", "article de 2019 en position 7"],
       "estimated_difficulty": "easy" | "medium" | "hard",
       "avg_competitor_dr": 35
     }
   ],
-  "content_gaps": ["Gap 1: no one covers X angle", "Gap 2: all articles are outdated"],
-  "strategy_recommendation": "Specific strategy to attack this niche",
-  "quick_wins": ["Keyword 1 has reddit ranking = write better article", "Keyword 2 has thin content at #5"]
+  "content_gaps": ["Gap 1 : personne ne couvre l'angle X", "Gap 2 : tous les articles sont obsolètes"],
+  "strategy_recommendation": "Stratégie spécifique en français pour attaquer cette niche",
+  "quick_wins": ["Mot-clé 1 a un ranking Reddit = écrire un meilleur article", "Mot-clé 2 a du contenu mince en position 5"]
 }
 
-BE HONEST. If this niche is too competitive, say NO_GO. I prefer honest analysis over optimistic projections.`;
+SOIS HONNÊTE. Si la niche est trop compétitive, dis NO_GO. Je préfère une analyse honnête à des projections optimistes.`;
 
     let aiResponse = "";
     try {

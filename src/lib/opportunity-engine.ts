@@ -33,6 +33,7 @@ export interface OpportunityCandidate {
     relatedQuestions: string[];
     relatedSearches: string[];
     resultTitles: string[];
+    resultUrls?: string[];
   };
   scoreBreakdown: {
     growth: number;
@@ -48,6 +49,8 @@ interface BuildOptions {
   minVolume: number;
   maxCandidates: number;
   existingPortfolioHints?: string[];
+  portfolioPreference?: "close" | "balanced" | "distant";
+  intentFocus?: "any" | "commercial";
 }
 
 const QUESTION_PREFIXES = [
@@ -173,9 +176,47 @@ function buildClusterKey(query: string): string {
   return tokens.slice(0, 3).join(" ");
 }
 
+const LABEL_STOPWORDS = new Set([
+  "the", "and", "but", "are", "was", "were", "been", "being",
+  "for", "with", "from", "about", "into", "through",
+  "you", "this", "that", "these", "those", "your",
+  "les", "des", "mais", "est", "sont",
+  "aux", "dans", "sur", "pour", "avec", "par", "que", "qui", "quoi", "pourquoi",
+  "comment", "pas", "plus", "moins", "tout", "tous", "toute", "toutes", "cette", "ces",
+  "what", "why", "how", "who", "where", "when", "does", "did", "can", "should",
+]);
+
+function topicalKeywords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !LABEL_STOPWORDS.has(w) && !STOPWORDS.has(w))
+    .slice(0, 4);
+}
+
 function buildClusterLabel(queries: string[]): string {
+  if (queries.length === 0) return "untitled niche";
+
+  const wordFreq = new Map<string, number>();
+  for (const q of queries) {
+    for (const w of topicalKeywords(q)) {
+      wordFreq.set(w, (wordFreq.get(w) ?? 0) + 1);
+    }
+  }
+  const topWords = Array.from(wordFreq.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([w]) => w);
+
+  if (topWords.length >= 2) {
+    return topWords.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  }
+
   const best = [...queries].sort((a, b) => a.length - b.length)[0] ?? "";
-  return best || "untitled niche";
+  if (best.length <= 60 && !/[?!]/.test(best)) return best;
+
+  return topWords[0] ?? "untitled niche";
 }
 
 export function buildOpportunityCandidates(
@@ -183,6 +224,8 @@ export function buildOpportunityCandidates(
   options: BuildOptions
 ): OpportunityCandidate[] {
   const hints = (options.existingPortfolioHints ?? []).map(normalize);
+  const portfolioPreference = options.portfolioPreference ?? "balanced";
+  const intentFocus = options.intentFocus ?? "any";
   const filtered = rows.filter((row) => normalize(row.query).length >= 8);
 
   const clusters = new Map<string, OpportunityKeywordRow[]>();
@@ -223,7 +266,17 @@ export function buildOpportunityCandidates(
           ? "longtail"
           : "emerging";
 
-    const signalScore = Number((rawSignal * (0.75 + distance * 0.25)).toFixed(4));
+    if (intentFocus === "commercial" && intent === "informational") {
+      continue;
+    }
+
+    const portfolioBoost =
+      portfolioPreference === "close"
+        ? 0.75 + (1 - distance) * 0.35
+        : portfolioPreference === "distant"
+          ? 0.75 + distance * 0.35
+          : 0.75 + distance * 0.25;
+    const signalScore = Number((rawSignal * portfolioBoost).toFixed(4));
     const rationale = [
       momentumPct >= 40 ? "fast-rising demand" : "stable demand with content gap",
       averagePosition >= 12 ? "SERP gap remains accessible" : "already somewhat competitive",

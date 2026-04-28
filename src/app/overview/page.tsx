@@ -44,8 +44,6 @@ export default function OverviewPage() {
   const [showSiteFilter, setShowSiteFilter] = useState(false);
   const [activePanel, setActivePanel] = useState<"clicks"|"impressions"|"sessions"|"position">("clicks");
 
-  useEffect(() => { loadAll(); }, [period]);
-
   async function loadAll() {
     setLoading(true);
     const [s, g, a] = await Promise.all([
@@ -58,6 +56,8 @@ export default function OverviewPage() {
     if (Array.isArray(a)) setGa4Series(a);
     setLoading(false);
   }
+
+  useEffect(() => { loadAll(); }, [period]); // eslint-disable-line react-hooks/set-state-in-effect
 
   // Build time-series aggregated by date for selected sites
   const timeSeriesData = useMemo(() => {

@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getGoogleAuth } from "@/lib/google-auth";
+import { requireApiSession } from "@/lib/api-auth";
 
 interface IndexingRequestBody {
   url: string;
@@ -20,6 +21,11 @@ interface IndexingResponse {
  * Body: { url: string }
  */
 export async function POST(req: NextRequest): Promise<NextResponse<IndexingResponse>> {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized as NextResponse<IndexingResponse>;
+  }
+
   let body: IndexingRequestBody;
   try {
     body = (await req.json()) as IndexingRequestBody;

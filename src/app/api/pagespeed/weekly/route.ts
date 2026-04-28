@@ -3,6 +3,7 @@ export const maxDuration = 120;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { requireCronSecret } from "@/lib/cron-auth";
 
 interface Site {
   id: number;
@@ -66,7 +67,10 @@ async function fetchPageSpeed(url: string, strategy: "mobile" | "desktop"): Prom
   return extractMetrics(data);
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  const unauthorized = requireCronSecret(request);
+  if (unauthorized) return unauthorized;
+
   const sql = getSQL();
 
   try {

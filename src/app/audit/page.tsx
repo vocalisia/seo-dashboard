@@ -52,12 +52,6 @@ function metricStatus(metric: string, value: number): MetricStatus {
   return "poor";
 }
 
-function statusColor(s: MetricStatus): string {
-  if (s === "good") return "text-green-400";
-  if (s === "needs-improvement") return "text-yellow-400";
-  return "text-red-400";
-}
-
 function statusBadge(s: MetricStatus): string {
   if (s === "good") return "bg-green-500/20 text-green-400";
   if (s === "needs-improvement") return "bg-yellow-500/20 text-yellow-400";
@@ -183,7 +177,7 @@ export default function AuditPage() {
         {loading && (
           <div className="flex flex-col items-center gap-4 py-16 text-gray-400">
             <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
-            <p>Analyse PageSpeed en cours... (jusqu'à 60s)</p>
+            <p>Analyse PageSpeed en cours... (jusqu&apos;à 60s)</p>
           </div>
         )}
 

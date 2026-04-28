@@ -71,4 +71,42 @@ describe("buildOpportunityCandidates", () => {
     expect(candidates[0].scoreBreakdown.growth).toBeGreaterThanOrEqual(0);
     expect(candidates[0].scoreBreakdown.portfolioDistance).toBeGreaterThan(0);
   });
+
+  it("changes ranking based on portfolio preference", () => {
+    const mixedRows: OpportunityKeywordRow[] = [
+      {
+        query: "seo tools audit automation",
+        impressions_30d: 11000,
+        impressions_prev_30d: 7000,
+        clicks_30d: 90,
+        avg_position_30d: 16,
+        site_count: 1,
+      },
+      {
+        query: "pet cooling mat for dogs",
+        impressions_30d: 12000,
+        impressions_prev_30d: 3000,
+        clicks_30d: 110,
+        avg_position_30d: 21,
+        site_count: 1,
+      },
+    ];
+
+    const closeCandidates = buildOpportunityCandidates(mixedRows, {
+      minVolume: 5000,
+      maxCandidates: 10,
+      existingPortfolioHints: ["seo tools", "audit automation"],
+      portfolioPreference: "close",
+    });
+
+    const distantCandidates = buildOpportunityCandidates(mixedRows, {
+      minVolume: 5000,
+      maxCandidates: 10,
+      existingPortfolioHints: ["seo tools", "audit automation"],
+      portfolioPreference: "distant",
+    });
+
+    expect(closeCandidates[0]?.clusterLabel).toContain("seo tools");
+    expect(distantCandidates[0]?.clusterLabel).toContain("pet cooling mat");
+  });
 });

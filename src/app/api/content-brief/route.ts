@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { askAI } from "@/lib/ai";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) {
+    return authState.unauthorized;
+  }
+
   try {
     const body = await req.json() as {
       query: string;

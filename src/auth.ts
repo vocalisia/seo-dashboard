@@ -1,10 +1,19 @@
+import { randomUUID } from "crypto";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 
 const isDev = process.env.NODE_ENV === "development";
+const isProd = process.env.NODE_ENV === "production";
 const localDevPassword = process.env.LOCAL_DEV_PASSWORD?.trim();
 const localDevEmail = (process.env.LOCAL_DEV_EMAIL ?? "admin@localhost").trim();
+const nextAuthSecret = process.env.NEXTAUTH_SECRET?.trim();
+
+if (isProd && !nextAuthSecret) {
+  throw new Error("NEXTAUTH_SECRET is required in production");
+}
+
+const nonProdFallbackSecret = !isProd && !nextAuthSecret ? `dev-secret-${randomUUID()}` : undefined;
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
@@ -67,5 +76,5 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   pages: {
     signIn: "/login",
   },
-  secret: process.env.NEXTAUTH_SECRET ?? "seo-dashboard-secret-2026",
+  secret: nextAuthSecret ?? nonProdFallbackSecret,
 });

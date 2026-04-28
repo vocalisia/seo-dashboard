@@ -32,19 +32,16 @@ export default function RefreshPage() {
   const [optimizing, setOptimizing] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<RefreshSuggestion[]>([]);
 
-  useEffect(() => { void fetchSites(); }, []);
-  useEffect(() => { if (selectedSite) void fetchDeclining(); }, [selectedSite]);
-
-  async function fetchSites() {
+  const fetchSites = async () => {
     try {
       const res = await fetch("/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
       if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
     } catch { /* ignore */ }
-  }
+  };
 
-  async function fetchDeclining() {
+  const fetchDeclining = async () => {
     if (!selectedSite) return;
     setLoading(true);
     try {
@@ -54,7 +51,12 @@ export default function RefreshPage() {
       setSuggestions(d.suggestions ?? []);
     } catch { setDeclining([]); }
     setLoading(false);
-  }
+  };
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void fetchSites(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (selectedSite) void fetchDeclining(); }, [selectedSite]);
 
   async function optimize(pageUrl: string) {
     if (!selectedSite) return;

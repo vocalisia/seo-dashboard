@@ -44,6 +44,18 @@ describe("buildPublishedArticleUrl", () => {
     expect(blogPathForLocale(null, "fr")).toBe("/blog");
   });
 
+  it("respects publicUrlOverride when present", () => {
+    const cfg: SiteRepoConfig = {
+      repo: "x/y",
+      articlePath: "content/blog",
+      format: "mdx",
+      publicUrlOverride: "https://vocalis.blog",
+    };
+    expect(buildPublishedArticleUrl("https://vocalis.pro", "voice ai", "fr", cfg, d)).toBe(
+      `https://vocalis.blog/blog/voice-ai-${d}`
+    );
+  });
+
   it("normalizeAutopilotMarkdownLinks adds leading slash for locale paths", () => {
     const cfg: SiteRepoConfig = {
       repo: "x/y",

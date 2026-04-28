@@ -30,19 +30,16 @@ export default function TrackerPage() {
   const [data, setData] = useState<TrackerData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => { void fetchSites(); }, []);
-  useEffect(() => { if (selectedSite) void fetchData(); }, [selectedSite]);
-
-  async function fetchSites() {
+  const fetchSites = async () => {
     try {
       const res = await fetch("/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
       if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
     } catch { /* ignore */ }
-  }
+  };
 
-  async function fetchData() {
+  const fetchData = async () => {
     if (!selectedSite) return;
     setLoading(true);
     try {
@@ -51,7 +48,12 @@ export default function TrackerPage() {
       setData(d);
     } catch { setData(null); }
     setLoading(false);
-  }
+  };
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void fetchSites(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (selectedSite) void fetchData(); }, [selectedSite]);
 
   // Mini sparkline chart (pure CSS)
   function Sparkline({ values, color = "emerald", inverted = false }: { values: number[]; color?: string; inverted?: boolean }) {
