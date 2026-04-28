@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "./providers";
 import { DevExtensionErrorGuard } from "@/components/dev-extension-error-guard";
+import { AIAssistant } from "@/components/AIAssistant";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,6 +33,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <DevExtensionErrorGuard />
         <AuthProvider>{children}</AuthProvider>
+        <AIAssistant />
       </body>
     </html>
   );
