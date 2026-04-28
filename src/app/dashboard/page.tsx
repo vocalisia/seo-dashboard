@@ -416,6 +416,24 @@ export default function DashboardPage() {
           <Link href="/scanner" className="bg-gradient-to-r from-cyan-600/20 to-blue-600/20 hover:from-cyan-600/40 hover:to-blue-600/40 text-cyan-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-cyan-800/50">
             🔮 Scanner
           </Link>
+          <Link href="/striking-distance" className="bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
+            🎯 Striking
+          </Link>
+          <Link href="/cannibalization-hhi" className="bg-red-600/20 hover:bg-red-600/40 text-red-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            ⚔️ Cannibal HHI
+          </Link>
+          <Link href="/cross-domain-cannibal" className="bg-pink-600/20 hover:bg-pink-600/40 text-pink-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
+            🌐 Cross-domain
+          </Link>
+          <Link href="/ctr-anomaly" className="bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            📉 CTR anomaly
+          </Link>
+          <Link href="/content-decay" className="bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
+            📊 Decay
+          </Link>
+          <Link href="/aio-detector" className="bg-gradient-to-r from-cyan-600/20 to-purple-600/20 hover:from-cyan-600/40 hover:to-purple-600/40 text-cyan-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-cyan-800/30">
+            ✨ AIO
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
