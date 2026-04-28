@@ -370,7 +370,7 @@ export default function OpportunitiesPage() {
                             </div>
                           </td>
                           <td className="py-3 px-4 text-right text-gray-400">{row.clicks.toLocaleString()}</td>
-                          <td className="py-3 px-4 text-right text-gray-400">{row.avgPosition}</td>
+                          <td className="py-3 px-4 text-right text-gray-400">{Number(row.avgPosition).toFixed(1)}</td>
                         </tr>
                       ))}
                     </tbody>

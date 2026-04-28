@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2, Search, Zap, TrendingUp, ExternalLink, Target } from "lucide-react";
 import Link from "next/link";
 
@@ -46,7 +47,10 @@ const DIFF_COLOR: Record<string, string> = {
   hard: "text-red-400",
 };
 
+interface Notification { type: "success" | "error"; text: string; }
+
 export default function CompetitorsPage() {
+  const router = useRouter();
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSite, setSelectedSite] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -54,14 +58,8 @@ export default function CompetitorsPage() {
   const [cached, setCached] = useState<KeywordGap[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [generating, setGenerating] = useState<string | null>(null);
-
-  useEffect(() => {
-    void fetchSites();
-  }, []);
-
-  useEffect(() => {
-    if (selectedSite) void fetchCached();
-  }, [selectedSite]);
+  const [notification, setNotification] = useState<Notification | null>(null);
+  const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function fetchSites() {
     try {
@@ -108,6 +106,12 @@ export default function CompetitorsPage() {
     setLoading(false);
   }
 
+  function showNotification(type: "success" | "error", text: string) {
+    if (notifTimerRef.current) clearTimeout(notifTimerRef.current);
+    setNotification({ type, text });
+    notifTimerRef.current = setTimeout(() => setNotification(null), 4000);
+  }
+
   async function generateArticle(keyword: string) {
     if (!selectedSite) return;
     setGenerating(keyword);
@@ -119,17 +123,42 @@ export default function CompetitorsPage() {
       });
       const d = await res.json() as { success: boolean };
       if (d.success) {
-        alert(`Article preview créé pour "${keyword}" → va dans /autopilot pour voir`);
+        showNotification("success", `Article preview créé pour "${keyword}"`);
+        router.push("/autopilot");
+      } else {
+        showNotification("error", "Échec de la création de l'article.");
       }
-    } catch { /* ignore */ }
+    } catch {
+      showNotification("error", "Erreur réseau.");
+    }
     setGenerating(null);
   }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchSites();
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (selectedSite) void fetchCached();
+  }, [selectedSite]);
 
   const gaps = result?.gaps ?? cached;
   const totalVolume = gaps.reduce((s, g) => s + g.volume, 0);
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
+      {/* Toast notification */}
+      {notification && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg border text-sm ${
+          notification.type === "success"
+            ? "bg-green-900/90 border-green-700 text-green-200"
+            : "bg-red-900/90 border-red-700 text-red-200"
+        }`}>
+          {notification.text}
+        </div>
+      )}
       {/* Header */}
       <div className="border-b border-gray-800 px-6 py-4 flex items-center gap-4">
         <Link href="/dashboard" className="flex items-center gap-2 text-gray-400 hover:text-gray-100 transition-colors">

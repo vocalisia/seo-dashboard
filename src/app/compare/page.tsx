@@ -34,6 +34,37 @@ function DeltaCell({ a, b, inverted = false }: { a: number; b: number; inverted?
   );
 }
 
+function StatRow({ label, valA, valB, inverted = false, format = "number" }: {
+  label: string; valA: number; valB: number; inverted?: boolean; format?: string;
+}) {
+  const fmtA = format === "decimal" ? valA.toFixed(1) : valA.toLocaleString();
+  const fmtB = format === "decimal" ? valB.toFixed(1) : valB.toLocaleString();
+  const betterA = inverted ? valA < valB : valA > valB;
+  const betterB = inverted ? valB < valA : valB > valA;
+
+  return (
+    <div className="grid grid-cols-[1fr_100px_80px_100px_1fr] items-center py-3 border-b border-gray-800/50">
+      <div className={`text-right text-sm font-semibold ${betterA ? "text-emerald-400" : "text-white"}`}>
+        {fmtA}
+      </div>
+      <div className="text-center">
+        {betterA ? <TrendingUp className="w-3.5 h-3.5 text-emerald-400 mx-auto" /> :
+         betterB ? <TrendingDown className="w-3.5 h-3.5 text-red-400 mx-auto" /> :
+         <span className="text-gray-600">—</span>}
+      </div>
+      <div className="text-center text-xs text-gray-400 font-medium">{label}</div>
+      <div className="text-center">
+        {betterB ? <TrendingUp className="w-3.5 h-3.5 text-emerald-400 mx-auto" /> :
+         betterA ? <TrendingDown className="w-3.5 h-3.5 text-red-400 mx-auto" /> :
+         <span className="text-gray-600">—</span>}
+      </div>
+      <div className={`text-left text-sm font-semibold ${betterB ? "text-emerald-400" : "text-white"}`}>
+        {fmtB}
+      </div>
+    </div>
+  );
+}
+
 export default function ComparePage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [siteA, setSiteA] = useState<number | null>(null);
@@ -41,20 +72,23 @@ export default function ComparePage() {
   const [data, setData] = useState<CompareData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => { void fetchSites(); }, []);
-
   async function fetchSites() {
     try {
       const res = await fetch("/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
+      setSites(list);
       if (list.length >= 2) {
-        setSites(list);
         setSiteA(list[0].id);
         setSiteB(list[1].id);
       }
     } catch { /* ignore */ }
   }
+
+  useEffect(() => {
+    const id = setTimeout(() => { void fetchSites(); }, 0);
+    return () => clearTimeout(id);
+  }, []);
 
   async function compare() {
     if (!siteA || !siteB) return;
@@ -65,37 +99,6 @@ export default function ComparePage() {
       if (d.success) setData(d);
     } catch { setData(null); }
     setLoading(false);
-  }
-
-  function StatRow({ label, valA, valB, inverted = false, format = "number" }: {
-    label: string; valA: number; valB: number; inverted?: boolean; format?: string;
-  }) {
-    const fmtA = format === "decimal" ? valA.toFixed(1) : valA.toLocaleString();
-    const fmtB = format === "decimal" ? valB.toFixed(1) : valB.toLocaleString();
-    const betterA = inverted ? valA < valB : valA > valB;
-    const betterB = inverted ? valB < valA : valB > valA;
-
-    return (
-      <div className="grid grid-cols-[1fr_100px_80px_100px_1fr] items-center py-3 border-b border-gray-800/50">
-        <div className={`text-right text-sm font-semibold ${betterA ? "text-emerald-400" : "text-white"}`}>
-          {fmtA}
-        </div>
-        <div className="text-center">
-          {betterA ? <TrendingUp className="w-3.5 h-3.5 text-emerald-400 mx-auto" /> :
-           betterB ? <TrendingDown className="w-3.5 h-3.5 text-red-400 mx-auto" /> :
-           <span className="text-gray-600">—</span>}
-        </div>
-        <div className="text-center text-xs text-gray-400 font-medium">{label}</div>
-        <div className="text-center">
-          {betterB ? <TrendingUp className="w-3.5 h-3.5 text-emerald-400 mx-auto" /> :
-           betterA ? <TrendingDown className="w-3.5 h-3.5 text-red-400 mx-auto" /> :
-           <span className="text-gray-600">—</span>}
-        </div>
-        <div className={`text-left text-sm font-semibold ${betterB ? "text-emerald-400" : "text-white"}`}>
-          {fmtB}
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -109,6 +112,12 @@ export default function ComparePage() {
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+        {sites.length < 2 && (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl px-5 py-4 text-sm text-gray-400">
+            Tu dois avoir au moins 2 sites pour comparer. Ajoute-en via{" "}
+            <Link href="/dashboard" className="text-blue-400 hover:text-blue-300 underline">Dashboard</Link>.
+          </div>
+        )}
         {/* Selectors */}
         <div className="flex items-center gap-4 justify-center">
           <select value={siteA ?? ""} onChange={(e) => setSiteA(parseInt(e.target.value, 10))}

@@ -524,7 +524,11 @@ export default function DashboardPage() {
                   {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
                   <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
                   <span className="font-semibold">{site.name}</span>
-                  <span className="text-xs text-gray-500 hidden md:block">{site.url}</span>
+                  <a href={site.url} target="_blank" rel="noopener noreferrer"
+                    className="hidden md:block text-xs text-gray-400 hover:text-blue-400"
+                    onClick={(e) => e.stopPropagation()}>
+                    {site.url}
+                  </a>
                   {top10 > 0 && isOpen && (
                     <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">{top10} top10</span>
                   )}

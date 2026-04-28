@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Layers, Zap, TrendingUp } from "lucide-react";
+import { ArrowLeft, Loader2, Layers, Zap, TrendingUp, ExternalLink } from "lucide-react";
 import Link from "next/link";
 
-interface Site { id: number; name: string; }
+interface Site { id: number; name: string; url: string; }
 
 interface Cluster {
   id?: number;
@@ -30,9 +30,6 @@ export default function ClustersPage() {
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => { void fetchSites(); }, []);
-  useEffect(() => { if (selectedSite) void fetchCached(); }, [selectedSite]);
 
   async function fetchSites() {
     try {
@@ -85,6 +82,9 @@ export default function ClustersPage() {
     setGenerating(false);
   }
 
+  useEffect(() => { void fetchSites(); }, []); // eslint-disable-line react-hooks/set-state-in-effect
+  useEffect(() => { if (selectedSite) void fetchCached(); }, [selectedSite]); // eslint-disable-line react-hooks/set-state-in-effect
+
   const totalKw = clusters.reduce((s, c) => s + (c.keywords?.length ?? 0), 0);
   const totalImpr = clusters.reduce((s, c) => s + (c.total_impressions ?? 0), 0);
 
@@ -107,6 +107,15 @@ export default function ClustersPage() {
           >
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
+          {(() => {
+            const current = sites.find((s) => s.id === selectedSite);
+            return current?.url ? (
+              <a href={current.url} target="_blank" rel="noopener noreferrer"
+                className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-sm">
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            ) : null;
+          })()}
           <button
             onClick={generateClusters}
             disabled={generating}

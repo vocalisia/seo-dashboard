@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { NicheScanResult } from "@/lib/youtube";
 import Link from "next/link";
+import Image from "next/image";
 
 const DEFAULT_NICHES = [
   "automatisation ia revenus",
@@ -55,7 +56,7 @@ function NicheCard({ result }: { result: NicheScanResult }) {
     return (
       <div className="bg-gray-900 border border-red-500/30 rounded-xl p-5">
         <div className="flex items-center gap-3">
-          <span className="text-red-400 font-semibold">"{result.keyword}"</span>
+          <span className="text-red-400 font-semibold">&quot;{result.keyword}&quot;</span>
           <span className="text-red-400 text-sm">— {result.error}</span>
         </div>
       </div>
@@ -68,7 +69,7 @@ function NicheCard({ result }: { result: NicheScanResult }) {
       <div className="p-5 border-b border-gray-800">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1">
-            <h3 className="text-lg font-bold text-white mb-1">"{result.keyword}"</h3>
+            <h3 className="text-lg font-bold text-white mb-1">&quot;{result.keyword}&quot;</h3>
             <p className="text-sm text-gray-400">{result.recommendation}</p>
           </div>
           <OpportunityBadge score={result.opportunityScore} />
@@ -133,8 +134,7 @@ function NicheCard({ result }: { result: NicheScanResult }) {
                 {result.topChannels.map((ch) => (
                   <div key={ch.id} className="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg">
                     {ch.thumbnail && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={ch.thumbnail} alt={ch.name} className="w-8 h-8 rounded-full" />
+                      <Image src={ch.thumbnail} alt={ch.name} width={32} height={32} className="rounded-full" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white truncate">{ch.name}</p>
@@ -166,8 +166,7 @@ function NicheCard({ result }: { result: NicheScanResult }) {
                 {result.recentTopVideos.map((v) => (
                   <div key={v.id} className="flex items-center gap-3 p-3 bg-gray-800/50 rounded-lg">
                     {v.thumbnail && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={v.thumbnail} alt={v.title} className="w-16 h-10 rounded object-cover flex-shrink-0" />
+                      <Image src={v.thumbnail} alt={v.title} width={64} height={40} className="rounded object-cover flex-shrink-0" />
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white line-clamp-1">{v.title}</p>

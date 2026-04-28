@@ -49,9 +49,7 @@ export default function ReportsPage() {
   const [generating, setGenerating] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
 
-  useEffect(() => { fetchReports(); }, []);
-
-  async function fetchReports() {
+  const fetchReports = async () => {
     setLoading(true);
     try {
       const res = await fetch("/api/reports");
@@ -59,13 +57,14 @@ export default function ReportsPage() {
       if (Array.isArray(data)) setReports(data);
     } catch { /* ignore */ }
     setLoading(false);
-  }
+  };
+
+  useEffect(() => { setTimeout(() => { void fetchReports(); }, 0); }, []);
 
   async function generateNow() {
     setGenerating(true);
     try {
-      await fetch("/api/reports/generate", { method: "POST" });
-      // Also init DB in case table doesn't exist
+      // Init DB in case table doesn't exist, then generate
       await fetch("/api/init", { method: "POST" });
       await fetch("/api/reports/generate", { method: "POST" });
       await fetchReports();
@@ -98,7 +97,7 @@ export default function ReportsPage() {
           <div className="text-center py-20">
             <FileText className="w-12 h-12 text-gray-700 mx-auto mb-4" />
             <p className="text-gray-500 mb-2">Aucun rapport généré</p>
-            <p className="text-gray-600 text-sm mb-6">Les rapports sont générés automatiquement chaque lundi à 8h.<br />Clique sur "Générer maintenant" pour créer le premier rapport.</p>
+            <p className="text-gray-600 text-sm mb-6">Les rapports sont générés automatiquement chaque lundi à 8h.<br />Clique sur &quot;Générer maintenant&quot; pour créer le premier rapport.</p>
             <button onClick={generateNow} disabled={generating}
               className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-xl text-sm font-medium flex items-center gap-2 mx-auto disabled:opacity-50">
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />}

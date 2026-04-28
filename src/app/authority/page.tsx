@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Shield, BarChart3 } from "lucide-react";
+import { ArrowLeft, Loader2, Shield, BarChart3, ExternalLink } from "lucide-react";
 import Link from "next/link";
 
-interface Site { id: number; name: string; }
+interface Site { id: number; name: string; url: string; }
 
 interface AuthorityData {
   success: boolean;
@@ -63,14 +63,16 @@ function ScoreRing({ score, label, color }: { score: number; label: string; colo
   const offset = circ - (score / 100) * circ;
   return (
     <div className="flex flex-col items-center gap-2">
-      <svg width="100" height="100" className="transform -rotate-90">
-        <circle cx="50" cy="50" r={r} fill="none" stroke="#1f2937" strokeWidth="8" />
-        <circle cx="50" cy="50" r={r} fill="none" stroke={color} strokeWidth="8"
-          strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
-          className="transition-all duration-1000" />
-      </svg>
-      <div className="absolute mt-8 text-2xl font-bold text-white">{Math.round(score)}</div>
-      <div className="text-xs text-gray-400 -mt-1">{label}</div>
+      <div className="relative w-[100px] h-[100px]">
+        <svg width="100" height="100" className="transform -rotate-90">
+          <circle cx="50" cy="50" r={r} fill="none" stroke="#1f2937" strokeWidth="8" />
+          <circle cx="50" cy="50" r={r} fill="none" stroke={color} strokeWidth="8"
+            strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+            className="transition-all duration-1000" />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center text-2xl font-bold text-white">{Math.round(score)}</div>
+      </div>
+      <div className="text-xs text-gray-400">{label}</div>
     </div>
   );
 }
@@ -80,10 +82,8 @@ export default function AuthorityPage() {
   const [selectedSite, setSelectedSite] = useState<number | null>(null);
   const [data, setData] = useState<AuthorityData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingAll, setLoadingAll] = useState(false);
   const [allScores, setAllScores] = useState<{ site: string; overall: number; id: number }[]>([]);
-
-  useEffect(() => { void fetchSites(); }, []);
-  useEffect(() => { if (selectedSite) void fetchAuthority(); }, [selectedSite]);
 
   async function fetchSites() {
     try {
@@ -93,30 +93,50 @@ export default function AuthorityPage() {
       if (list.length > 0) {
         setSites(list);
         if (!selectedSite) setSelectedSite(list[0].id);
-        // Fetch all scores for ranking
-        const scores = [];
-        for (const s of list.slice(0, 16)) {
-          try {
-            const r = await fetch(`/api/topical-authority?site_id=${s.id}`);
-            const dd = normalizeAuthorityData(await r.json() as AuthorityData);
-            if (dd.success) scores.push({ site: s.name, overall: dd.scores_ui?.overall ?? 0, id: s.id });
-          } catch { /* skip */ }
+        // Fetch all scores in parallel (chunks of 4)
+        setLoadingAll(true);
+        const batch = list.slice(0, 16);
+        const results: { site: string; overall: number; id: number }[] = [];
+        for (let i = 0; i < batch.length; i += 4) {
+          const chunk = batch.slice(i, i + 4);
+          const settled = await Promise.all(
+            chunk.map(async (s) => {
+              const ctrl = new AbortController();
+              const timeout = setTimeout(() => ctrl.abort(), 15000);
+              try {
+                const r = await fetch(`/api/topical-authority?site_id=${s.id}`, { signal: ctrl.signal });
+                const dd = normalizeAuthorityData(await r.json() as AuthorityData);
+                return dd.success ? { site: s.name, overall: dd.scores_ui?.overall ?? 0, id: s.id } : null;
+              } catch { return null; }
+              finally { clearTimeout(timeout); }
+            })
+          );
+          for (const r of settled) { if (r) results.push(r); }
         }
-        setAllScores(scores.sort((a, b) => b.overall - a.overall));
+        setAllScores(results.sort((a, b) => b.overall - a.overall));
+        setLoadingAll(false);
       }
-    } catch { /* ignore */ }
+    } catch { setLoadingAll(false); }
   }
 
   async function fetchAuthority() {
     if (!selectedSite) return;
     setLoading(true);
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 15000);
     try {
-      const res = await fetch(`/api/topical-authority?site_id=${selectedSite}`);
+      const res = await fetch(`/api/topical-authority?site_id=${selectedSite}`, { signal: ctrl.signal });
       const d = normalizeAuthorityData(await res.json() as AuthorityData);
       if (d.success) setData(d);
     } catch { setData(null); }
+    finally { clearTimeout(timeout); }
     setLoading(false);
   }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void fetchSites(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (selectedSite) void fetchAuthority(); }, [selectedSite]);
 
   const scoreColor = (s: number) => s >= 70 ? "#22c55e" : s >= 40 ? "#eab308" : "#ef4444";
 
@@ -139,6 +159,20 @@ export default function AuthorityPage() {
           >
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
+          {(() => {
+            const current = sites.find((s) => s.id === selectedSite);
+            return current?.url ? (
+              <a href={current.url} target="_blank" rel="noopener noreferrer"
+                className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-sm">
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            ) : null;
+          })()}
+          {loadingAll && (
+            <div className="flex items-center gap-2 text-xs text-gray-400">
+              <Loader2 className="w-4 h-4 animate-spin" /> Chargement classement...
+            </div>
+          )}
         </div>
 
         {loading ? (
@@ -150,18 +184,10 @@ export default function AuthorityPage() {
             {/* Score rings */}
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-8">
               <div className="flex justify-center gap-12">
-                <div className="relative flex flex-col items-center">
-                  <ScoreRing score={data.scores_ui?.overall ?? 0} label="Score Global" color={scoreColor(data.scores_ui?.overall ?? 0)} />
-                </div>
-                <div className="relative flex flex-col items-center">
-                  <ScoreRing score={data.scores_ui?.coverage ?? 0} label="Couverture" color={scoreColor(data.scores_ui?.coverage ?? 0)} />
-                </div>
-                <div className="relative flex flex-col items-center">
-                  <ScoreRing score={data.scores_ui?.authority ?? 0} label="Autorité" color={scoreColor(data.scores_ui?.authority ?? 0)} />
-                </div>
-                <div className="relative flex flex-col items-center">
-                  <ScoreRing score={data.scores_ui?.content ?? 0} label="Contenu" color={scoreColor(data.scores_ui?.content ?? 0)} />
-                </div>
+                <ScoreRing score={data.scores_ui?.overall ?? 0} label="Score Global" color={scoreColor(data.scores_ui?.overall ?? 0)} />
+                <ScoreRing score={data.scores_ui?.coverage ?? 0} label="Couverture" color={scoreColor(data.scores_ui?.coverage ?? 0)} />
+                <ScoreRing score={data.scores_ui?.authority ?? 0} label="Autorité" color={scoreColor(data.scores_ui?.authority ?? 0)} />
+                <ScoreRing score={data.scores_ui?.content ?? 0} label="Contenu" color={scoreColor(data.scores_ui?.content ?? 0)} />
               </div>
             </div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { ArrowLeft, Loader2, Radar, Rocket, TrendingUp, DollarSign, Globe, Zap } from "lucide-react";
 import Link from "next/link";
 
@@ -74,6 +74,47 @@ const TYPE_ICON: Record<string, string> = {
   blog: "📝", magazine: "📰", "e-commerce": "🛒", saas: "💻", directory: "📁",
 };
 
+type DiscoveryMode = "A" | "B" | "C";
+
+const COUNTRY_OPTIONS: { code: string; flag: string; label: string }[] = [
+  { code: "GLOBAL", flag: "🌍", label: "Global / Anglo" },
+  { code: "FR", flag: "🇫🇷", label: "France" },
+  { code: "GB", flag: "🇬🇧", label: "United Kingdom" },
+  { code: "DE", flag: "🇩🇪", label: "Deutschland" },
+  { code: "ES", flag: "🇪🇸", label: "España + LATAM" },
+  { code: "IT", flag: "🇮🇹", label: "Italia" },
+  { code: "CH", flag: "🇨🇭", label: "Suisse" },
+  { code: "CA", flag: "🇨🇦", label: "Canada" },
+  { code: "BR", flag: "🇧🇷", label: "Brasil" },
+  { code: "JP", flag: "🇯🇵", label: "日本" },
+];
+
+const CATEGORY_OPTIONS: { code: string; emoji: string; label: string; hint: string }[] = [
+  { code: "ALL", emoji: "🎯", label: "Toutes catégories", hint: "Aucun filtre" },
+  { code: "e-commerce", emoji: "🛒", label: "E-commerce", hint: "Produits physiques, dropshipping, marques DTC" },
+  { code: "saas", emoji: "💻", label: "SaaS", hint: "Logiciels, outils, abonnements B2B/B2C" },
+  { code: "blog", emoji: "📝", label: "Blog", hint: "Contenu informationnel monétisé pubs/affiliation" },
+  { code: "magazine", emoji: "📰", label: "Magazine", hint: "Édito haut volume, multi-auteurs" },
+  { code: "directory", emoji: "📁", label: "Annuaire", hint: "Listings, lead-gen, comparateurs" },
+  { code: "course", emoji: "🎓", label: "Formation", hint: "Cours en ligne, coaching, infoproduits" },
+  { code: "marketplace", emoji: "🏪", label: "Marketplace", hint: "Plateformes multi-vendeurs" },
+];
+
+const DISCOVERY_MODE_COPY: Record<DiscoveryMode, { title: string; description: string }> = {
+  A: {
+    title: "Proche de ton portefeuille actuel",
+    description: "Priorise les niches proches de tes sites et de tes signaux déjà existants.",
+  },
+  B: {
+    title: "Mix portefeuille + discovery global",
+    description: "Mélange tes signaux internes avec de la découverte externe pour sortir des mêmes idées.",
+  },
+  C: {
+    title: "Discovery global pur",
+    description: "Cherche partout les opportunités, même loin de ton portefeuille actuel.",
+  },
+};
+
 export default function ScannerPage() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(false);
@@ -84,9 +125,143 @@ export default function ScannerPage() {
     time_to_page1_months: number; content_gaps: string[]; quick_wins: string[];
     strategy_recommendation: string;
   }>>({});
-  const [deployResult, setDeployResult] = useState<string | null>(null);
+  const [deployMsg, setDeployMsg] = useState<string | null>(null);
+  const [loadCompetitorsMsg, setLoadCompetitorsMsg] = useState<string | null>(null);
+  const [translateMsg, setTranslateMsg] = useState<string | null>(null);
+  const [autoLoadProgress, setAutoLoadProgress] = useState<{ current: number; total: number } | null>(null);
+  const pausedRef = useRef(false);
+  const [discoveryMode, setDiscoveryMode] = useState<DiscoveryMode>("B");
+  const [countries, setCountries] = useState<string[]>(["GLOBAL"]);
+  const [categories, setCategories] = useState<string[]>(["ALL"]);
+
+  function toggleCountry(code: string) {
+    setCountries((prev) => {
+      if (code === "GLOBAL") return ["GLOBAL"];
+      const without = prev.filter((c) => c !== "GLOBAL");
+      if (without.includes(code)) {
+        const next = without.filter((c) => c !== code);
+        return next.length === 0 ? ["GLOBAL"] : next;
+      }
+      return [...without, code];
+    });
+  }
+
+  function toggleCategory(code: string) {
+    setCategories((prev) => {
+      if (code === "ALL") return ["ALL"];
+      const without = prev.filter((c) => c !== "ALL");
+      if (without.includes(code)) {
+        const next = without.filter((c) => c !== code);
+        return next.length === 0 ? ["ALL"] : next;
+      }
+      return [...without, code];
+    });
+  }
+  const [translations, setTranslations] = useState<Record<number, {
+    niche?: string; reason?: string; seed_articles?: string[]; sample_queries?: string[];
+    business_model_type?: string; business_model_how_to_monetize?: string;
+  }>>({});
+  const [translating, setTranslating] = useState<number | null>(null);
+  const [loadingCompetitors, setLoadingCompetitors] = useState<number | null>(null);
+  const [competitorsCache, setCompetitorsCache] = useState<Record<number, { url: string; name: string }[]>>({});
+
+  async function loadCompetitors(oppId: number) {
+    setLoadingCompetitors(oppId);
+    setLoadCompetitorsMsg(null);
+    try {
+      const res = await fetch("/api/opportunities/competitors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ opportunity_id: oppId }),
+      });
+      const d = await res.json();
+      if (d.success && Array.isArray(d.competitors)) {
+        setCompetitorsCache((prev) => ({ ...prev, [oppId]: d.competitors }));
+        if (d.competitors.length === 0) {
+          setLoadCompetitorsMsg("Aucun concurrent trouvé via Google. Réessaie ou regarde manuellement.");
+        }
+      } else {
+        setLoadCompetitorsMsg(d.error ?? "Échec du chargement des concurrents.");
+      }
+    } catch {
+      setLoadCompetitorsMsg("Erreur réseau pendant le chargement des concurrents.");
+    } finally {
+      setLoadingCompetitors(null);
+    }
+  }
+
+  async function translateOpp(oppId: number) {
+    setTranslating(oppId);
+    setTranslateMsg(null);
+    try {
+      const res = await fetch("/api/opportunities/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ opportunity_id: oppId, target: "fr" }),
+      });
+      const d = await res.json();
+      if (d.success && d.translated) {
+        setTranslations((prev) => ({ ...prev, [oppId]: d.translated }));
+      } else {
+        setTranslateMsg("La traduction a échoué.");
+      }
+    } catch {
+      setTranslateMsg("Erreur réseau pendant la traduction.");
+    } finally {
+      setTranslating(null);
+    }
+  }
+
+  function isVolumeEstimated(opp: Opportunity): boolean {
+    const src = opp.signal_source ?? "";
+    return src.includes("global-discovery") || src.includes("portfolio+global");
+  }
+
+  function googleSerpUrl(opp: Opportunity): string {
+    const kw = (opp.core_keywords?.[0]) || opp.niche;
+    return `https://www.google.com/search?q=${encodeURIComponent(kw)}`;
+  }
 
   useEffect(() => { void fetchCached(); }, []);
+
+  useEffect(() => {
+    const missing = opportunities
+      .filter((o) => (!o.competitors || o.competitors.length === 0) && !competitorsCache[o.id] && loadingCompetitors !== o.id)
+      .slice(0, 8);
+    if (missing.length === 0) return;
+
+    pausedRef.current = false;
+    let cancelled = false;
+    setAutoLoadProgress({ current: 0, total: missing.length });
+
+    (async () => {
+      for (let i = 0; i < missing.length; i++) {
+        if (cancelled || pausedRef.current) break;
+        const opp = missing[i];
+        setAutoLoadProgress({ current: i + 1, total: missing.length });
+        try {
+          const res = await fetch("/api/opportunities/competitors", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ opportunity_id: opp.id }),
+          });
+          const d = await res.json();
+          if (!cancelled && d.success && Array.isArray(d.competitors) && d.competitors.length > 0) {
+            setCompetitorsCache((prev) => ({ ...prev, [opp.id]: d.competitors }));
+          }
+        } catch {
+          // skip silently
+        }
+        await new Promise((r) => setTimeout(r, 800));
+      }
+      if (!cancelled) setAutoLoadProgress(null);
+    })();
+
+    return () => {
+      cancelled = true;
+      setAutoLoadProgress(null);
+    };
+  }, [opportunities]);
 
   async function fetchCached() {
     try {
@@ -99,16 +274,21 @@ export default function ScannerPage() {
 
   async function runScan() {
     setLoading(true);
+    setDeployMsg(null);
     try {
-      const res = await fetch("/api/opportunities/scan", { method: "POST" });
+      const res = await fetch("/api/opportunities/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ discovery_mode: discoveryMode, countries, categories }),
+      });
       if (!res.ok) {
-        setDeployResult("Le scan a échoué.");
+        setDeployMsg("Le scan a échoué.");
         return;
       }
       const d = await res.json() as { opportunities?: Opportunity[] };
       setOpportunities(d.opportunities ?? []);
     } catch {
-      setDeployResult("Erreur réseau pendant le scan.");
+      setDeployMsg("Erreur réseau pendant le scan.");
     } finally {
       setLoading(false);
     }
@@ -122,22 +302,31 @@ export default function ScannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ opportunity_id: oppId }),
       });
+      if (!res.ok) {
+        setDeployMsg(`Validation échouée (${res.status}).`);
+        return;
+      }
       const d = await res.json();
       if (d.success) {
         setValidationResults((prev) => ({ ...prev, [oppId]: d }));
+      } else {
+        setDeployMsg("La validation a échoué.");
       }
-    } catch { /* ignore */ }
-    setValidating(null);
+    } catch {
+      setDeployMsg("Erreur réseau pendant la validation.");
+    } finally {
+      setValidating(null);
+    }
   }
 
   async function deploySite(opp: Opportunity) {
     const domain = opp.suggested_domains?.[0];
     if (!domain) {
-      setDeployResult("Aucun domaine suggéré pour cette opportunité.");
+      setDeployMsg("Aucun domaine suggéré pour cette opportunité.");
       return;
     }
     setDeploying(opp.id);
-    setDeployResult(null);
+    setDeployMsg(null);
     try {
       const res = await fetch("/api/opportunities/deploy", {
         method: "POST",
@@ -145,9 +334,13 @@ export default function ScannerPage() {
         body: JSON.stringify({ opportunity_id: opp.id, domain }),
       });
       const d = await res.json() as { success: boolean; message?: string; error?: string };
-      setDeployResult(d.success ? d.message ?? "Déployé!" : d.error ?? "Erreur");
-      if (d.success) await fetchCached();
-    } catch { setDeployResult("Erreur réseau"); }
+      setDeployMsg(d.success ? d.message ?? "Déployé!" : d.error ?? "Erreur");
+    } catch { setDeployMsg("Erreur réseau"); }
+    try {
+      await fetchCached();
+    } catch {
+      // keep the deploy result message even if refresh fails
+    }
     setDeploying(null);
   }
 
@@ -166,22 +359,107 @@ export default function ScannerPage() {
 
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         {/* Scan button */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex items-center gap-4">
-          <div className="flex-1">
-            <h2 className="font-medium text-white">Détection prédictive de niches</h2>
-            <p className="text-xs text-gray-500 mt-1">
-              Analyse tes données GSC + Perplexity pour trouver des niches rentables où tu n&apos;as pas encore de site dédié.
-              Volume minimum: 5K recherches/mois. Projection trafic et revenus à 6 mois.
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
+          <div className="flex items-start gap-4">
+            <div className="flex-1">
+              <h2 className="font-medium text-white">Détection prédictive de niches</h2>
+              <p className="text-xs text-gray-500 mt-1">
+                Analyse tes données GSC + signaux externes pour trouver des niches rentables où tu n&apos;as pas encore de site dédié.
+                Volume minimum: 5K recherches/mois. Projection trafic et revenus à 6 mois.
+              </p>
+            </div>
+            <button
+              onClick={runScan}
+              disabled={loading}
+              className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Radar className="w-4 h-4" />}
+              {loading ? "Scan en cours..." : "Scanner le marché"}
+            </button>
+          </div>
+
+          <div className="border-t border-gray-800 pt-4">
+            <div className="text-xs font-medium text-gray-400 mb-2">Type de business recherché</div>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {CATEGORY_OPTIONS.map((opt) => {
+                const active = categories.includes(opt.code);
+                return (
+                  <button
+                    key={opt.code}
+                    type="button"
+                    onClick={() => toggleCategory(opt.code)}
+                    title={opt.hint}
+                    className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition ${
+                      active
+                        ? "border-fuchsia-500 bg-fuchsia-500/15 text-fuchsia-200"
+                        : "border-gray-700 bg-gray-800/40 text-gray-300 hover:border-gray-500"
+                    }`}
+                  >
+                    <span className="text-base leading-none">{opt.emoji}</span>
+                    <span>{opt.label}</span>
+                    {active && <span className="text-fuchsia-300 text-[10px]">✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="border-t border-gray-800 pt-4">
+            <div className="text-xs font-medium text-gray-400 mb-2">Marché ciblé</div>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {COUNTRY_OPTIONS.map((opt) => {
+                const active = countries.includes(opt.code);
+                return (
+                  <button
+                    key={opt.code}
+                    type="button"
+                    onClick={() => toggleCountry(opt.code)}
+                    className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition ${
+                      active
+                        ? "border-emerald-500 bg-emerald-500/15 text-emerald-200"
+                        : "border-gray-700 bg-gray-800/40 text-gray-300 hover:border-gray-500"
+                    }`}
+                  >
+                    <span className="text-base leading-none">{opt.flag}</span>
+                    <span>{opt.label}</span>
+                    {active && <span className="text-emerald-300 text-[10px]">✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-medium text-gray-400 mb-2">Mode de découverte</div>
+            <div className="grid grid-cols-3 gap-3">
+              {(["A", "B", "C"] as DiscoveryMode[]).map((mode) => {
+                const active = discoveryMode === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setDiscoveryMode(mode)}
+                    className={`rounded-xl border px-4 py-3 text-left transition ${
+                      active
+                        ? "border-cyan-500 bg-cyan-500/10"
+                        : "border-gray-700 bg-gray-800/40 hover:border-gray-500"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-sm font-bold ${active ? "text-cyan-300" : "text-gray-200"}`}>{mode}</span>
+                      <span className={`text-sm font-medium ${active ? "text-white" : "text-gray-300"}`}>
+                        {DISCOVERY_MODE_COPY[mode].title}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500">{DISCOVERY_MODE_COPY[mode].description}</p>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-cyan-300 mt-3">
+              Mode actif: <code>{discoveryMode}</code> — {DISCOVERY_MODE_COPY[discoveryMode].title}
             </p>
           </div>
-          <button
-            onClick={runScan}
-            disabled={loading}
-            className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Radar className="w-4 h-4" />}
-            {loading ? "Scan Perplexity..." : "Scanner le marché"}
-          </button>
         </div>
 
         {/* Summary */}
@@ -202,10 +480,34 @@ export default function ScannerPage() {
           </div>
         )}
 
-        {/* Deploy result */}
-        {deployResult && (
+        {/* Auto-load progress */}
+        {autoLoadProgress && (
+          <div className="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-sm text-gray-300">
+            <Loader2 className="w-4 h-4 animate-spin text-cyan-400 flex-shrink-0" />
+            <span>Chargement concurrents {autoLoadProgress.current}/{autoLoadProgress.total}...</span>
+            <button
+              onClick={() => { pausedRef.current = true; setAutoLoadProgress(null); }}
+              className="ml-auto px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs text-gray-300"
+            >
+              Pause
+            </button>
+          </div>
+        )}
+
+        {/* Deploy/scan result */}
+        {deployMsg && (
           <div className="bg-blue-900/30 border border-blue-800 rounded-lg px-4 py-3 text-sm text-blue-300">
-            {deployResult}
+            {deployMsg}
+          </div>
+        )}
+        {loadCompetitorsMsg && (
+          <div className="bg-orange-900/30 border border-orange-800 rounded-lg px-4 py-3 text-sm text-orange-300">
+            {loadCompetitorsMsg}
+          </div>
+        )}
+        {translateMsg && (
+          <div className="bg-yellow-900/30 border border-yellow-800 rounded-lg px-4 py-3 text-sm text-yellow-300">
+            {translateMsg}
           </div>
         )}
 
@@ -216,17 +518,42 @@ export default function ScannerPage() {
               <div key={opp.id ?? `opp-${idx}`} className="bg-gray-900 border border-gray-800 rounded-xl p-6">
                 {/* Header */}
                 <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <span className="text-xl">{TYPE_ICON[opp.site_type] ?? "🌐"}</span>
-                      <h3 className="text-lg font-bold text-white">{opp.niche}</h3>
+                      <h3 className="text-lg font-bold text-white">{translations[opp.id]?.niche ?? opp.niche}</h3>
                       <span className={`text-xs px-2 py-0.5 rounded ${COMP_COLOR[opp.competition] ?? ""}`}>
                         {opp.competition}
                       </span>
+                      {translations[opp.id] && (
+                        <span className="text-[10px] uppercase tracking-wider bg-cyan-900/40 text-cyan-300 rounded px-1.5 py-0.5">
+                          🇫🇷 traduit
+                        </span>
+                      )}
                     </div>
-                    <p className="text-sm text-gray-400">{opp.reason}</p>
+                    <p className="text-sm text-gray-400">{translations[opp.id]?.reason ?? opp.reason}</p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 ml-3">
+                    <div className="flex flex-col gap-1.5">
+                      <button
+                        onClick={() => translateOpp(opp.id)}
+                        disabled={translating === opp.id}
+                        title="Traduire en français"
+                        className="px-2 py-1 text-xs bg-blue-600/20 hover:bg-blue-600/40 border border-blue-700 text-blue-300 rounded flex items-center gap-1 disabled:opacity-50"
+                      >
+                        {translating === opp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <span>🇫🇷</span>}
+                        {translations[opp.id] ? "↻ FR" : "Traduire"}
+                      </button>
+                      <a
+                        href={googleSerpUrl(opp)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Voir la SERP Google sur ce mot-clé"
+                        className="px-2 py-1 text-xs bg-violet-600/20 hover:bg-violet-600/40 border border-violet-700 text-violet-300 rounded flex items-center gap-1"
+                      >
+                        🔎 Voir SERP
+                      </a>
+                    </div>
                     <div className="text-center bg-gray-800 rounded-lg px-4 py-2">
                       <div className="text-2xl font-bold text-cyan-400">{opp.confidence_score}</div>
                       <div className="text-[10px] text-gray-500">Confiance</div>
@@ -237,7 +564,15 @@ export default function ScannerPage() {
                 {/* Metrics */}
                 <div className="grid grid-cols-4 gap-3 mb-4">
                   <div className="bg-gray-800/50 rounded-lg px-3 py-2">
-                    <div className="flex items-center gap-1 text-xs text-gray-400"><Globe className="w-3 h-3" /> Volume/mois</div>
+                    <div className="flex items-center gap-1 text-xs text-gray-400">
+                      <Globe className="w-3 h-3" /> Volume/mois
+                      {isVolumeEstimated(opp) && (
+                        <span className="ml-1 text-[9px] uppercase tracking-wider bg-amber-900/40 text-amber-300 rounded px-1 py-0.5"
+                          title="Volume estimé à partir de signaux externes (Reddit/HN/PH/Trends), pas de données GSC réelles">
+                          estimé
+                        </span>
+                      )}
+                    </div>
                     <div className="text-lg font-bold text-white">{(opp.monthly_volume || 0).toLocaleString()}</div>
                   </div>
                   <div className="bg-gray-800/50 rounded-lg px-3 py-2">
@@ -328,7 +663,7 @@ export default function ScannerPage() {
                       📡 Requêtes sources ({opp.sample_queries.length})
                     </summary>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {opp.sample_queries.map((query, i) => (
+                      {(translations[opp.id]?.sample_queries ?? opp.sample_queries).map((query, i) => (
                         <span key={i} className="bg-cyan-900/20 border border-cyan-900/40 rounded px-2 py-0.5 text-xs text-cyan-200">
                           {query}
                         </span>
@@ -406,9 +741,13 @@ export default function ScannerPage() {
                   <div className="bg-gradient-to-r from-gray-800/80 to-gray-800/40 border border-gray-700 rounded-xl p-4 mb-4">
                     <div className="flex items-center gap-2 mb-2">
                       <span className="text-base">💼</span>
-                      <span className="text-sm font-semibold text-white">{opp.business_model.type}</span>
+                      <span className="text-sm font-semibold text-white">
+                        {translations[opp.id]?.business_model_type ?? opp.business_model.type}
+                      </span>
                     </div>
-                    <p className="text-xs text-gray-400 mb-3">{opp.business_model.how_to_monetize}</p>
+                    <p className="text-xs text-gray-400 mb-3">
+                      {translations[opp.id]?.business_model_how_to_monetize ?? opp.business_model.how_to_monetize}
+                    </p>
 
                     <div className="grid grid-cols-3 gap-2 mb-3">
                       {(opp.business_model.ad_revenue_estimate ?? 0) > 0 && (
@@ -483,17 +822,33 @@ export default function ScannerPage() {
                 </div>
 
                 {/* Competitors */}
-                {opp.competitors && opp.competitors.length > 0 && (
-                  <div className="flex items-center gap-2 mb-3 text-xs flex-wrap">
-                    <span className="text-gray-500">Concurrents:</span>
-                    {opp.competitors.map((c, i) => (
-                      <a key={i} href={c.url} target="_blank" rel="noopener noreferrer"
-                        className="text-red-400 bg-red-900/20 hover:bg-red-900/40 rounded px-2 py-0.5 underline decoration-red-800 hover:decoration-red-400 transition-colors">
-                        {c.name || c.url.replace(/^https?:\/\//, '').split('/')[0]}
-                      </a>
-                    ))}
-                  </div>
-                )}
+                {(() => {
+                  const competitors = competitorsCache[opp.id] ?? opp.competitors ?? [];
+                  return (
+                    <div className="flex items-center gap-2 mb-3 text-xs flex-wrap">
+                      <span className="text-gray-500">Concurrents:</span>
+                      {competitors.length > 0 ? (
+                        competitors.map((c, i) => (
+                          <a key={i} href={c.url} target="_blank" rel="noopener noreferrer"
+                            className="text-red-400 bg-red-900/20 hover:bg-red-900/40 rounded px-2 py-0.5 underline decoration-red-800 hover:decoration-red-400 transition-colors">
+                            {c.name || c.url.replace(/^https?:\/\//, '').split('/')[0]}
+                          </a>
+                        ))
+                      ) : (
+                        <span className="text-gray-600 italic">aucun pour l&apos;instant</span>
+                      )}
+                      <button
+                        onClick={() => loadCompetitors(opp.id)}
+                        disabled={loadingCompetitors === opp.id}
+                        className="ml-1 px-2 py-0.5 bg-orange-600/20 hover:bg-orange-600/40 border border-orange-700 text-orange-300 rounded text-xs flex items-center gap-1 disabled:opacity-50"
+                        title="Scrape Google pour récupérer les vrais concurrents"
+                      >
+                        {loadingCompetitors === opp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <span>🌐</span>}
+                        {competitors.length > 0 ? "↻ Actualiser" : "Charger"}
+                      </button>
+                    </div>
+                  );
+                })()}
 
                 {/* Domains */}
                 <div className="flex items-center gap-2 mb-3 text-xs">
@@ -513,7 +868,7 @@ export default function ScannerPage() {
                     📝 {(opp.seed_articles || []).length} articles de démarrage
                   </summary>
                   <div className="mt-2 space-y-1">
-                    {(opp.seed_articles || []).map((title, i) => (
+                    {(translations[opp.id]?.seed_articles ?? opp.seed_articles ?? []).map((title, i) => (
                       <div key={i} className="text-xs text-gray-400 bg-gray-800/30 rounded px-3 py-1.5">{title}</div>
                     ))}
                   </div>

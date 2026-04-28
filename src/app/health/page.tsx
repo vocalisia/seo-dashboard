@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, HeartPulse, CheckCircle, AlertTriangle, XCircle, Link2 } from "lucide-react";
+import { ArrowLeft, Loader2, HeartPulse, CheckCircle, AlertTriangle, XCircle, Link2, ExternalLink } from "lucide-react";
 import Link from "next/link";
 
-interface Site { id: number; name: string; }
+interface Site { id: number; name: string; url: string; }
 
 interface HealthData {
   success: boolean;
@@ -54,9 +54,7 @@ export default function HealthPage() {
   const [loadingH, setLoadingH] = useState(false);
   const [loadingB, setLoadingB] = useState(false);
   const [allGrades, setAllGrades] = useState<{ name: string; grade: string; score: number; id: number }[]>([]);
-
-  useEffect(() => { void fetchSites(); }, []);
-  useEffect(() => { if (selectedSite) { void fetchHealth(); } }, [selectedSite]);
+  const [loadingAll, setLoadingAll] = useState(false);
 
   async function fetchSites() {
     try {
@@ -66,28 +64,42 @@ export default function HealthPage() {
       if (list.length > 0) {
         setSites(list);
         if (!selectedSite) setSelectedSite(list[0].id);
-        // Fetch all grades
-        const grades = [];
-        for (const s of list.slice(0, 16)) {
-          try {
-            const r = await fetch(`/api/seo-health?site_id=${s.id}`);
-            const dd = await r.json() as HealthData;
-            if (dd.success) grades.push({ name: s.name, grade: dd.grade, score: dd.overall_score, id: s.id });
-          } catch { /* skip */ }
+        setLoadingAll(true);
+        const batch = list.slice(0, 16);
+        const results: { name: string; grade: string; score: number; id: number }[] = [];
+        for (let i = 0; i < batch.length; i += 4) {
+          const chunk = batch.slice(i, i + 4);
+          const settled = await Promise.all(
+            chunk.map(async (s) => {
+              const ctrl = new AbortController();
+              const timeout = setTimeout(() => ctrl.abort(), 15000);
+              try {
+                const r = await fetch(`/api/seo-health?site_id=${s.id}`, { signal: ctrl.signal });
+                const dd = await r.json() as HealthData;
+                return dd.success ? { name: s.name, grade: dd.grade, score: dd.overall_score, id: s.id } : null;
+              } catch { return null; }
+              finally { clearTimeout(timeout); }
+            })
+          );
+          for (const r of settled) { if (r) results.push(r); }
         }
-        setAllGrades(grades.sort((a, b) => b.score - a.score));
+        setAllGrades(results.sort((a, b) => b.score - a.score));
+        setLoadingAll(false);
       }
-    } catch { /* ignore */ }
+    } catch { setLoadingAll(false); }
   }
 
   async function fetchHealth() {
     if (!selectedSite) return;
     setLoadingH(true);
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 15000);
     try {
-      const res = await fetch(`/api/seo-health?site_id=${selectedSite}`);
+      const res = await fetch(`/api/seo-health?site_id=${selectedSite}`, { signal: ctrl.signal });
       const d = await res.json() as HealthData;
       if (d.success) setHealth(d);
     } catch { setHealth(null); }
+    finally { clearTimeout(timeout); }
     setLoadingH(false);
   }
 
@@ -106,6 +118,11 @@ export default function HealthPage() {
     setLoadingB(false);
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void fetchSites(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (selectedSite) { void fetchHealth(); } }, [selectedSite]);
+
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <div className="border-b border-gray-800 px-6 py-4 flex items-center gap-4">
@@ -122,6 +139,20 @@ export default function HealthPage() {
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64">
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
+          {(() => {
+            const current = sites.find((s) => s.id === selectedSite);
+            return current?.url ? (
+              <a href={current.url} target="_blank" rel="noopener noreferrer"
+                className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-sm">
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            ) : null;
+          })()}
+          {loadingAll && (
+            <div className="flex items-center gap-2 text-xs text-gray-400">
+              <Loader2 className="w-4 h-4 animate-spin" /> Chargement classement...
+            </div>
+          )}
           <button onClick={checkBroken} disabled={loadingB}
             className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2">
             {loadingB ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}

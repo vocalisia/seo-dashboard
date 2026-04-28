@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, TrendingUp, TrendingDown, Globe, CheckCircle, XCircle, Minus } from "lucide-react";
+import { ArrowLeft, Loader2, TrendingUp, TrendingDown, Globe, CheckCircle, XCircle, Minus, ExternalLink } from "lucide-react";
 import Link from "next/link";
 
 interface Site {
   id: number;
   name: string;
+  url: string;
 }
 
 interface RoiArticle {
@@ -40,17 +41,6 @@ export default function RoiPage() {
   const [indexation, setIndexation] = useState<IndexArticle[]>([]);
   const [loadingRoi, setLoadingRoi] = useState(false);
   const [loadingIdx, setLoadingIdx] = useState(false);
-
-  useEffect(() => {
-    void fetchSites();
-  }, []);
-
-  useEffect(() => {
-    if (selectedSite) {
-      void fetchRoi();
-      void fetchIndexation();
-    }
-  }, [selectedSite]);
 
   async function fetchSites() {
     try {
@@ -86,6 +76,19 @@ export default function RoiPage() {
     setLoadingIdx(false);
   }
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchSites();
+  }, []);
+
+  useEffect(() => {
+    if (selectedSite) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void fetchRoi();
+      void fetchIndexation();
+    }
+  }, [selectedSite]);
+
   const totalImprovement = roi.reduce((s, a) => s + a.improvement, 0);
   const indexedCount = indexation.filter((a) => a.indexed).length;
 
@@ -111,6 +114,15 @@ export default function RoiPage() {
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
+          {(() => {
+            const current = sites.find((s) => s.id === selectedSite);
+            return current?.url ? (
+              <a href={current.url} target="_blank" rel="noopener noreferrer"
+                className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-sm">
+                <ExternalLink className="w-4 h-4" />
+              </a>
+            ) : null;
+          })()}
           <button onClick={() => { void fetchRoi(); void fetchIndexation(); }}
             className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium">
             Actualiser
