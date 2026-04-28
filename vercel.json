@@ -1,28 +1,5 @@
 {
-  "crons": [
-    {
-      "path": "/api/sync",
-      "schedule": "0 3 * * *"
-    },
-    {
-      "path": "/api/competitors/weekly",
-      "schedule": "0 7 * * 1"
-    },
-    {
-      "path": "/api/reports/generate",
-      "schedule": "0 8 * * 1"
-    },
-    {
-      "path": "/api/autopilot/weekly",
-      "schedule": "0 9 * * 1"
-    },
-    {
-      "path": "/api/pagespeed/weekly",
-      "schedule": "0 4 * * 0"
-    },
-    {
-      "path": "/api/alerts/check",
-      "schedule": "0 6 * * *"
-    }
-  ]
+  "git": {
+    "deploymentEnabled": false
+  }
 }
