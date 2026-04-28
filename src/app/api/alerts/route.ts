@@ -31,30 +31,38 @@ export async function GET(req: NextRequest) {
     if (siteIdParam && unreadOnly) {
       const siteId = parseInt(siteIdParam, 10);
       alerts = await sql`
-        SELECT * FROM seo_alerts
-        WHERE site_id = ${siteId} AND is_read = false
-        ORDER BY created_at DESC
+        SELECT a.*, s.name AS site_name, s.url AS site_url
+        FROM seo_alerts a
+        LEFT JOIN sites s ON s.id = a.site_id
+        WHERE a.site_id = ${siteId} AND a.is_read = false
+        ORDER BY a.created_at DESC
         LIMIT 200
       `;
     } else if (siteIdParam) {
       const siteId = parseInt(siteIdParam, 10);
       alerts = await sql`
-        SELECT * FROM seo_alerts
-        WHERE site_id = ${siteId}
-        ORDER BY created_at DESC
+        SELECT a.*, s.name AS site_name, s.url AS site_url
+        FROM seo_alerts a
+        LEFT JOIN sites s ON s.id = a.site_id
+        WHERE a.site_id = ${siteId}
+        ORDER BY a.created_at DESC
         LIMIT 200
       `;
     } else if (unreadOnly) {
       alerts = await sql`
-        SELECT * FROM seo_alerts
-        WHERE is_read = false
-        ORDER BY created_at DESC
+        SELECT a.*, s.name AS site_name, s.url AS site_url
+        FROM seo_alerts a
+        LEFT JOIN sites s ON s.id = a.site_id
+        WHERE a.is_read = false
+        ORDER BY a.created_at DESC
         LIMIT 200
       `;
     } else {
       alerts = await sql`
-        SELECT * FROM seo_alerts
-        ORDER BY created_at DESC
+        SELECT a.*, s.name AS site_name, s.url AS site_url
+        FROM seo_alerts a
+        LEFT JOIN sites s ON s.id = a.site_id
+        ORDER BY a.created_at DESC
         LIMIT 200
       `;
     }
