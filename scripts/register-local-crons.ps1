@@ -1,6 +1,6 @@
-# Enregistre 7 tâches Windows planifiées qui hit les endpoints cron locaux (localhost:3000).
+# Enregistre 7 taches Windows planifiees qui hit les endpoints cron locaux (localhost:3000).
 # Remplace les crons Vercel.
-# À exécuter UNE FOIS (clic droit > Exécuter avec PowerShell, ou console élevée si demandé).
+# A executer UNE FOIS (clic droit > Executer avec PowerShell, ou console elevee si demande).
 
 $ErrorActionPreference = "Stop"
 $cronSecret = $env:CRON_SECRET
@@ -12,7 +12,7 @@ if (-not $cronSecret) {
   }
 }
 if (-not $cronSecret) {
-  Write-Warning "CRON_SECRET non trouvé. Les routes protégées vont échouer. Définis CRON_SECRET dans .env.local."
+  Write-Warning "CRON_SECRET non trouve. Les routes protegees vont echouer. Definis CRON_SECRET dans .env.local."
   $cronSecret = ""
 }
 
@@ -42,14 +42,15 @@ foreach ($t in $tasks) {
     $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $t.Day -At $t.At
   }
 
-  $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Least
+  $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
   $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1)
 
   Unregister-ScheduledTask -TaskName $t.Name -Confirm:$false -ErrorAction SilentlyContinue
   Register-ScheduledTask -TaskName $t.Name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Local cron $($t.Path)" | Out-Null
-  Write-Host "OK — $($t.Name) → $url ($($t.Schedule) $($t.At) $($t.Day))"
+  Write-Host "OK - $($t.Name) -> $url ($($t.Schedule) $($t.At) $($t.Day))"
 }
 
 Write-Host ""
-Write-Host "✅ 7 tâches Windows enregistrées. Liste: Get-ScheduledTask | Where-Object Name -like 'Vocalis_Seo_*'"
-Write-Host "   Test immédiat: Start-ScheduledTask -TaskName Vocalis_Seo_Alerts_Daily"
+Write-Host "OK - 7 taches Windows enregistrees."
+Write-Host "Liste: Get-ScheduledTask -TaskName Vocalis_Seo_*"
+Write-Host "Test: Start-ScheduledTask -TaskName Vocalis_Seo_Alerts_Daily"
