@@ -43,3 +43,9 @@ next-env.d.ts
 
 .vercel
 .env*.local
+
+# Temp dev artifacts
+scripts/_cleanup_report_*.json
+scripts/_*_results.json
+scripts/_*_check.json
+logs/
