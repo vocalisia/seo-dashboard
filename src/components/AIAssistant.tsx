@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { Sparkles, X, Loader2, Copy, Check, Download } from "lucide-react";
 
-type ActionTab = "write" | "translate" | "image" | "analyze" | "research";
+type ActionTab = "write" | "translate" | "image" | "analyze" | "research" | "eeat";
 
 interface AIAssistantProps {
   context?: string;
@@ -11,11 +11,12 @@ interface AIAssistantProps {
 }
 
 const TABS: { id: ActionTab; label: string }[] = [
-  { id: "write", label: "✍️ Rédaction" },
-  { id: "translate", label: "🌐 Traduction" },
+  { id: "eeat", label: "🏆 E-E-A-T" },
+  { id: "write", label: "✍️ Rédac" },
+  { id: "translate", label: "🌐 Trad" },
   { id: "image", label: "🎨 Image" },
   { id: "analyze", label: "🔍 Analyse" },
-  { id: "research", label: "🌐 SERP live" },
+  { id: "research", label: "🔎 SERP" },
 ];
 
 const TONES = ["professionnel", "décontracté", "technique", "marketing"];
@@ -98,6 +99,7 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
   const [imageState, setImageState] = useState<ImageState>({ prompt: "" });
   const [analyzeState, setAnalyzeState] = useState<AnalyzeState>({ prompt: context ?? "" });
   const [researchState, setResearchState] = useState<{ prompt: string }>({ prompt: "" });
+  const [eeatState, setEeatState] = useState<{ prompt: string; tone: string }>({ prompt: "", tone: "expert professionnel" });
 
   const resetResult = () => {
     setResult(null);
@@ -165,6 +167,11 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
   const handleResearch = () => {
     if (!researchState.prompt.trim()) return;
     void callApi({ action: "research", prompt: researchState.prompt, context });
+  };
+
+  const handleEeat = () => {
+    if (!eeatState.prompt.trim()) return;
+    void callApi({ action: "eeat", prompt: eeatState.prompt, tone: eeatState.tone, context });
   };
 
   return (
@@ -332,6 +339,45 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
               >
                 {loading ? <Loader2 size={14} className="animate-spin" /> : null}
                 Analyser
+              </button>
+            </div>
+          )}
+
+          {/* E-E-A-T tab — Perplexity research → Sonnet writing pipeline */}
+          {activeTab === "eeat" && (
+            <div className="space-y-3">
+              <div className="bg-yellow-900/30 border border-yellow-700/40 rounded p-2 text-xs text-yellow-200">
+                🏆 <strong>Pipeline E-E-A-T 2 phases</strong>:<br />
+                1️⃣ Perplexity → recherche sources réelles 2026<br />
+                2️⃣ Sonnet 4.6 → rédaction avec citations<br />
+                ⏱️ ~60-90s · Article 1500-2500 mots avec sources URL
+              </div>
+              <label className="text-xs text-gray-400">Sujet de l&apos;article</label>
+              <textarea
+                className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm text-white resize-none focus:outline-none focus:border-yellow-500 h-20"
+                placeholder="Ex: Comment l'IA vocale transforme le service client B2B en 2026"
+                value={eeatState.prompt}
+                onChange={(e) => setEeatState((s) => ({ ...s, prompt: e.target.value }))}
+              />
+              <label className="text-xs text-gray-400">Ton</label>
+              <select
+                className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm text-white focus:outline-none focus:border-yellow-500"
+                value={eeatState.tone}
+                onChange={(e) => setEeatState((s) => ({ ...s, tone: e.target.value }))}
+              >
+                <option value="expert professionnel">Expert professionnel</option>
+                <option value="journalistique">Journalistique</option>
+                <option value="académique">Académique</option>
+                <option value="vulgarisation">Vulgarisation grand public</option>
+                <option value="technique pointu">Technique pointu</option>
+              </select>
+              <button
+                onClick={handleEeat}
+                disabled={loading || !eeatState.prompt.trim()}
+                className="w-full py-2 rounded bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 disabled:opacity-50 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                {loading ? <Loader2 size={14} className="animate-spin" /> : null}
+                {loading ? "Recherche + rédaction..." : "Générer article E-E-A-T"}
               </button>
             </div>
           )}

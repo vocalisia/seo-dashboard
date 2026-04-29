@@ -5,7 +5,7 @@ import { askAI, generateImage, MODELS } from "@/lib/ai";
 import { z } from "zod";
 
 const schema = z.object({
-  action: z.enum(["write", "translate", "image", "analyze", "research", "competitor"]),
+  action: z.enum(["write", "translate", "image", "analyze", "research", "competitor", "eeat"]),
   prompt: z.string().min(1).max(4000),
   context: z.string().optional(),
   targetLang: z.string().optional(),
@@ -19,6 +19,66 @@ export async function POST(req: NextRequest) {
     if (body.action === "image") {
       const url = await generateImage(body.prompt);
       return NextResponse.json({ success: true, url });
+    }
+
+    // E-E-A-T pipeline: Perplexity (research + sources) → Sonnet (writing with citations)
+    if (body.action === "eeat") {
+      const researchPrompt = `Recherche approfondie sur: "${body.prompt}". Liste:
+1. 5-10 sources autoritaires (sites .gov, .edu, études récentes 2024-2026, médias top tier)
+2. Statistiques/chiffres clés vérifiables avec sources
+3. Citations d'experts reconnus du domaine (avec leur titre/fonction)
+4. Points de vue contradictoires si pertinent
+5. Données récentes 2026
+
+Format: liste structurée avec URL pour CHAQUE info. Pas d'opinion personnelle.`;
+
+      const research = await askAI(
+        [
+          { role: "system", content: "Tu es un chercheur SEO avec accès SERP live. Cite toujours tes sources URL. Pas d'invention." },
+          { role: "user", content: researchPrompt },
+        ],
+        "search",
+        2500
+      );
+
+      const writingPrompt = `Rédige un article SEO E-E-A-T complet sur: "${body.prompt}"
+
+Utilise EXCLUSIVEMENT les recherches ci-dessous (cite sources via [Source: nom](url)):
+
+=== RECHERCHE ===
+${research}
+=== FIN RECHERCHE ===
+
+Exigences E-E-A-T:
+- **Experience**: ton 1ère personne quand pertinent, exemples concrets
+- **Expertise**: vocabulaire précis du domaine, nuances techniques
+- **Authority**: cite 5+ sources autoritaires avec liens markdown
+- **Trust**: chiffres vérifiables, dates, attributions claires
+
+Structure:
+- H1 optimisé (60-70 chars)
+- Intro (réponse rapide en 2 lignes pour AIO)
+- 4-6 sections H2 logiques avec H3 si nécessaire
+- Données + citations dans chaque section
+- FAQ structurée (5 questions)
+- Conclusion actionnable
+
+Longueur: 1500-2500 mots. Markdown propre. Ton: ${body.tone ?? "expert professionnel"}.`;
+
+      const article = await askAI(
+        [
+          { role: "system", content: "Tu es rédacteur SEO senior expert E-E-A-T. Tu cites systématiquement tes sources. Tu n'inventes jamais de faits." },
+          { role: "user", content: writingPrompt },
+        ],
+        "smart",
+        4000
+      );
+
+      return NextResponse.json({
+        success: true,
+        reply: article,
+        meta: { research_phase: research, pipeline: "perplexity+sonnet" },
+      });
     }
 
     let systemPrompt = "";
