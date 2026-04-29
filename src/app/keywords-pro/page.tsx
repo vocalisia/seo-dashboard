@@ -18,6 +18,7 @@ interface KeywordRow {
   volume: number;
   difficulty: "easy" | "medium" | "hard";
   intent: string;
+  site_name?: string;
 }
 
 interface Cluster {
@@ -40,7 +41,7 @@ const INTENT_COLORS: Record<string, string> = {
 
 export default function KeywordsProPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [minClicks, setMinClicks] = useState(2000);
   const [minWords, setMinWords] = useState(3);
   const [posMin, setPosMin] = useState(1);
@@ -60,7 +61,7 @@ export default function KeywordsProPage() {
         const data = await res.json() as Site[] | { sites?: Site[] };
         const list = Array.isArray(data) ? data : (data.sites ?? []);
         setSites(list);
-        if (list.length > 0) setSelectedSite(list[0].id);
+        if (list.length > 0) setSelectedSite("all");
       } catch { /* ignore */ }
     })();
   }, []);
@@ -108,9 +109,14 @@ export default function KeywordsProPage() {
   }
 
   function exportCSV() {
-    const header = "Keyword,Clicks,Impressions,Position,Volume,Difficulty,Intent";
+    const showSite = selectedSite === "all";
+    const header = showSite
+      ? "Site,Keyword,Clicks,Impressions,Position,Volume,Difficulty,Intent"
+      : "Keyword,Clicks,Impressions,Position,Volume,Difficulty,Intent";
     const rows = sorted.map((k) =>
-      `"${k.keyword.replace(/"/g, '""')}",${k.clicks},${k.impressions},${k.position.toFixed(1)},${k.volume},${k.difficulty},${k.intent}`
+      showSite
+        ? `"${(k.site_name ?? "").replace(/"/g, '""')}","${k.keyword.replace(/"/g, '""')}",${k.clicks},${k.impressions},${k.position.toFixed(1)},${k.volume},${k.difficulty},${k.intent}`
+        : `"${k.keyword.replace(/"/g, '""')}",${k.clicks},${k.impressions},${k.position.toFixed(1)},${k.volume},${k.difficulty},${k.intent}`
     );
     const csv = [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -148,8 +154,9 @@ export default function KeywordsProPage() {
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div className="col-span-2 md:col-span-1">
               <label className="text-xs text-gray-400 uppercase block mb-1">Site</label>
-              <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(parseInt(e.target.value, 10))}
+              <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                <option value="all">🌐 Tous les sites</option>
                 {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
@@ -231,6 +238,7 @@ export default function KeywordsProPage() {
                 <thead>
                   <tr className="text-xs text-gray-400 border-b border-gray-800 bg-gray-800/40">
                     <th className="px-5 py-3 text-left">Mot-clé</th>
+                    {selectedSite === "all" && <th className="px-4 py-3 text-left">Site</th>}
                     {(["clicks", "impressions", "position", "volume"] as const).map((col) => (
                       <th key={col} onClick={() => toggleSort(col)}
                         className="px-4 py-3 text-right cursor-pointer select-none hover:text-gray-200">
@@ -248,6 +256,7 @@ export default function KeywordsProPage() {
                   {sorted.slice(0, 200).map((kw, i) => (
                     <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/20">
                       <td className="px-5 py-2.5 text-gray-200 font-medium">{kw.keyword}</td>
+                      {selectedSite === "all" && <td className="px-4 py-2.5 text-xs text-gray-400">{kw.site_name ?? "—"}</td>}
                       <td className="px-4 py-2.5 text-right text-blue-400">{Number(kw.clicks).toLocaleString()}</td>
                       <td className="px-4 py-2.5 text-right text-gray-400">{Number(kw.impressions).toLocaleString()}</td>
                       <td className="px-4 py-2.5 text-right">

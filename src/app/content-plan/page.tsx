@@ -19,6 +19,7 @@ interface ContentItem {
   difficulty: string;
   volume: number;
   status: "todo" | "doing" | "done";
+  site_name?: string;
 }
 
 const DIFF_COLORS: Record<string, string> = {
@@ -37,12 +38,13 @@ type StatusFilter = "all" | "todo" | "doing" | "done";
 
 export default function ContentPlanPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<ContentItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [allProgress, setAllProgress] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -51,13 +53,17 @@ export default function ContentPlanPage() {
         const data = await res.json() as Site[] | { sites?: Site[] };
         const list = Array.isArray(data) ? data : (data.sites ?? []);
         setSites(list);
-        if (list.length > 0) setSelectedSite(list[0].id);
+        if (list.length > 0) setSelectedSite("all");
       } catch { /* ignore */ }
     })();
   }, []);
 
   async function generate() {
     if (!selectedSite) return;
+    if (selectedSite === "all") {
+      await generateAll();
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -75,6 +81,29 @@ export default function ContentPlanPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur réseau");
     }
+    setLoading(false);
+  }
+
+  async function generateAll() {
+    if (sites.length === 0) return;
+    setLoading(true);
+    setError(null);
+    const allItems: ContentItem[] = [];
+    for (let i = 0; i < sites.length; i++) {
+      const site = sites[i];
+      setAllProgress(`Site ${i + 1}/${sites.length} — ${site.name}`);
+      try {
+        const res = await fetch("/api/content-plan/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ siteId: site.id }),
+        });
+        const data = await res.json() as { success: boolean; items?: ContentItem[]; error?: string };
+        if (data.success && data.items) allItems.push(...data.items);
+      } catch { /* skip site on error */ }
+    }
+    setItems(allItems);
+    setAllProgress(null);
     setLoading(false);
   }
 
@@ -107,15 +136,16 @@ export default function ContentPlanPage() {
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex flex-wrap items-end gap-4">
           <div>
             <label className="text-xs text-gray-400 uppercase block mb-1">Site</label>
-            <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(parseInt(e.target.value, 10))}
+            <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 w-56">
+              <option value="all">🌐 Tous les sites</option>
               {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </div>
           <button onClick={generate} disabled={loading || !selectedSite}
             className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors">
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            {loading ? "Génération IA..." : "Régénérer plan"}
+            {loading ? (allProgress ?? "Génération IA...") : "Régénérer plan"}
           </button>
           <div className="text-xs text-gray-500">
             Scoring: volume × difficulté inverse × type d&apos;opportunité
@@ -155,6 +185,7 @@ export default function ContentPlanPage() {
                   <tr className="text-xs text-gray-400 border-b border-gray-800 bg-gray-800/40">
                     <th className="px-4 py-3 text-center">#</th>
                     <th className="px-4 py-3 text-left">Titre</th>
+                    {selectedSite === "all" && <th className="px-4 py-3 text-left">Site</th>}
                     <th className="px-4 py-3 text-left">Mot-clé cible</th>
                     <th className="px-4 py-3 text-right">Vol.</th>
                     <th className="px-4 py-3 text-center">Difficulté</th>
@@ -168,6 +199,7 @@ export default function ContentPlanPage() {
                     <tr key={item.id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
                       <td className="px-4 py-3 text-center text-gray-500 text-xs">{i + 1}</td>
                       <td className="px-4 py-3 text-gray-100 font-medium max-w-xs">{item.title}</td>
+                      {selectedSite === "all" && <td className="px-4 py-3 text-xs text-gray-400">{item.site_name ?? "—"}</td>}
                       <td className="px-4 py-3 text-blue-400 text-xs">{item.target_keyword}</td>
                       <td className="px-4 py-3 text-right text-purple-400">{Number(item.volume).toLocaleString()}</td>
                       <td className="px-4 py-3 text-center">

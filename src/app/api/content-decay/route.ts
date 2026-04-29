@@ -13,53 +13,89 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getSQL();
-    const id = parseInt(siteId);
+    const isAll = siteId === "all";
 
     // Compare bucket récent (0-14j) vs bucket plus ancien (15-42j)
     // Decay = chute clics ≥30% OU chute position ≥2 OU chute CTR ≥25%
-    const rows = await sql`
-      WITH recent AS (
-        SELECT page, query,
-          SUM(clicks) AS clicks,
-          SUM(impressions) AS impressions,
-          AVG(position) AS position,
-          AVG(ctr) AS ctr
-        FROM search_console_data
-        WHERE site_id = ${id}
-          AND date >= NOW() - INTERVAL '14 days'
-          AND query IS NOT NULL
-          AND page IS NOT NULL
-        GROUP BY page, query
-      ),
-      older AS (
-        SELECT page, query,
-          SUM(clicks) / 2.0 AS clicks,
-          SUM(impressions) / 2.0 AS impressions,
-          AVG(position) AS position,
-          AVG(ctr) AS ctr
-        FROM search_console_data
-        WHERE site_id = ${id}
-          AND date >= NOW() - INTERVAL '42 days'
-          AND date <  NOW() - INTERVAL '14 days'
-          AND query IS NOT NULL
-          AND page IS NOT NULL
-        GROUP BY page, query
-      )
-      SELECT
-        r.page,
-        r.query,
-        r.clicks AS clicks_recent,
-        o.clicks AS clicks_older,
-        r.impressions AS imp_recent,
-        o.impressions AS imp_older,
-        r.position AS pos_recent,
-        o.position AS pos_older,
-        r.ctr AS ctr_recent,
-        o.ctr AS ctr_older
-      FROM recent r
-      INNER JOIN older o ON o.page = r.page AND o.query = r.query
-      WHERE o.clicks >= 5 AND o.impressions >= 100
-    `;
+    const rows = isAll
+      ? await sql`
+        WITH recent AS (
+          SELECT page, query, site_id,
+            SUM(clicks) AS clicks,
+            SUM(impressions) AS impressions,
+            AVG(position) AS position,
+            AVG(ctr) AS ctr
+          FROM search_console_data
+          WHERE date >= NOW() - INTERVAL '14 days'
+            AND query IS NOT NULL
+            AND page IS NOT NULL
+          GROUP BY page, query, site_id
+        ),
+        older AS (
+          SELECT page, query, site_id,
+            SUM(clicks) / 2.0 AS clicks,
+            SUM(impressions) / 2.0 AS impressions,
+            AVG(position) AS position,
+            AVG(ctr) AS ctr
+          FROM search_console_data
+          WHERE date >= NOW() - INTERVAL '42 days'
+            AND date <  NOW() - INTERVAL '14 days'
+            AND query IS NOT NULL
+            AND page IS NOT NULL
+          GROUP BY page, query, site_id
+        )
+        SELECT
+          r.page, r.query, r.site_id,
+          s.name AS site_name,
+          r.clicks AS clicks_recent, o.clicks AS clicks_older,
+          r.impressions AS imp_recent, o.impressions AS imp_older,
+          r.position AS pos_recent, o.position AS pos_older,
+          r.ctr AS ctr_recent, o.ctr AS ctr_older
+        FROM recent r
+        INNER JOIN older o ON o.page = r.page AND o.query = r.query AND o.site_id = r.site_id
+        LEFT JOIN sites s ON s.id = r.site_id
+        WHERE o.clicks >= 5 AND o.impressions >= 100
+      `
+      : await sql`
+        WITH recent AS (
+          SELECT page, query,
+            SUM(clicks) AS clicks,
+            SUM(impressions) AS impressions,
+            AVG(position) AS position,
+            AVG(ctr) AS ctr
+          FROM search_console_data
+          WHERE site_id = ${parseInt(siteId)}
+            AND date >= NOW() - INTERVAL '14 days'
+            AND query IS NOT NULL
+            AND page IS NOT NULL
+          GROUP BY page, query
+        ),
+        older AS (
+          SELECT page, query,
+            SUM(clicks) / 2.0 AS clicks,
+            SUM(impressions) / 2.0 AS impressions,
+            AVG(position) AS position,
+            AVG(ctr) AS ctr
+          FROM search_console_data
+          WHERE site_id = ${parseInt(siteId)}
+            AND date >= NOW() - INTERVAL '42 days'
+            AND date <  NOW() - INTERVAL '14 days'
+            AND query IS NOT NULL
+            AND page IS NOT NULL
+          GROUP BY page, query
+        )
+        SELECT
+          r.page, r.query,
+          ${parseInt(siteId)}::int AS site_id,
+          NULL::text AS site_name,
+          r.clicks AS clicks_recent, o.clicks AS clicks_older,
+          r.impressions AS imp_recent, o.impressions AS imp_older,
+          r.position AS pos_recent, o.position AS pos_older,
+          r.ctr AS ctr_recent, o.ctr AS ctr_older
+        FROM recent r
+        INNER JOIN older o ON o.page = r.page AND o.query = r.query
+        WHERE o.clicks >= 5 AND o.impressions >= 100
+      `;
 
     const decays = (rows as Record<string, unknown>[]).map(r => {
       const cR = Number(r.clicks_recent);
@@ -70,7 +106,7 @@ export async function GET(request: NextRequest) {
       const ctrO = Number(r.ctr_older);
 
       const clicksDrop = cO > 0 ? (cR - cO) / cO * 100 : 0;
-      const posDrop = pR - pO; // positif = a chuté (pos plus haute = moins bon)
+      const posDrop = pR - pO;
       const ctrDrop = ctrO > 0 ? (ctrR - ctrO) / ctrO * 100 : 0;
 
       const isDecay = clicksDrop <= -30 || posDrop >= 2 || ctrDrop <= -25;
@@ -87,6 +123,8 @@ export async function GET(request: NextRequest) {
       return {
         page: r.page,
         query: r.query,
+        site_id: r.site_id !== undefined ? Number(r.site_id) : null,
+        site_name: r.site_name ? String(r.site_name) : null,
         clicks_recent: Math.round(cR),
         clicks_older: Math.round(cO),
         clicks_drop_pct: Math.round(clicksDrop),

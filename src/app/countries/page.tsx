@@ -84,7 +84,7 @@ function countryDisplay(iso: string): { flag: string; name: string } {
 
 export default function CountriesPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [data, setData] = useState<CountriesData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -94,7 +94,7 @@ export default function CountriesPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedSite) void fetchCountries();
+    if (selectedSite && selectedSite !== "all") void fetchCountries();
   }, [selectedSite, selectedCountry]);
 
   async function fetchSites() {
@@ -104,7 +104,7 @@ export default function CountriesPage() {
       const list = Array.isArray(d) ? d : d.sites ?? [];
       if (list.length > 0) {
         setSites(list);
-        if (!selectedSite) setSelectedSite(list[0].id);
+        if (!selectedSite) setSelectedSite("all");
       }
     } catch {
       // ignore
@@ -112,7 +112,7 @@ export default function CountriesPage() {
   }
 
   async function fetchCountries() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setLoading(true);
     try {
       const url = selectedCountry
@@ -171,12 +171,12 @@ export default function CountriesPage() {
             <select
               value={selectedSite ?? ""}
               onChange={(e) => {
-                setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null);
+                setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null);
                 setSelectedCountry(null);
               }}
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-cyan-500 w-64"
             >
-              <option value="">— Sélectionner —</option>
+              <option value="all">🌐 Tous les sites</option>
               {sites.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}

@@ -8,11 +8,14 @@ interface Site { id: number; name: string; url: string }
 interface StrikingRow {
   query: string; page: string; clicks: number; impressions: number;
   position: number; ctr: number; uplift_estimate: number; priority: "P0"|"P1"|"P2";
+  site_id?: number | null; site_name?: string | null;
 }
+
+type SiteFilter = number | "all";
 
 export default function StrikingDistancePage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [siteId, setSiteId] = useState<number | null>(null);
+  const [siteId, setSiteId] = useState<SiteFilter | null>(null);
   const [rows, setRows] = useState<StrikingRow[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -20,15 +23,16 @@ export default function StrikingDistancePage() {
     fetch("/api/sites").then(r => r.json()).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
-        if (data.length > 0) setSiteId((data[0] as Site).id);
+        if (data.length > 0) setSiteId("all");
       }
     });
   }, []);
 
   useEffect(() => {
-    if (!siteId) return;
+    if (siteId === null) return;
     setLoading(true);
-    fetch(`/api/striking-distance?siteId=${siteId}&days=28&limit=100`)
+    const limit = siteId === "all" ? 300 : 100;
+    fetch(`/api/striking-distance?siteId=${siteId}&days=28&limit=${limit}`)
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) setRows(data as StrikingRow[]);
@@ -47,8 +51,9 @@ export default function StrikingDistancePage() {
           <h1 className="text-xl font-bold">Striking Distance</h1>
           <span className="text-xs text-gray-500">Pos 8-20 → page 1 facile</span>
         </div>
-        <select value={siteId || ""} onChange={e => setSiteId(parseInt(e.target.value))}
+        <select value={siteId ?? ""} onChange={e => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value))}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
+          <option value="all">🌐 Tous les sites</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </header>
@@ -79,6 +84,7 @@ export default function StrikingDistancePage() {
               <thead className="bg-gray-800/50 text-gray-400 text-xs">
                 <tr>
                   <th className="text-left py-3 px-5">Mot clé</th>
+                  {siteId === "all" && <th className="text-left py-3 px-3">Site</th>}
                   <th className="text-right py-3 px-3">Position</th>
                   <th className="text-right py-3 px-3">Clics</th>
                   <th className="text-right py-3 px-3">Impressions</th>
@@ -92,6 +98,14 @@ export default function StrikingDistancePage() {
                 {rows.map((r, i) => (
                   <tr key={i} className="border-b border-gray-800/40 hover:bg-gray-800/20">
                     <td className="py-2 px-5 font-medium text-gray-200">{r.query}</td>
+                    {siteId === "all" && (
+                      <td className="py-2 px-3">
+                        {r.site_name
+                          ? <button onClick={() => setSiteId(r.site_id!)} className="bg-blue-900/30 border border-blue-800 text-blue-300 px-2 py-0.5 rounded text-xs hover:bg-blue-900/50">{r.site_name}</button>
+                          : <span className="text-gray-500 text-xs">—</span>
+                        }
+                      </td>
+                    )}
                     <td className="text-right py-2 px-3">
                       <span className={r.position <= 10 ? "text-yellow-400" : "text-gray-300"}>{r.position}</span>
                     </td>

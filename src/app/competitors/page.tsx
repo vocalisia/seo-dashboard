@@ -61,7 +61,7 @@ type ActiveTab = "analysis" | "gaps";
 export default function CompetitorsPage() {
   const router = useRouter();
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ResearchResult | null>(null);
   const [cached, setCached] = useState<KeywordGap[]>([]);
@@ -80,13 +80,13 @@ export default function CompetitorsPage() {
       const list = Array.isArray(d) ? d : d.sites ?? [];
       if (list.length > 0) {
         setSites(list);
-        if (!selectedSite) setSelectedSite(list[0].id);
+        if (!selectedSite) setSelectedSite("all");
       }
     } catch { /* ignore */ }
   }
 
   async function fetchCached() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     try {
       const res = await fetch(`/api/competitors?site_id=${selectedSite}`);
       const d = await res.json() as { gaps?: KeywordGap[] };
@@ -95,7 +95,7 @@ export default function CompetitorsPage() {
   }
 
   async function runResearch() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -125,7 +125,7 @@ export default function CompetitorsPage() {
   }
 
   async function generateArticle(keyword: string) {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setGenerating(keyword);
     try {
       const res = await fetch("/api/autopilot", {
@@ -147,7 +147,7 @@ export default function CompetitorsPage() {
   }
 
   async function fetchGapRows() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setGapsLoading(true);
     try {
       const res = await fetch(`/api/competitors/gaps?siteId=${selectedSite}`);
@@ -164,11 +164,11 @@ export default function CompetitorsPage() {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (selectedSite) void fetchCached();
+    if (selectedSite && selectedSite !== "all") void fetchCached();
   }, [selectedSite]);
 
   const gaps = result?.gaps ?? cached;
-  const totalVolume = gaps.reduce((s, g) => s + g.volume, 0);
+  const totalVolume = gaps.reduce((s, g) => s + (g.volume ?? 0), 0);
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -210,8 +210,9 @@ export default function CompetitorsPage() {
               <h2 className="font-medium text-gray-200 flex items-center gap-2">
                 <GitCompare className="w-4 h-4 text-purple-400" /> Keyword Gaps ({gapRows.length})
               </h2>
-              <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(parseInt(e.target.value, 10))}
+              <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
                 className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none w-48">
+                <option value="all">🌐 Tous les sites</option>
                 {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
@@ -273,9 +274,10 @@ export default function CompetitorsPage() {
               <label className="text-xs text-gray-400 uppercase">Site à analyser</label>
               <select
                 value={selectedSite ?? ""}
-                onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
+                onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
                 className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-purple-500 w-64"
               >
+                <option value="all">🌐 Tous les sites</option>
                 {sites.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
@@ -283,7 +285,7 @@ export default function CompetitorsPage() {
             </div>
             <button
               onClick={runResearch}
-              disabled={loading || !selectedSite}
+              disabled={loading || !selectedSite || selectedSite === "all"}
               className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
             >
               {loading ? (
@@ -385,12 +387,12 @@ export default function CompetitorsPage() {
                     <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                       <td className="px-5 py-3 font-medium text-white">{g.keyword}</td>
                       <td className="px-5 py-3 text-right text-blue-400 font-semibold">
-                        {g.volume.toLocaleString()}
+                        {(g.volume ?? 0).toLocaleString()}
                       </td>
-                      <td className="px-5 py-3 text-gray-400 text-xs">{g.competitor}</td>
+                      <td className="px-5 py-3 text-gray-400 text-xs">{g.competitor ?? "—"}</td>
                       <td className="px-5 py-3 text-right">
-                        <span className={g.competitor_position <= 5 ? "text-green-400" : g.competitor_position <= 10 ? "text-yellow-400" : "text-gray-400"}>
-                          {g.competitor_position}
+                        <span className={(g.competitor_position ?? 99) <= 5 ? "text-green-400" : (g.competitor_position ?? 99) <= 10 ? "text-yellow-400" : "text-gray-400"}>
+                          {g.competitor_position ?? "—"}
                         </span>
                       </td>
                       <td className="px-5 py-3 text-center">

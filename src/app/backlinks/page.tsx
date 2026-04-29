@@ -28,12 +28,12 @@ interface BacklinksResult {
 
 export default function BacklinksPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
+  const [selectedSiteId, setSelectedSiteId] = useState<number | "all" | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacklinksResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedSite = selectedSiteId
+  const selectedSite = typeof selectedSiteId === "number"
     ? sites.find((site) => site.id === selectedSiteId) ?? null
     : null;
 
@@ -44,7 +44,7 @@ export default function BacklinksPage() {
         if (Array.isArray(data)) {
           const list = data as Site[];
           setSites(list);
-          if (list.length > 0) setSelectedSiteId(list[0].id);
+          if (list.length > 0) setSelectedSiteId("all");
         }
       })
       .catch(() => {});
@@ -83,11 +83,12 @@ export default function BacklinksPage() {
           <select
             value={selectedSiteId ?? ""}
             onChange={(e) => {
-              setSelectedSiteId(e.target.value ? parseInt(e.target.value, 10) : null);
+              setSelectedSiteId(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null);
               setResult(null);
             }}
             className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
           >
+            <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (
               <option key={s.id} value={s.id}>{s.name} — {s.url}</option>
             ))}

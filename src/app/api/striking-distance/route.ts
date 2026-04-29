@@ -20,31 +20,47 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getSQL();
-    const id = parseInt(siteId);
+    const isAll = siteId === "all";
 
-    // Pos 8-20, impressions > 100, clics > 0 sur 28j
-    const rows = await sql`
-      SELECT
-        query,
-        page,
-        SUM(clicks) AS clicks,
-        SUM(impressions) AS impressions,
-        AVG(position) AS position,
-        AVG(ctr) AS ctr
-      FROM search_console_data
-      WHERE site_id = ${id}
-        AND date >= NOW() - INTERVAL '1 day' * ${days}
-        AND query IS NOT NULL
-        AND position BETWEEN 8 AND 20
-      GROUP BY query, page
-      HAVING SUM(impressions) > 100 AND SUM(clicks) > 0
-      ORDER BY SUM(impressions) DESC
-      LIMIT ${limit}
-    `;
+    const rows = isAll
+      ? await sql`
+          SELECT
+            d.query, d.page, d.site_id, s.name AS site_name,
+            SUM(d.clicks) AS clicks,
+            SUM(d.impressions) AS impressions,
+            AVG(d.position) AS position,
+            AVG(d.ctr) AS ctr
+          FROM search_console_data d
+          LEFT JOIN sites s ON s.id = d.site_id
+          WHERE d.date >= NOW() - INTERVAL '1 day' * ${days}
+            AND d.query IS NOT NULL
+            AND d.position BETWEEN 8 AND 20
+          GROUP BY d.query, d.page, d.site_id, s.name
+          HAVING SUM(d.impressions) > 100 AND SUM(d.clicks) > 0
+          ORDER BY SUM(d.impressions) DESC
+          LIMIT ${limit}
+        `
+      : await sql`
+          SELECT
+            query, page,
+            ${parseInt(siteId)}::int AS site_id,
+            NULL::text AS site_name,
+            SUM(clicks) AS clicks,
+            SUM(impressions) AS impressions,
+            AVG(position) AS position,
+            AVG(ctr) AS ctr
+          FROM search_console_data
+          WHERE site_id = ${parseInt(siteId)}
+            AND date >= NOW() - INTERVAL '1 day' * ${days}
+            AND query IS NOT NULL
+            AND position BETWEEN 8 AND 20
+          GROUP BY query, page
+          HAVING SUM(impressions) > 100 AND SUM(clicks) > 0
+          ORDER BY SUM(impressions) DESC
+          LIMIT ${limit}
+        `;
 
-    // Calc uplift estimé si pos passe à 5
-    const enriched = rows.map((r: Record<string, unknown>) => {
-      const pos = Math.round(Number(r.position));
+    const enriched = (rows as Record<string, unknown>[]).map(r => {
       const ctrTarget = CTR_BENCHMARK[5];
       const ctrActual = Number(r.ctr);
       const impressions = Number(r.impressions);
@@ -54,6 +70,8 @@ export async function GET(request: NextRequest) {
       return {
         query: r.query,
         page: r.page,
+        site_id: r.site_id !== undefined && r.site_id !== null ? Number(r.site_id) : null,
+        site_name: r.site_name ? String(r.site_name) : null,
         clicks: clicksNow,
         impressions,
         position: Number(Number(r.position).toFixed(1)),

@@ -79,7 +79,7 @@ function ScoreRing({ score, label, color }: { score: number; label: string; colo
 
 export default function AuthorityPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [data, setData] = useState<AuthorityData | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingAll, setLoadingAll] = useState(false);
@@ -92,7 +92,7 @@ export default function AuthorityPage() {
       const list = Array.isArray(d) ? d : [];
       if (list.length > 0) {
         setSites(list);
-        if (!selectedSite) setSelectedSite(list[0].id);
+        if (!selectedSite) setSelectedSite("all");
         // Fetch all scores in parallel (chunks of 4)
         setLoadingAll(true);
         const batch = list.slice(0, 16);
@@ -120,7 +120,7 @@ export default function AuthorityPage() {
   }
 
   async function fetchAuthority() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setLoading(true);
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), 15000);
@@ -136,7 +136,7 @@ export default function AuthorityPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchSites(); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selectedSite) void fetchAuthority(); }, [selectedSite]);
+  useEffect(() => { if (selectedSite && selectedSite !== "all") void fetchAuthority(); }, [selectedSite]);
 
   const scoreColor = (s: number) => s >= 70 ? "#22c55e" : s >= 40 ? "#eab308" : "#ef4444";
 
@@ -154,9 +154,10 @@ export default function AuthorityPage() {
         <div className="flex items-center gap-4">
           <select
             value={selectedSite ?? ""}
-            onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
+            onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
           >
+            <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
           {(() => {

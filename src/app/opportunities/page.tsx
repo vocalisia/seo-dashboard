@@ -167,7 +167,7 @@ function BriefsTab({ sites, selectedSite }: { sites: Site[]; selectedSite: Site 
 
 export default function OpportunitiesPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<Site | null>(null);
+  const [selectedSite, setSelectedSite] = useState<Site | "all" | null>(null);
   const [tab, setTab] = useState<Tab>("ctr");
   const [ctrRows, setCtrRows] = useState<CtrRow[]>([]);
   const [cannibRows, setCannibRows] = useState<CannibRow[]>([]);
@@ -181,14 +181,14 @@ export default function OpportunitiesPage() {
       .then((data: unknown) => {
         if (Array.isArray(data)) {
           setSites(data as Site[]);
-          if ((data as Site[]).length > 0) setSelectedSite((data as Site[])[0]);
+          if ((data as Site[]).length > 0) setSelectedSite("all");
         }
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     if (tab === "ctr") loadCtr(selectedSite.id);
     if (tab === "cannib") loadCannib(selectedSite.id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -241,10 +241,14 @@ export default function OpportunitiesPage() {
         {/* Site selector */}
         <div className="mb-6">
           <select
-            value={selectedSite?.id ?? ""}
-            onChange={(e) => handleSiteChange(parseInt(e.target.value, 10))}
+            value={selectedSite === "all" ? "all" : typeof selectedSite === "object" && selectedSite ? String(selectedSite.id) : ""}
+            onChange={(e) => {
+              if (e.target.value === "all") { setSelectedSite("all"); setCtrRows([]); setCannibRows([]); }
+              else handleSiteChange(parseInt(e.target.value, 10));
+            }}
             className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
           >
+            <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (
               <option key={s.id} value={s.id}>{s.name} — {s.url}</option>
             ))}
@@ -385,11 +389,11 @@ export default function OpportunitiesPage() {
         )}
 
         {/* Briefs IA */}
-        {tab === "briefs" && <BriefsTab sites={sites} selectedSite={selectedSite} />}
+        {tab === "briefs" && <BriefsTab sites={sites} selectedSite={typeof selectedSite === "object" ? selectedSite : null} />}
       </div>
 
       {/* Brief modal from CTR table */}
-      {modal && selectedSite && (
+      {modal && selectedSite && selectedSite !== "all" && (
         <BriefModal
           query={modal.query}
           position={modal.position}

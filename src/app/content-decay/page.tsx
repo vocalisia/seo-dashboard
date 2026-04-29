@@ -11,11 +11,14 @@ interface DecayRow {
   position_recent: number; position_older: number; position_drop: number;
   ctr_drop_pct: number;
   severity: "CRIT"|"HIGH"|"MED"; reason: string;
+  site_id?: number | null; site_name?: string | null;
 }
+
+type SiteFilter = number | "all";
 
 export default function ContentDecayPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [siteId, setSiteId] = useState<number | null>(null);
+  const [siteId, setSiteId] = useState<SiteFilter | null>(null);
   const [rows, setRows] = useState<DecayRow[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -23,15 +26,16 @@ export default function ContentDecayPage() {
     fetch("/api/sites").then(r => r.json()).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
-        if (data.length > 0) setSiteId((data[0] as Site).id);
+        if (data.length > 0) setSiteId("all");
       }
     });
   }, []);
 
   useEffect(() => {
-    if (!siteId) return;
+    if (siteId === null) return;
     setLoading(true);
-    fetch(`/api/content-decay?siteId=${siteId}&limit=100`)
+    const limit = siteId === "all" ? 300 : 100;
+    fetch(`/api/content-decay?siteId=${siteId}&limit=${limit}`)
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) setRows(data as DecayRow[]);
@@ -51,8 +55,9 @@ export default function ContentDecayPage() {
           <h1 className="text-xl font-bold">Content Decay</h1>
           <span className="text-xs text-gray-500">14j récents vs 28j précédents</span>
         </div>
-        <select value={siteId || ""} onChange={e => setSiteId(parseInt(e.target.value))}
+        <select value={siteId ?? ""} onChange={e => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value))}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
+          <option value="all">🌐 Tous les sites</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </header>
@@ -84,6 +89,7 @@ export default function ContentDecayPage() {
                 <tr>
                   <th className="text-center py-3 px-3">Sév.</th>
                   <th className="text-left py-3 px-3">Mot clé</th>
+                  {siteId === "all" && <th className="text-left py-3 px-3">Site</th>}
                   <th className="text-right py-3 px-3">Clics récent</th>
                   <th className="text-right py-3 px-3">Clics ancien</th>
                   <th className="text-right py-3 px-3">Δ clics</th>
@@ -108,6 +114,14 @@ export default function ContentDecayPage() {
                         {r.query}
                       </a>
                     </td>
+                    {siteId === "all" && (
+                      <td className="py-2 px-3">
+                        {r.site_name
+                          ? <button onClick={() => setSiteId(r.site_id!)} className="bg-blue-900/30 border border-blue-800 text-blue-300 px-2 py-0.5 rounded text-xs hover:bg-blue-900/50">{r.site_name}</button>
+                          : <span className="text-gray-500 text-xs">—</span>
+                        }
+                      </td>
+                    )}
                     <td className="text-right py-2 px-3 text-blue-400">{r.clicks_recent}</td>
                     <td className="text-right py-2 px-3 text-gray-400">{r.clicks_older}</td>
                     <td className="text-right py-2 px-3 font-bold text-red-400">{r.clicks_drop_pct}%</td>

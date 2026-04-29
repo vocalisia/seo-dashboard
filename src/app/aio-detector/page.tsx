@@ -7,14 +7,17 @@ import { Loader2, ChevronLeft, Sparkles } from "lucide-react";
 interface Site { id: number; name: string }
 interface AIORow {
   query: string; page: string; position: number;
+  site_id: number | null; site_name: string | null;
   impressions: number; clicks: number;
   ctr_actual_pct: number; ctr_expected_pct: number; ctr_ratio: number;
   missed_clicks: number; aio_likely: boolean; recommendation: string;
 }
 
+type SiteFilter = number | "all";
+
 export default function AIODetectorPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [siteId, setSiteId] = useState<number | null>(null);
+  const [siteId, setSiteId] = useState<SiteFilter | null>(null);
   const [rows, setRows] = useState<AIORow[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -22,15 +25,16 @@ export default function AIODetectorPage() {
     fetch("/api/sites").then(r => r.json()).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
-        if (data.length > 0) setSiteId((data[0] as Site).id);
+        if (data.length > 0) setSiteId("all");
       }
     });
   }, []);
 
   useEffect(() => {
-    if (!siteId) return;
+    if (siteId === null) return;
     setLoading(true);
-    fetch(`/api/aio-detector?siteId=${siteId}&days=28&limit=100`)
+    const limit = siteId === "all" ? 300 : 100;
+    fetch(`/api/aio-detector?siteId=${siteId}&days=28&limit=${limit}`)
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) setRows(data as AIORow[]);
@@ -49,8 +53,9 @@ export default function AIODetectorPage() {
           <h1 className="text-xl font-bold">AI Overview Detector</h1>
           <span className="text-xs text-gray-500">queries informationnelles top 5 avec CTR anormalement bas</span>
         </div>
-        <select value={siteId || ""} onChange={e => setSiteId(parseInt(e.target.value))}
+        <select value={siteId ?? ""} onChange={e => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value))}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
+          <option value="all">🌐 Tous les sites</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </header>
@@ -85,6 +90,7 @@ export default function AIODetectorPage() {
               <thead className="bg-gray-800/50 text-gray-400 text-xs">
                 <tr>
                   <th className="text-left py-3 px-5">Query informationnelle</th>
+                  {siteId === "all" && <th className="text-left py-3 px-3">Site</th>}
                   <th className="text-right py-3 px-3">Pos</th>
                   <th className="text-right py-3 px-3">CTR actuel</th>
                   <th className="text-right py-3 px-3">CTR attendu</th>
@@ -101,6 +107,14 @@ export default function AIODetectorPage() {
                         {r.query}
                       </a>
                     </td>
+                    {siteId === "all" && (
+                      <td className="py-2 px-3">
+                        {r.site_name
+                          ? <button onClick={() => setSiteId(r.site_id!)} className="bg-blue-900/30 border border-blue-800 text-blue-300 px-2 py-0.5 rounded text-xs hover:bg-blue-900/50">{r.site_name}</button>
+                          : <span className="text-gray-500 text-xs">—</span>
+                        }
+                      </td>
+                    )}
                     <td className="text-right py-2 px-3 text-green-400">{r.position}</td>
                     <td className="text-right py-2 px-3 text-red-400">{r.ctr_actual_pct}%</td>
                     <td className="text-right py-2 px-3 text-gray-400">{r.ctr_expected_pct}%</td>

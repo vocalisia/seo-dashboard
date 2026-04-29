@@ -73,7 +73,7 @@ interface SiteLangRow {
 
 export default function AutopilotPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState("fr");
   const [siteLangs, setSiteLangs] = useState<SiteLangRow[]>([]);
   const [savingLangs, setSavingLangs] = useState(false);
@@ -140,7 +140,7 @@ export default function AutopilotPage() {
       if (list.length > 0) {
         setSites(list);
         if (!selectedSite) {
-          setSelectedSite(list[0].id);
+          setSelectedSite("all");
         }
       }
     } catch {
@@ -151,7 +151,7 @@ export default function AutopilotPage() {
   async function fetchHistory() {
     setLoadingRuns(true);
     try {
-      const url = selectedSite
+      const url = selectedSite && selectedSite !== "all"
         ? `/api/autopilot/history?site_id=${selectedSite}`
         : "/api/autopilot/history";
       const res = await fetch(url);
@@ -165,7 +165,7 @@ export default function AutopilotPage() {
   }
 
   async function runAutopilot(dryRun: boolean) {
-    if (!selectedSite) {
+    if (!selectedSite || selectedSite === "all") {
       setError("Sélectionne un site d'abord");
       return;
     }
@@ -360,10 +360,10 @@ export default function AutopilotPage() {
               <label className="text-sm text-gray-400">Site cible</label>
               <select
                 value={selectedSite ?? ""}
-                onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
+                onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
                 className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 w-64"
               >
-                <option value="">— Sélectionner un site —</option>
+                <option value="all">🌐 Tous les sites</option>
                 {sites.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
@@ -395,7 +395,7 @@ export default function AutopilotPage() {
           <div className="flex gap-3">
             <button
               onClick={() => runAutopilot(true)}
-              disabled={loading || !selectedSite}
+              disabled={loading || !selectedSite || selectedSite === "all"}
               className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
             >
               {loading ? (
@@ -408,7 +408,7 @@ export default function AutopilotPage() {
 
             <button
               onClick={() => runAutopilot(false)}
-              disabled={loading || !selectedSite}
+              disabled={loading || !selectedSite || selectedSite === "all"}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
             >
               {loading ? (

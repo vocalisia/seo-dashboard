@@ -30,9 +30,28 @@ export async function GET(req: NextRequest) {
   }
 
   const sql = getSQL();
+  const isAll = siteId === "all";
 
   try {
-    const rows = (await sql`
+    const rows = (isAll ? await sql`
+      SELECT
+        s.name AS site_name,
+        scd.query AS keyword,
+        SUM(scd.clicks)::int AS clicks,
+        SUM(scd.impressions)::int AS impressions,
+        AVG(scd.position)::float AS position
+      FROM search_console_data scd
+      JOIN sites s ON s.id = scd.site_id
+      WHERE scd.date >= NOW() - INTERVAL '30 days'
+        AND scd.query IS NOT NULL
+      GROUP BY s.name, scd.query
+      HAVING
+        SUM(scd.clicks) >= ${minClicks}
+        AND array_length(string_to_array(scd.query, ' '), 1) >= ${minWords}
+        AND AVG(scd.position) BETWEEN ${posMin} AND ${posMax}
+      ORDER BY SUM(scd.clicks) DESC
+      LIMIT 500
+    ` : await sql`
       SELECT
         query AS keyword,
         SUM(clicks)::int AS clicks,
@@ -49,7 +68,7 @@ export async function GET(req: NextRequest) {
         AND AVG(position) BETWEEN ${posMin} AND ${posMax}
       ORDER BY SUM(clicks) DESC
       LIMIT 500
-    `) as { keyword: string; clicks: number; impressions: number; position: number }[];
+    `) as { keyword: string; clicks: number; impressions: number; position: number; site_name?: string }[];
 
     const enriched = rows.map((r) => {
       const pos = Number(r.position);
@@ -60,7 +79,7 @@ export async function GET(req: NextRequest) {
       const difficulty =
         volume > 10000 ? "hard" : volume > 3000 ? "medium" : "easy";
       const intent = classifyIntent(r.keyword);
-      return { ...r, volume, difficulty, intent };
+      return { ...r, volume, difficulty, intent, site_name: r.site_name };
     });
 
     return NextResponse.json({ success: true, keywords: enriched });

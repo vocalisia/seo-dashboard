@@ -26,7 +26,7 @@ interface TrackerData {
 
 export default function TrackerPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [data, setData] = useState<TrackerData | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -35,12 +35,12 @@ export default function TrackerPage() {
       const res = await fetch("/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
-      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
+      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite("all"); }
     } catch { /* ignore */ }
   };
 
   const fetchData = async () => {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setLoading(true);
     try {
       const res = await fetch(`/api/position-history?site_id=${selectedSite}&days=90`);
@@ -120,13 +120,17 @@ export default function TrackerPage() {
         <div className="flex items-center gap-4">
           <select
             value={selectedSite ?? ""}
-            onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
+            onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 w-64"
           >
+            <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
+          {selectedSite === "all" && (
+            <span className="text-xs text-gray-500">Sélectionner un site pour voir le tracker</span>
+          )}
         </div>
 
         {loading && (

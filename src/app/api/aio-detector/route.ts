@@ -24,24 +24,45 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getSQL();
-    const id = parseInt(siteId);
+    const isAll = siteId === "all";
 
-    const rows = await sql`
-      SELECT
-        query,
-        page,
-        SUM(clicks) AS clicks,
-        SUM(impressions) AS impressions,
-        AVG(position) AS position,
-        AVG(ctr) AS ctr
-      FROM search_console_data
-      WHERE site_id = ${id}
-        AND date >= NOW() - INTERVAL '1 day' * ${days}
-        AND query IS NOT NULL
-        AND position <= 10
-      GROUP BY query, page
-      HAVING SUM(impressions) >= 100
-    `;
+    const rows = isAll
+      ? await sql`
+        SELECT
+          d.query,
+          d.page,
+          d.site_id,
+          s.name AS site_name,
+          SUM(d.clicks) AS clicks,
+          SUM(d.impressions) AS impressions,
+          AVG(d.position) AS position,
+          AVG(d.ctr) AS ctr
+        FROM search_console_data d
+        LEFT JOIN sites s ON s.id = d.site_id
+        WHERE d.date >= NOW() - INTERVAL '1 day' * ${days}
+          AND d.query IS NOT NULL
+          AND d.position <= 10
+        GROUP BY d.query, d.page, d.site_id, s.name
+        HAVING SUM(d.impressions) >= 100
+      `
+      : await sql`
+        SELECT
+          query,
+          page,
+          ${parseInt(siteId)}::int AS site_id,
+          NULL::text AS site_name,
+          SUM(clicks) AS clicks,
+          SUM(impressions) AS impressions,
+          AVG(position) AS position,
+          AVG(ctr) AS ctr
+        FROM search_console_data
+        WHERE site_id = ${parseInt(siteId)}
+          AND date >= NOW() - INTERVAL '1 day' * ${days}
+          AND query IS NOT NULL
+          AND position <= 10
+        GROUP BY query, page
+        HAVING SUM(impressions) >= 100
+      `;
 
     const flagged = (rows as Record<string, unknown>[]).map(r => {
       const query = String(r.query);
@@ -59,6 +80,8 @@ export async function GET(request: NextRequest) {
       return {
         query,
         page: r.page,
+        site_id: r.site_id !== undefined ? Number(r.site_id) : null,
+        site_name: r.site_name ? String(r.site_name) : null,
         position: Number(Number(r.position).toFixed(1)),
         impressions,
         clicks,

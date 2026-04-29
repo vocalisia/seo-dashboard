@@ -25,7 +25,7 @@ const PRIORITY_STYLE: Record<string, string> = {
 
 export default function ClustersPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -36,12 +36,12 @@ export default function ClustersPage() {
       const res = await fetch("/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
-      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
+      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite("all"); }
     } catch { /* ignore */ }
   }
 
   async function fetchCached() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setLoading(true);
     setError(null);
     try {
@@ -63,7 +63,7 @@ export default function ClustersPage() {
   }
 
   async function generateClusters() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setGenerating(true);
     setError(null);
     try {
@@ -83,7 +83,7 @@ export default function ClustersPage() {
   }
 
   useEffect(() => { void fetchSites(); }, []); // eslint-disable-line react-hooks/set-state-in-effect
-  useEffect(() => { if (selectedSite) void fetchCached(); }, [selectedSite]); // eslint-disable-line react-hooks/set-state-in-effect
+  useEffect(() => { if (selectedSite && selectedSite !== "all") void fetchCached(); }, [selectedSite]); // eslint-disable-line react-hooks/set-state-in-effect
 
   const totalKw = clusters.reduce((s, c) => s + (c.keywords?.length ?? 0), 0);
   const totalImpr = clusters.reduce((s, c) => s + (c.total_impressions ?? 0), 0);
@@ -102,9 +102,10 @@ export default function ClustersPage() {
         <div className="flex items-center gap-4">
           <select
             value={selectedSite ?? ""}
-            onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
+            onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
           >
+            <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
           {(() => {

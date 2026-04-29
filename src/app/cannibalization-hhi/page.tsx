@@ -13,28 +13,37 @@ interface CannibRow {
   severity: "HIGH"|"MED"|"LOW";
   estimated_loss: number;
   suggested_action: string;
+  site_id?: number | null; site_name?: string | null;
 }
+
+type SiteFilter = number | "all";
+type SeverityOrder = "default" | "HIGH" | "MED" | "LOW";
+
+const SEV_RANK: Record<string, number> = { HIGH: 3, MED: 2, LOW: 1 };
 
 export default function CannibalizationHHIPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [siteId, setSiteId] = useState<number | null>(null);
+  const [siteId, setSiteId] = useState<SiteFilter | null>(null);
   const [rows, setRows] = useState<CannibRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [severitySort, setSeveritySort] = useState<SeverityOrder>("default");
+  const [groupBySite, setGroupBySite] = useState(false);
 
   useEffect(() => {
     fetch("/api/sites").then(r => r.json()).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
-        if (data.length > 0) setSiteId((data[0] as Site).id);
+        if (data.length > 0) setSiteId("all");
       }
     });
   }, []);
 
   useEffect(() => {
-    if (!siteId) return;
+    if (siteId === null) return;
     setLoading(true);
-    fetch(`/api/cannibalization-hhi?siteId=${siteId}&days=28&limit=50`)
+    const limit = siteId === "all" ? 150 : 50;
+    fetch(`/api/cannibalization-hhi?siteId=${siteId}&days=28&limit=${limit}`)
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) setRows(data as CannibRow[]);
@@ -45,6 +54,30 @@ export default function CannibalizationHHIPage() {
   const totalLoss = rows.reduce((s, r) => s + r.estimated_loss, 0);
   const high = rows.filter(r => r.severity === "HIGH").length;
 
+  const sortedRows = [...rows].sort((a, b) => {
+    if (severitySort === "default") return 0;
+    const ra = SEV_RANK[a.severity] ?? 0;
+    const rb = SEV_RANK[b.severity] ?? 0;
+    return severitySort === "HIGH" ? rb - ra : ra - rb;
+  });
+
+  const groupedRows: { site: string; items: CannibRow[] }[] =
+    groupBySite && siteId === "all"
+      ? Object.entries(
+          sortedRows.reduce<Record<string, CannibRow[]>>((acc, r) => {
+            const key = r.site_name ?? "Sans site";
+            (acc[key] ??= []).push(r);
+            return acc;
+          }, {})
+        ).map(([site, items]) => ({ site, items }))
+      : [{ site: "", items: sortedRows }];
+
+  function cycleSeverity() {
+    setSeveritySort(prev =>
+      prev === "default" ? "HIGH" : prev === "HIGH" ? "LOW" : "default"
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
@@ -53,8 +86,9 @@ export default function CannibalizationHHIPage() {
           <AlertTriangle className="w-6 h-6 text-red-500" />
           <h1 className="text-xl font-bold">Cannibalisation (HHI score)</h1>
         </div>
-        <select value={siteId || ""} onChange={e => setSiteId(parseInt(e.target.value))}
+        <select value={siteId ?? ""} onChange={e => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value))}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
+          <option value="all">🌐 Tous les sites</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </header>
@@ -75,12 +109,33 @@ export default function CannibalizationHHIPage() {
       </div>
 
       <div className="px-6 pb-10 space-y-2">
+        {!loading && rows.length > 0 && (
+          <div className="flex items-center gap-2 pb-2">
+            <button onClick={cycleSeverity}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${severitySort !== "default" ? "bg-red-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
+              {severitySort === "default" ? "Trier: sévérité" : severitySort === "HIGH" ? "HIGH ↓" : "LOW ↑"}
+            </button>
+            {siteId === "all" && (
+              <button onClick={() => setGroupBySite(g => !g)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${groupBySite ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
+                Grouper par site
+              </button>
+            )}
+          </div>
+        )}
         {loading ? (
           <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-red-500" /></div>
         ) : rows.length === 0 ? (
           <div className="py-12 text-center text-gray-500">Pas de cannibalisation détectée 🎉</div>
         ) : (
-          rows.map((r, i) => {
+          groupedRows.map(({ site, items }) => (
+            <div key={site}>
+              {groupBySite && siteId === "all" && site && (
+                <div className="px-2 py-1.5 text-xs font-semibold text-blue-300 uppercase tracking-wider">
+                  {site} <span className="text-gray-500 font-normal">({items.length})</span>
+                </div>
+              )}
+              {items.map((r, i) => {
             const isOpen = expanded === r.query;
             return (
               <div key={i} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -95,6 +150,12 @@ export default function CannibalizationHHIPage() {
                       {r.severity}
                     </span>
                     <span className="font-medium truncate">{r.query}</span>
+                    {siteId === "all" && r.site_name && (
+                      <button onClick={e => { e.stopPropagation(); setSiteId(r.site_id!); }}
+                        className="bg-blue-900/30 border border-blue-800 text-blue-300 px-2 py-0.5 rounded text-xs hover:bg-blue-900/50 flex-shrink-0">
+                        {r.site_name}
+                      </button>
+                    )}
                     <span className="text-xs text-gray-500">{r.url_count} URLs · HHI {r.hhi}</span>
                   </div>
                   <div className="flex items-center gap-6 text-sm">
@@ -139,7 +200,9 @@ export default function CannibalizationHHIPage() {
                 )}
               </div>
             );
-          })
+          })}
+            </div>
+          ))
         )}
       </div>
     </div>

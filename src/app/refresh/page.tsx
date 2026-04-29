@@ -26,7 +26,7 @@ interface RefreshSuggestion {
 
 export default function RefreshPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [declining, setDeclining] = useState<DecliningPage[]>([]);
   const [loading, setLoading] = useState(false);
   const [optimizing, setOptimizing] = useState<string | null>(null);
@@ -37,7 +37,7 @@ export default function RefreshPage() {
       const res = await fetch("/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
-      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
+      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite("all"); }
     } catch { /* ignore */ }
   };
 
@@ -56,7 +56,7 @@ export default function RefreshPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchSites(); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selectedSite) void fetchDeclining(); }, [selectedSite]);
+  useEffect(() => { if (selectedSite && selectedSite !== "all") void fetchDeclining(); }, [selectedSite]);
 
   async function optimize(pageUrl: string) {
     if (!selectedSite) return;
@@ -94,14 +94,15 @@ export default function RefreshPage() {
         <div className="flex items-center gap-4">
           <select
             value={selectedSite ?? ""}
-            onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
+            onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
           >
+            <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
-          <span className="text-xs text-gray-500">Pages en déclin → suggestions d&apos;optimisation IA</span>
+          <span className="text-xs text-gray-500">{selectedSite === "all" ? "Sélectionner un site pour voir les pages en déclin" : "Pages en déclin → suggestions d'optimisation IA"}</span>
         </div>
 
         {loading ? (

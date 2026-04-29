@@ -4,16 +4,20 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+interface PageEntry { page: string; impressions: number; clicks: number; position: number }
+
 interface CannibRow {
   query: string;
   url_count: number;
   total_impressions: number;
   total_clicks: number;
-  pages: { page: string; impressions: number; clicks: number; position: number }[];
+  pages: PageEntry[];
   hhi: number;
   severity: "HIGH" | "MED" | "LOW";
   estimated_loss: number;
   suggested_action: string;
+  site_id: number | null;
+  site_name: string | null;
 }
 
 export async function GET(request: NextRequest) {
@@ -26,31 +30,50 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getSQL();
-    const id = parseInt(siteId);
+    const isAll = siteId === "all";
 
-    // Queries avec ≥2 URLs concurrentes
-    const rows = await sql`
-      SELECT
-        query,
-        page,
-        SUM(impressions) AS impressions,
-        SUM(clicks) AS clicks,
-        AVG(position) AS position
-      FROM search_console_data
-      WHERE site_id = ${id}
-        AND date >= NOW() - INTERVAL '1 day' * ${days}
-        AND query IS NOT NULL
-        AND page IS NOT NULL
-      GROUP BY query, page
-      HAVING SUM(impressions) > 10
-    `;
+    const rows = isAll
+      ? await sql`
+          SELECT
+            d.query, d.page, d.site_id, s.name AS site_name,
+            SUM(d.impressions) AS impressions,
+            SUM(d.clicks) AS clicks,
+            AVG(d.position) AS position
+          FROM search_console_data d
+          LEFT JOIN sites s ON s.id = d.site_id
+          WHERE d.date >= NOW() - INTERVAL '1 day' * ${days}
+            AND d.query IS NOT NULL
+            AND d.page IS NOT NULL
+          GROUP BY d.query, d.page, d.site_id, s.name
+          HAVING SUM(d.impressions) > 10
+        `
+      : await sql`
+          SELECT
+            query, page,
+            ${parseInt(siteId)}::int AS site_id,
+            NULL::text AS site_name,
+            SUM(impressions) AS impressions,
+            SUM(clicks) AS clicks,
+            AVG(position) AS position
+          FROM search_console_data
+          WHERE site_id = ${parseInt(siteId)}
+            AND date >= NOW() - INTERVAL '1 day' * ${days}
+            AND query IS NOT NULL
+            AND page IS NOT NULL
+          GROUP BY query, page
+          HAVING SUM(impressions) > 10
+        `;
 
-    // Group par query
-    const grouped: Record<string, { page: string; impressions: number; clicks: number; position: number }[]> = {};
+    // Group par (query, site_id)
+    const grouped: Record<string, { siteId: number | null; siteName: string | null; pages: PageEntry[] }> = {};
     for (const r of rows as Record<string, unknown>[]) {
       const q = String(r.query);
-      if (!grouped[q]) grouped[q] = [];
-      grouped[q].push({
+      const sid = r.site_id !== undefined && r.site_id !== null ? Number(r.site_id) : null;
+      const key = isAll ? `${q}|||${String(sid)}` : q;
+      if (!grouped[key]) {
+        grouped[key] = { siteId: sid, siteName: r.site_name ? String(r.site_name) : null, pages: [] };
+      }
+      grouped[key].pages.push({
         page: String(r.page),
         impressions: Number(r.impressions),
         clicks: Number(r.clicks),
@@ -58,14 +81,12 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Calc HHI + severity
     const cannibs: CannibRow[] = [];
-    for (const [query, pages] of Object.entries(grouped)) {
+    for (const [key, { siteId: sid, siteName, pages }] of Object.entries(grouped)) {
       if (pages.length < 2) continue;
       const totalImp = pages.reduce((s, p) => s + p.impressions, 0);
       if (totalImp < 50) continue;
 
-      // HHI = sum(share^2) — 1 = monopole, 0 = dispersion totale
       const hhi = pages.reduce((s, p) => {
         const share = p.impressions / totalImp;
         return s + share * share;
@@ -74,7 +95,6 @@ export async function GET(request: NextRequest) {
       pages.sort((a, b) => b.impressions - a.impressions);
       const sorted = pages.slice(0, 5);
 
-      // Severity = positions proches + HHI bas (= concurrence vraie)
       const minPos = Math.min(...pages.map(p => p.position));
       const maxPos = Math.max(...pages.map(p => p.position));
       const posSpread = maxPos - minPos;
@@ -83,7 +103,6 @@ export async function GET(request: NextRequest) {
       if (hhi < 0.6 && posSpread < 5) severity = "HIGH";
       else if (hhi < 0.75 && posSpread < 10) severity = "MED";
 
-      // Estimation perte = clics qui auraient eu lieu si toute l'attention sur la #1
       const totalClicks = pages.reduce((s, p) => s + p.clicks, 0);
       const bestCtr = Math.max(...pages.map(p => p.clicks / Math.max(1, p.impressions)));
       const estimated_loss = Math.max(0, Math.round(totalImp * bestCtr - totalClicks));
@@ -94,6 +113,7 @@ export async function GET(request: NextRequest) {
         ? "⚡ Différencier les angles ou ajouter rel=canonical"
         : "ℹ️ Surveiller, pas critique";
 
+      const query = isAll ? key.split("|||")[0] : key;
       cannibs.push({
         query,
         url_count: pages.length,
@@ -104,6 +124,8 @@ export async function GET(request: NextRequest) {
         severity,
         estimated_loss,
         suggested_action: suggestion,
+        site_id: sid,
+        site_name: siteName,
       });
     }
 

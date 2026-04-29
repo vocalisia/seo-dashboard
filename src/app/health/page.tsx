@@ -48,7 +48,7 @@ function ScoreBar({ label, score, max = 100 }: { label: string; score: number; m
 
 export default function HealthPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<number | null>(null);
+  const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [health, setHealth] = useState<HealthData | null>(null);
   const [broken, setBroken] = useState<BrokenLinksData | null>(null);
   const [loadingH, setLoadingH] = useState(false);
@@ -63,7 +63,7 @@ export default function HealthPage() {
       const list = Array.isArray(d) ? d : [];
       if (list.length > 0) {
         setSites(list);
-        if (!selectedSite) setSelectedSite(list[0].id);
+        if (!selectedSite) setSelectedSite("all");
         setLoadingAll(true);
         const batch = list.slice(0, 16);
         const results: { name: string; grade: string; score: number; id: number }[] = [];
@@ -90,7 +90,7 @@ export default function HealthPage() {
   }
 
   async function fetchHealth() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setLoadingH(true);
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), 15000);
@@ -104,7 +104,7 @@ export default function HealthPage() {
   }
 
   async function checkBroken() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setLoadingB(true);
     try {
       const res = await fetch("/api/broken-links", {
@@ -121,7 +121,7 @@ export default function HealthPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchSites(); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selectedSite) { void fetchHealth(); } }, [selectedSite]);
+  useEffect(() => { if (selectedSite && selectedSite !== "all") { void fetchHealth(); } }, [selectedSite]);
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -135,8 +135,9 @@ export default function HealthPage() {
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center gap-4">
-          <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(parseInt(e.target.value, 10))}
+          <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64">
+            <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
           {(() => {

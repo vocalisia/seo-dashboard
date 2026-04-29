@@ -101,7 +101,7 @@ function MetricRow({
 
 export default function AuditPage() {
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedSite, setSelectedSite] = useState<Site | null>(null);
+  const [selectedSite, setSelectedSite] = useState<Site | "all" | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AuditResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -112,14 +112,14 @@ export default function AuditPage() {
       .then((data: unknown) => {
         if (Array.isArray(data)) {
           setSites(data as Site[]);
-          if ((data as Site[]).length > 0) setSelectedSite((data as Site[])[0]);
+          if ((data as Site[]).length > 0) setSelectedSite("all");
         }
       })
       .catch(() => {});
   }, []);
 
   async function runAudit() {
-    if (!selectedSite) return;
+    if (!selectedSite || selectedSite === "all") return;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -151,14 +151,16 @@ export default function AuditPage() {
       <div className="px-6 py-6 max-w-5xl mx-auto">
         <div className="flex flex-wrap gap-3 mb-8">
           <select
-            value={selectedSite?.id ?? ""}
+            value={selectedSite === "all" ? "all" : typeof selectedSite === "object" && selectedSite ? String(selectedSite.id) : ""}
             onChange={(e) => {
+              if (e.target.value === "all") { setSelectedSite("all"); setResult(null); return; }
               const s = sites.find((site) => site.id === parseInt(e.target.value, 10));
               setSelectedSite(s ?? null);
               setResult(null);
             }}
             className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
           >
+            <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (
               <option key={s.id} value={s.id}>{s.name} — {s.url}</option>
             ))}
@@ -166,7 +168,7 @@ export default function AuditPage() {
 
           <button
             onClick={runAudit}
-            disabled={loading || !selectedSite}
+            disabled={loading || !selectedSite || selectedSite === "all"}
             className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-5 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
