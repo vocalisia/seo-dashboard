@@ -3,29 +3,28 @@
 
 const MAMMOUTH_BASE = "https://api.mammouth.ai/v1";
 
-// Model aliases — Mammouth supports all of these
+// Model aliases — Mammouth IDs (vérifier via /v1/models)
 export const MODELS = {
   // Tâches SEO assignées
   fast:        "gemini-2.5-flash",            // briefs rapides → Gemini Flash
   smart:       "claude-sonnet-4-6",           // rapports hebdo → Sonnet (meilleur FR)
-  cluster:     "gemini-2.5-flash",            // clustering mots clés → stable via Mammouth
+  cluster:     "gemini-2.5-flash",            // clustering mots clés
   search:      "sonar-pro",                    // recherche SERP temps réel → Perplexity
-  creative:    "mistral-large-latest",        // rédaction créative → Mistral
+  creative:    "mistral-large-3",              // rédaction créative → Mistral
 
   // Tous les modèles dispo
-  haiku:       "claude-haiku-4-5-20251001",
+  haiku:       "claude-haiku-4-5",
   sonnet:      "claude-sonnet-4-6",
   opus:        "claude-opus-4-6",
   geminiFlash: "gemini-2.5-flash",
-  geminiPro:   "gemini-3-pro-image-preview",
+  geminiPro:   "gemini-2.5-pro",
   gpt4o:       "gpt-4o",
   gpt5:        "gpt-5",
-  deepseek:    "deepseek-v3",
-  mistral:     "mistral-large-latest",
-  magistral:   "magistral-medium-latest",
-  perplexity:  "sonar-pro",                    // web search intégré
-  llama:       "meta-llama/llama-4-maverick",
-  grok:        "grok-3",
+  deepseek:    "deepseek-v3.2",
+  mistral:     "mistral-large-3",
+  perplexity:  "sonar-pro",
+  llama:       "llama-4-maverick",
+  grok:        "grok-4-1-fast",
 };
 
 interface Message { role: "user" | "assistant" | "system"; content: string; }
