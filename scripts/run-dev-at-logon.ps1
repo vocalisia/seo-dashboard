@@ -24,7 +24,8 @@ $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $env:Path = "$machinePath;$userPath"
 
-$port = 3000
+$port = 3001
+$env:PORT = "$port"
 try {
   $tcp = New-Object System.Net.Sockets.TcpClient
   $iar = $tcp.BeginConnect("127.0.0.1", $port, $null, $null)
@@ -33,25 +34,25 @@ try {
     $tcp.EndConnect($iar)
     if ($tcp.Connected) {
       $tcp.Close()
-      Write-Log "Port $port deja en ecoute — on ne lance pas une 2e instance."
+      Write-Log "Port $port deja en ecoute - on ne lance pas une 2e instance."
       exit 0
     }
   }
   $tcp.Close()
 } catch {
-  Write-Log "Test port $port : $($_.Exception.Message) — on continue vers npm run dev."
+  Write-Log "Test port $port : $($_.Exception.Message) - on continue vers npm run dev."
 }
 
 Set-Location $ProjectRoot
-Write-Log "Demarrage npm run dev dans $ProjectRoot"
+Write-Log "Demarrage npm run dev sur port $port dans $ProjectRoot"
 
 $npmCmd = Join-Path ${env:ProgramFiles} "nodejs\npm.cmd"
 if (Test-Path $npmCmd) {
-  & $npmCmd @("run", "dev")
+  & $npmCmd @("run", "dev", "--", "-p", "$port")
 } elseif (Get-Command npm.cmd -ErrorAction SilentlyContinue) {
-  & (Get-Command npm.cmd).Source @("run", "dev")
+  & (Get-Command npm.cmd).Source @("run", "dev", "--", "-p", "$port")
 } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
-  & (Get-Command npm).Source @("run", "dev")
+  & (Get-Command npm).Source @("run", "dev", "--", "-p", "$port")
 } else {
   Write-Log "ERREUR: npm introuvable (PATH + Program Files/nodejs)."
   exit 1

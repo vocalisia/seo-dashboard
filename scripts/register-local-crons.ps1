@@ -16,7 +16,7 @@ if (-not $cronSecret) {
   $cronSecret = ""
 }
 
-$baseUrl = "http://localhost:3000"
+$baseUrl = "http://localhost:3001"
 $tasks = @(
   @{ Name = "Vocalis_Seo_Sync_Daily";        Path = "/api/sync";                   Schedule = "Daily";  At = "03:00" },
   @{ Name = "Vocalis_Seo_Alerts_Daily";      Path = "/api/alerts/check";           Schedule = "Daily";  At = "06:00" },

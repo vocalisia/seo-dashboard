@@ -22,7 +22,7 @@ $action = New-ScheduledTaskAction -Execute $psExe -Argument $argLine -WorkingDir
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 
 # Interactive = meme contexte qu'une session utilisateur (PATH / profil charge comme a l'ouverture de session)
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Least
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
@@ -41,6 +41,6 @@ Register-ScheduledTask `
   -Settings $settings `
   -Description "Demarre automatiquement le SEO dashboard (npm run dev) a la connexion Windows."
 
-Write-Host "OK — tache '$taskName' enregistree pour utilisateur $env:USERNAME."
+Write-Host "OK - tache '$taskName' enregistree pour utilisateur $env:USERNAME."
 Write-Host "Logs: $projectRoot\logs\dev-autostart.log"
 Write-Host "Pour tester tout de suite: Start-ScheduledTask -TaskName $taskName"

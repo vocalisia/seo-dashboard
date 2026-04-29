@@ -18,7 +18,7 @@
 cd C:\Users\cohen.000\seo-dashboard
 .\scripts\register-local-crons.ps1
 ```
-→ crée 7 tâches `Vocalis_Seo_*` qui curl localhost:3000.
+→ crée 7 tâches `Vocalis_Seo_*` qui curl localhost:3001.
 
 ### 3. Finaliser côté Vercel (manuel)
 Va sur https://vercel.com/vocalispro-1409/seo-dashboard → Settings →
@@ -28,11 +28,11 @@ Va sur https://vercel.com/vocalispro-1409/seo-dashboard → Settings →
 Le push GitHub ne triggera plus de deploy grâce à `vercel.json.git.deploymentEnabled: false`.
 
 ## URL d'accès local
-- Local PC: http://localhost:3000
+- Local PC: http://localhost:3001
 - LAN (autres appareils même WiFi): `http://<IP_LOCALE>:3000` (trouve IP via `ipconfig`)
 - Externe (mobile/extérieur): tunnel Cloudflare on-demand:
   ```powershell
-  cloudflared tunnel --url http://localhost:3000
+  cloudflared tunnel --url http://localhost:3001
   ```
 
 ## Vérifier état des crons
