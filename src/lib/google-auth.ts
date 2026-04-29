@@ -42,6 +42,21 @@ export function getGoogleAuth(accessToken?: string) {
   });
 }
 
+export function getGoogleAuthWithWriteScope() {
+  const creds = getServiceAccountCredentials();
+  return new google.auth.GoogleAuth({
+    credentials: {
+      client_email: creds.client_email,
+      private_key: creds.private_key,
+    },
+    scopes: [
+      "https://www.googleapis.com/auth/analytics.readonly",
+      "https://www.googleapis.com/auth/webmasters",
+      "https://www.googleapis.com/auth/indexing",
+    ],
+  });
+}
+
 export function getAnalyticsClient(accessToken?: string) {
   return google.analyticsdata({ version: "v1beta", auth: getGoogleAuth(accessToken) as never });
 }
