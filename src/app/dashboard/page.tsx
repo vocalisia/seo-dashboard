@@ -434,6 +434,18 @@ export default function DashboardPage() {
           <Link href="/aio-detector" className="bg-gradient-to-r from-cyan-600/20 to-purple-600/20 hover:from-cyan-600/40 hover:to-purple-600/40 text-cyan-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-cyan-800/30">
             ✨ AIO
           </Link>
+          <Link href="/ai-visibility" className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-blue-800/40">
+            🤖 AI Visibility
+          </Link>
+          <Link href="/ai-prompts" className="bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-yellow-800/40">
+            💡 AI Prompts
+          </Link>
+          <Link href="/keywords-pro" className="bg-green-600/20 hover:bg-green-600/40 text-green-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-green-800/40">
+            🎯 Keywords Pro
+          </Link>
+          <Link href="/content-plan" className="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-indigo-800/40">
+            📅 Content Plan
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
