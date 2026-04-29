@@ -5,7 +5,7 @@ import { askAI, generateImage, MODELS } from "@/lib/ai";
 import { z } from "zod";
 
 const schema = z.object({
-  action: z.enum(["write", "translate", "image", "analyze"]),
+  action: z.enum(["write", "translate", "image", "analyze", "research", "competitor"]),
   prompt: z.string().min(1).max(4000),
   context: z.string().optional(),
   targetLang: z.string().optional(),
@@ -42,6 +42,12 @@ export async function POST(req: NextRequest) {
     } else if (body.action === "analyze") {
       systemPrompt = `Tu es un consultant SEO senior. Analyse les données fournies et donne 3-5 recommandations actionnables et priorisées. Format markdown concis. Contexte: ${body.context ?? "aucun"}.`;
       model = "smart";
+    } else if (body.action === "research") {
+      systemPrompt = `Tu es un expert SEO avec accès SERP temps réel. Recherche les données 2026 actuelles. Cite tes sources (URLs). Réponds en markdown structuré FR. Contexte: ${body.context ?? "aucun"}.`;
+      model = "search";
+    } else if (body.action === "competitor") {
+      systemPrompt = `Tu es un analyste concurrentiel SEO avec accès web temps réel. Identifie concurrents directs (top 10 SERP), extrait leurs mots-clés, contenu récent, backlinks visibles, faiblesses. Cite URLs. Format markdown FR. Contexte: ${body.context ?? "aucun"}.`;
+      model = "search";
     }
 
     const reply = await askAI(

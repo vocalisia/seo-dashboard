@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Search, Zap, TrendingUp, ExternalLink, Target, GitCompare } from "lucide-react";
+import { ArrowLeft, Loader2, Search, Zap, TrendingUp, ExternalLink, Target, GitCompare, Bot, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
 
 interface Site {
@@ -58,6 +58,22 @@ interface GapRow {
 
 type ActiveTab = "analysis" | "gaps";
 
+interface AiModal {
+  open: boolean;
+  prompt: string;
+  context: string;
+  result: string | null;
+  loading: boolean;
+  error: string | null;
+  copied: boolean;
+}
+
+const AI_QUICK_ACTIONS = [
+  { label: "Comparer stratégies", prompt: "Compare la stratégie SEO de chaque concurrent. Identifie qui est le plus fort et pourquoi." },
+  { label: "Articles à écrire", prompt: "Liste 10 articles que je dois écrire pour battre ces concurrents, avec angle unique pour chaque." },
+  { label: "Forces/faiblesses", prompt: "Pour chaque concurrent, donne 3 forces et 3 faiblesses SEO." },
+];
+
 export default function CompetitorsPage() {
   const router = useRouter();
   const [sites, setSites] = useState<Site[]>([]);
@@ -72,6 +88,17 @@ export default function CompetitorsPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("analysis");
   const [gapRows, setGapRows] = useState<GapRow[]>([]);
   const [gapsLoading, setGapsLoading] = useState(false);
+  const [aiModal, setAiModal] = useState<AiModal>({
+    open: false,
+    prompt: "",
+    context: "",
+    result: null,
+    loading: false,
+    error: null,
+    copied: false,
+  });
+  const [briefLoading, setBriefLoading] = useState<string | null>(null);
+  const [briefResult, setBriefResult] = useState<{ keyword: string; text: string } | null>(null);
 
   async function fetchSites() {
     try {
@@ -157,6 +184,77 @@ export default function CompetitorsPage() {
     setGapsLoading(false);
   }
 
+  const callAI = useCallback(async (prompt: string, context: string) => {
+    setAiModal((s) => ({ ...s, loading: true, error: null, result: null }));
+    try {
+      const res = await fetch("/api/ai/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "analyze", prompt, context }),
+      });
+      const data = await res.json() as { success: boolean; reply?: string; error?: string };
+      if (data.success && data.reply) {
+        setAiModal((s) => ({ ...s, loading: false, result: data.reply ?? null }));
+      } else {
+        setAiModal((s) => ({ ...s, loading: false, error: data.error ?? "Erreur inconnue" }));
+      }
+    } catch (err) {
+      setAiModal((s) => ({ ...s, loading: false, error: err instanceof Error ? err.message : "Erreur réseau" }));
+    }
+  }, []);
+
+  function openAiModal(site: Site | undefined, competitors: Competitor[]) {
+    if (!site) return;
+    const context = `Site ${site.name} vs concurrents: ${competitors.map((c) => c.domain).join(", ")}`;
+    const prefill = `Site: ${site.name}\nConcurrents identifiés: ${competitors.map((c) => c.domain).join(", ")}\n\n`;
+    setAiModal({ open: true, prompt: prefill, context, result: null, loading: false, error: null, copied: false });
+  }
+
+  async function callBriefIA(gap: KeywordGap) {
+    const key = gap.keyword;
+    setBriefLoading(key);
+    setBriefResult(null);
+    const prompt = `Génère un brief SEO complet pour cibler le mot-clé "${gap.keyword}" où concurrent "${gap.competitor}" est positionné #${gap.competitor_position}. Inclus: angle unique, plan H2/H3, mots-clés sémantiques, longueur cible, schema FAQ, CTA recommandé.`;
+    try {
+      const res = await fetch("/api/ai/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "write", prompt }),
+      });
+      const data = await res.json() as { success: boolean; reply?: string; error?: string };
+      if (data.success && data.reply) {
+        setBriefResult({ keyword: key, text: data.reply });
+      } else {
+        showNotification("error", data.error ?? "Erreur IA");
+      }
+    } catch {
+      showNotification("error", "Erreur réseau");
+    }
+    setBriefLoading(null);
+  }
+
+  async function saveToContentPlan(keyword: string) {
+    if (!selectedSite || selectedSite === "all") {
+      showNotification("error", "Sélectionne un site d'abord");
+      return;
+    }
+    try {
+      const res = await fetch("/api/content-plan/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ siteId: selectedSite }),
+      });
+      const data = await res.json() as { success: boolean };
+      if (data.success) {
+        showNotification("success", `"${keyword}" ajouté au content plan`);
+      } else {
+        showNotification("error", "Impossible d'enregistrer dans le content plan");
+      }
+    } catch {
+      showNotification("error", "Erreur réseau");
+    }
+  }
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchSites();
@@ -169,9 +267,125 @@ export default function CompetitorsPage() {
 
   const gaps = result?.gaps ?? cached;
   const totalVolume = gaps.reduce((s, g) => s + (g.volume ?? 0), 0);
+  const selectedSiteObj = sites.find((s) => s.id === selectedSite);
+  const hasAiContext = !!selectedSiteObj && (result?.competitors ?? []).length > 0;
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
+      {/* AI Modal */}
+      {aiModal.open && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setAiModal((s) => ({ ...s, open: false }))} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+                <div className="flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-purple-400" />
+                  <span className="font-semibold text-white">Analyser concurrent avec IA</span>
+                </div>
+                <button onClick={() => setAiModal((s) => ({ ...s, open: false }))} className="text-gray-400 hover:text-white transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5 flex-1 overflow-y-auto space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {AI_QUICK_ACTIONS.map((a) => (
+                    <button key={a.label} onClick={() => setAiModal((s) => ({ ...s, prompt: `${s.prompt.split("\n\n")[0]}\n\n${a.prompt}` }))}
+                      className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-xs rounded-lg transition-colors border border-purple-700/40">
+                      {a.label}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-white resize-none focus:outline-none focus:border-purple-500 h-36"
+                  value={aiModal.prompt}
+                  onChange={(e) => setAiModal((s) => ({ ...s, prompt: e.target.value }))}
+                  placeholder="Décris ta demande d'analyse..."
+                />
+                <button
+                  onClick={() => void callAI(aiModal.prompt, aiModal.context)}
+                  disabled={aiModal.loading || !aiModal.prompt.trim()}
+                  className="w-full py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded-lg text-sm font-medium text-white transition-colors flex items-center justify-center gap-2"
+                >
+                  {aiModal.loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+                  Lancer l&apos;analyse
+                </button>
+                {aiModal.error && (
+                  <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-sm text-red-300">{aiModal.error}</div>
+                )}
+                {aiModal.result && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-400">Résultat</span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            void navigator.clipboard.writeText(aiModal.result ?? "").then(() => {
+                              setAiModal((s) => ({ ...s, copied: true }));
+                              setTimeout(() => setAiModal((s) => ({ ...s, copied: false })), 2000);
+                            });
+                          }}
+                          className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
+                        >
+                          {aiModal.copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          {aiModal.copied ? "Copié" : "Copier"}
+                        </button>
+                        <button
+                          onClick={() => void saveToContentPlan("analyse-concurrents")}
+                          className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
+                        >
+                          Sauvegarder
+                        </button>
+                      </div>
+                    </div>
+                    <div className="bg-gray-800 rounded-lg p-4 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed max-h-72 overflow-y-auto">
+                      {aiModal.result}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+      {/* Brief IA Modal */}
+      {briefResult && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setBriefResult(null)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-purple-400" />
+                  <span className="font-semibold text-white">Brief IA — {briefResult.keyword}</span>
+                </div>
+                <button onClick={() => setBriefResult(null)} className="text-gray-400 hover:text-white transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5 flex-1 overflow-y-auto space-y-3">
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => { void navigator.clipboard.writeText(briefResult.text); showNotification("success", "Copié !"); }}
+                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
+                  >
+                    <Copy className="w-3 h-3" /> Copier
+                  </button>
+                  <button
+                    onClick={() => void saveToContentPlan(briefResult.keyword)}
+                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
+                  >
+                    Sauvegarder dans content-plan
+                  </button>
+                </div>
+                <div className="bg-gray-800 rounded-lg p-4 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed max-h-[60vh] overflow-y-auto">
+                  {briefResult.text}
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       {/* Toast notification */}
       {notification && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg border text-sm ${
@@ -252,10 +466,20 @@ export default function CompetitorsPage() {
                           </div>
                         </td>
                         <td className="px-5 py-3 text-center">
-                          <a href={`/api/content-brief?query=${encodeURIComponent(g.keyword)}`} target="_blank" rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-3 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 rounded text-xs transition-colors">
-                            <Zap className="w-3 h-3" /> Brief
-                          </a>
+                          <div className="flex items-center justify-center gap-1">
+                            <a href={`/api/content-brief?query=${encodeURIComponent(g.keyword)}`} target="_blank" rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 rounded text-xs transition-colors">
+                              <Zap className="w-3 h-3" /> Brief
+                            </a>
+                            <button
+                              onClick={() => void callBriefIA({ keyword: g.keyword, volume: g.volume, competitor: g.competitor_positions[0]?.domain ?? "—", competitor_position: g.competitor_positions[0]?.pos ?? 0, difficulty: "", intent: "" })}
+                              disabled={briefLoading === g.keyword}
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-xs transition-colors disabled:opacity-50"
+                            >
+                              {briefLoading === g.keyword ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bot className="w-3 h-3" />}
+                              IA
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -360,6 +584,19 @@ export default function CompetitorsPage() {
           </div>
         )}
 
+        {/* AI Analysis button */}
+        {hasAiContext && (
+          <div className="flex justify-end">
+            <button
+              onClick={() => openAiModal(selectedSiteObj, result?.competitors ?? [])}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-700/50 text-purple-300 rounded-lg text-sm font-medium transition-colors"
+            >
+              <Bot className="w-4 h-4" />
+              Analyser concurrent avec IA
+            </button>
+          </div>
+        )}
+
         {/* Keyword Gaps table */}
         {gaps.length > 0 && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
@@ -406,18 +643,24 @@ export default function CompetitorsPage() {
                         </span>
                       </td>
                       <td className="px-5 py-3 text-center">
-                        <button
-                          onClick={() => generateArticle(g.keyword)}
-                          disabled={generating === g.keyword}
-                          className="flex items-center gap-1 mx-auto px-3 py-1 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 rounded text-xs font-medium transition-colors disabled:opacity-50"
-                        >
-                          {generating === g.keyword ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <Zap className="w-3 h-3" />
-                          )}
-                          Article
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            onClick={() => generateArticle(g.keyword)}
+                            disabled={generating === g.keyword}
+                            className="flex items-center gap-1 px-2 py-1 bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 rounded text-xs font-medium transition-colors disabled:opacity-50"
+                          >
+                            {generating === g.keyword ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+                            Article
+                          </button>
+                          <button
+                            onClick={() => void callBriefIA(g)}
+                            disabled={briefLoading === g.keyword}
+                            className="flex items-center gap-1 px-2 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-xs font-medium transition-colors disabled:opacity-50"
+                          >
+                            {briefLoading === g.keyword ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bot className="w-3 h-3" />}
+                            Brief IA
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

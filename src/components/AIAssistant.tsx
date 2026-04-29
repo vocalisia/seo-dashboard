@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { Sparkles, X, Loader2, Copy, Check, Download } from "lucide-react";
 
-type ActionTab = "write" | "translate" | "image" | "analyze";
+type ActionTab = "write" | "translate" | "image" | "analyze" | "research";
 
 interface AIAssistantProps {
   context?: string;
@@ -15,6 +15,7 @@ const TABS: { id: ActionTab; label: string }[] = [
   { id: "translate", label: "🌐 Traduction" },
   { id: "image", label: "🎨 Image" },
   { id: "analyze", label: "🔍 Analyse" },
+  { id: "research", label: "🌐 SERP live" },
 ];
 
 const TONES = ["professionnel", "décontracté", "technique", "marketing"];
@@ -96,6 +97,7 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
   const [translateState, setTranslateState] = useState<TranslateState>({ prompt: "", targetLang: "en" });
   const [imageState, setImageState] = useState<ImageState>({ prompt: "" });
   const [analyzeState, setAnalyzeState] = useState<AnalyzeState>({ prompt: context ?? "" });
+  const [researchState, setResearchState] = useState<{ prompt: string }>({ prompt: "" });
 
   const resetResult = () => {
     setResult(null);
@@ -158,6 +160,11 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
   const handleAnalyze = () => {
     if (!analyzeState.prompt.trim()) return;
     void callApi({ action: "analyze", prompt: analyzeState.prompt, context });
+  };
+
+  const handleResearch = () => {
+    if (!researchState.prompt.trim()) return;
+    void callApi({ action: "research", prompt: researchState.prompt, context });
   };
 
   return (
@@ -325,6 +332,46 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
               >
                 {loading ? <Loader2 size={14} className="animate-spin" /> : null}
                 Analyser
+              </button>
+            </div>
+          )}
+
+          {/* Research tab — Perplexity sonar-pro live SERP */}
+          {activeTab === "research" && (
+            <div className="space-y-3">
+              <div className="bg-blue-900/30 border border-blue-700/40 rounded p-2 text-xs text-blue-200">
+                🌐 <strong>Perplexity sonar-pro</strong> — accès SERP Google live + sources URL citées. Idéal: concurrents, mots-clés tendance, contenu récent.
+              </div>
+              <label className="text-xs text-gray-400">Question / recherche</label>
+              <textarea
+                className="w-full bg-gray-800 border border-gray-700 rounded p-2 text-sm text-white resize-none focus:outline-none focus:border-blue-500 h-24"
+                placeholder="Ex: Top 10 concurrents pour 'agent IA vocal' en France 2026"
+                value={researchState.prompt}
+                onChange={(e) => setResearchState({ prompt: e.target.value })}
+              />
+              <div className="flex flex-wrap gap-1">
+                {[
+                  "Top 10 SERP pour [mot-clé]",
+                  "Concurrents directs de [marque]",
+                  "Articles tendance sur [sujet] 2026",
+                  "Backlinks visibles de [domaine]",
+                ].map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => setResearchState({ prompt: q })}
+                    className="text-[10px] bg-gray-800 hover:bg-gray-700 text-gray-300 px-2 py-1 rounded border border-gray-700"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={handleResearch}
+                disabled={loading || !researchState.prompt.trim()}
+                className="w-full py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                {loading ? <Loader2 size={14} className="animate-spin" /> : null}
+                Rechercher (live)
               </button>
             </div>
           )}
