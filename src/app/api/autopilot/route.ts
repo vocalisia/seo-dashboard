@@ -35,14 +35,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  let body: { site_id?: number; dry_run?: boolean; language?: string; source?: "gsc" | "competitor" };
+  let body: { site_id?: number; dry_run?: boolean; language?: string; source?: "gsc" | "competitor"; forced_keyword?: string };
   try {
-    body = (await req.json()) as { site_id?: number; dry_run?: boolean; language?: string; source?: "gsc" | "competitor" };
+    body = (await req.json()) as { site_id?: number; dry_run?: boolean; language?: string; source?: "gsc" | "competitor"; forced_keyword?: string };
   } catch {
     return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { site_id, dry_run = false, language = "fr", source = "gsc" } = body;
+  const { site_id, dry_run = false, language = "fr", source = "gsc", forced_keyword } = body;
   const lang = LANG_CONFIG[language] ?? LANG_CONFIG.fr;
 
   if (!site_id || typeof site_id !== "number") {
@@ -130,8 +130,35 @@ export async function POST(req: NextRequest) {
 
     let kwRows: KeywordRow[] = [];
 
+    // If forced_keyword provided, bypass all keyword discovery
+    if (forced_keyword && forced_keyword.trim().length > 0) {
+      const fk = forced_keyword.trim().toLowerCase();
+      try {
+        const gscRows = (await sql`
+          SELECT query,
+                 AVG(position)    AS position,
+                 SUM(impressions) AS impressions,
+                 SUM(clicks)      AS clicks
+          FROM search_console_data
+          WHERE site_id = ${site_id}
+            AND LOWER(query) = ${fk}
+            AND date >= NOW() - INTERVAL '90 days'
+          GROUP BY query
+          LIMIT 1
+        `) as KeywordRow[];
+        if (gscRows.length > 0) {
+          kwRows = gscRows;
+        } else {
+          kwRows = [{ query: forced_keyword.trim(), position: "0", impressions: "0", clicks: "0" } as unknown as KeywordRow];
+        }
+      } catch {
+        kwRows = [{ query: forced_keyword.trim(), position: "0", impressions: "0", clicks: "0" } as unknown as KeywordRow];
+      }
+      logAutopilot("keyword_forced", { keyword: kwRows[0].query });
+    }
+
     // If source=competitor, go DIRECTLY to competitor gaps (skip GSC entirely)
-    if (source === "competitor") {
+    if (kwRows.length === 0 && source === "competitor") {
       try {
         const gapRows = (await sql`
           SELECT keyword AS query,
@@ -166,8 +193,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // GSC keyword search — only if source=gsc (skip for competitor mode)
-    if (source !== "competitor") {
+    // GSC keyword search — only if source=gsc and no forced_keyword
+    if (kwRows.length === 0 && source !== "competitor") {
 
     // Step A: country-filtered query (requires country data synced)
     // Fetch top N by impressions, then pick first that passes quality filters (not site:, URLs, pure brand…)
