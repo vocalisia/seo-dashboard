@@ -215,25 +215,61 @@ export async function GET(req: NextRequest) {
   const sql = getSQL();
   try {
     const rows = await sql`
-      SELECT * FROM competitor_research
+      SELECT
+        id,
+        site_id,
+        competitor_domain,
+        keyword,
+        estimated_volume,
+        competitor_position,
+        difficulty,
+        intent,
+        researched_at
+      FROM competitor_research
       WHERE site_id = ${parseInt(siteId, 10)}
       ORDER BY estimated_volume DESC
-    `;
+    ` as {
+      id: number;
+      site_id: number;
+      competitor_domain: string;
+      keyword: string;
+      estimated_volume: number;
+      competitor_position: number;
+      difficulty: string;
+      intent: string;
+      researched_at: string;
+    }[];
 
-    // Group by competitor
-    const competitorMap: Record<string, { domain: string; keywords: typeof rows }> = {};
+    // Group by competitor with aggregated stats
+    const competitorMap: Record<string, {
+      domain: string;
+      found_keywords_count: number;
+      total_volume: number;
+    }> = {};
     for (const row of rows) {
-      const domain = row.competitor_domain as string;
+      const domain = row.competitor_domain;
       if (!competitorMap[domain]) {
-        competitorMap[domain] = { domain, keywords: [] };
+        competitorMap[domain] = { domain, found_keywords_count: 0, total_volume: 0 };
       }
-      competitorMap[domain].keywords.push(row);
+      competitorMap[domain].found_keywords_count += 1;
+      competitorMap[domain].total_volume += Number(row.estimated_volume) || 0;
     }
+
+    // Map rows to gaps format (normalize field names)
+    const gaps = rows.map((r) => ({
+      keyword: r.keyword,
+      volume: Number(r.estimated_volume) || 0,
+      competitor: r.competitor_domain,
+      competitor_domain: r.competitor_domain,
+      competitor_position: Number(r.competitor_position) || 0,
+      difficulty: r.difficulty ?? "",
+      intent: r.intent ?? "",
+    }));
 
     return NextResponse.json({
       success: true,
-      gaps: rows,
-      competitors: Object.values(competitorMap),
+      gaps,
+      competitors: Object.values(competitorMap).sort((a, b) => b.total_volume - a.total_volume),
       total: rows.length,
     });
   } catch {
