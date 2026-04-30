@@ -446,6 +446,18 @@ export default function DashboardPage() {
           <Link href="/content-plan" className="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-indigo-800/40">
             📅 Content Plan
           </Link>
+          <Link href="/logs" className="bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-cyan-800/40">
+            📋 Logs
+          </Link>
+          <Link href="/schema" className="bg-violet-600/20 hover:bg-violet-600/40 text-violet-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-violet-800/40">
+            🔣 Schema
+          </Link>
+          <Link href="/index-bloat" className="bg-orange-600/20 hover:bg-orange-600/40 text-orange-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-orange-800/40">
+            🗑 Index Bloat
+          </Link>
+          <Link href="/pagerank" className="bg-teal-600/20 hover:bg-teal-600/40 text-teal-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-teal-800/40">
+            🔗 PageRank
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
