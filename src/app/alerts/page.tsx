@@ -280,6 +280,11 @@ export default function AlertsPage() {
                           <ExternalLink className="w-3 h-3" />
                         </a>
                       )}
+                      {alert.site_url && (
+                        <span className="text-xs text-gray-500 font-mono">
+                          {alert.site_url.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                        </span>
+                      )}
                       <span className="text-xs text-gray-500">
                         {new Date(alert.created_at).toLocaleDateString("fr-FR", {
                           day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
