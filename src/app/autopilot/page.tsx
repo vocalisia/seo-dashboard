@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Zap, Clock, CheckCircle, XCircle, ExternalLink, Globe, Image as ImageIcon, PlayCircle } from "lucide-react";
+import { ArrowLeft, Loader2, Zap, Clock, CheckCircle, XCircle, ExternalLink, Globe, Image as ImageIcon, PlayCircle, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 
@@ -80,6 +80,7 @@ export default function AutopilotPage() {
   const [runs, setRuns] = useState<AutopilotRun[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingRuns, setLoadingRuns] = useState(false);
+  const [retryingId, setRetryingId] = useState<number | null>(null);
   const [result, setResult] = useState<AutopilotResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [batchRunning, setBatchRunning] = useState(false);
@@ -189,6 +190,28 @@ export default function AutopilotPage() {
       // silently ignore
     } finally {
       setLoadingRuns(false);
+    }
+  }
+
+  async function retryRun(run: AutopilotRun) {
+    setRetryingId(run.id);
+    try {
+      const res = await fetch("/api/autopilot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          site_id: run.site_id,
+          dry_run: false,
+          language: run.language ?? "fr",
+          forced_keyword: run.keyword,
+        }),
+      });
+      await res.json();
+      await fetchHistory();
+    } catch {
+      // silently ignore
+    } finally {
+      setRetryingId(null);
     }
   }
 
@@ -652,6 +675,7 @@ export default function AutopilotPage() {
                     <th className="px-5 py-3 text-left font-medium">Image</th>
                     <th className="px-5 py-3 text-left font-medium">Article (site)</th>
                     <th className="px-5 py-3 text-left font-medium">GitHub</th>
+                    <th className="px-5 py-3 text-left font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -741,6 +765,19 @@ export default function AutopilotPage() {
                           </a>
                         ) : (
                           <span className="text-gray-600">—</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3">
+                        {(run.status === "failed" || run.status === "dry_run") && (
+                          <button
+                            type="button"
+                            onClick={() => void retryRun(run)}
+                            disabled={retryingId === run.id}
+                            className="flex items-center gap-1 text-xs bg-orange-600/20 text-orange-400 hover:bg-orange-600/30 px-2 py-1 rounded disabled:opacity-50"
+                          >
+                            {retryingId === run.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                            Relancer
+                          </button>
                         )}
                       </td>
                     </tr>
