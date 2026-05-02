@@ -768,15 +768,17 @@ export default function AutopilotPage() {
                         )}
                       </td>
                       <td className="px-5 py-3">
-                        <button
-                          type="button"
-                          onClick={() => void retryRun(run)}
-                          disabled={retryingId === run.id}
-                          className="flex items-center gap-1 text-xs bg-orange-600/20 text-orange-400 hover:bg-orange-600/30 px-2 py-1 rounded disabled:opacity-50"
-                        >
-                          {retryingId === run.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                          Relancer
-                        </button>
+                        {run.status !== "published" && (
+                          <button
+                            type="button"
+                            onClick={() => void retryRun(run)}
+                            disabled={retryingId === run.id}
+                            className="flex items-center gap-1 text-xs bg-orange-600/20 text-orange-400 hover:bg-orange-600/30 px-2 py-1 rounded disabled:opacity-50"
+                          >
+                            {retryingId === run.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                            Relancer
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
