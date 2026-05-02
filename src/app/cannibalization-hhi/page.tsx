@@ -28,6 +28,7 @@ export default function CannibalizationHHIPage() {
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [severitySort, setSeveritySort] = useState<SeverityOrder>("default");
+  const [severityFilter, setSeverityFilter] = useState<"ALL"|"HIGH"|"MED"|"LOW">("ALL");
   const [groupBySite, setGroupBySite] = useState(false);
 
   useEffect(() => {
@@ -54,12 +55,14 @@ export default function CannibalizationHHIPage() {
   const totalLoss = rows.reduce((s, r) => s + r.estimated_loss, 0);
   const high = rows.filter(r => r.severity === "HIGH").length;
 
-  const sortedRows = [...rows].sort((a, b) => {
-    if (severitySort === "default") return 0;
-    const ra = SEV_RANK[a.severity] ?? 0;
-    const rb = SEV_RANK[b.severity] ?? 0;
-    return severitySort === "HIGH" ? rb - ra : ra - rb;
-  });
+  const sortedRows = [...rows]
+    .filter(r => severityFilter === "ALL" || r.severity === severityFilter)
+    .sort((a, b) => {
+      if (severitySort === "default") return 0;
+      const ra = SEV_RANK[a.severity] ?? 0;
+      const rb = SEV_RANK[b.severity] ?? 0;
+      return severitySort === "HIGH" ? rb - ra : ra - rb;
+    });
 
   const groupedRows: { site: string; items: CannibRow[] }[] =
     groupBySite && siteId === "all"
@@ -110,8 +113,22 @@ export default function CannibalizationHHIPage() {
 
       <div className="px-6 pb-10 space-y-2">
         {!loading && rows.length > 0 && (
-          <div className="flex items-center gap-2 pb-2">
-            <button onClick={cycleSeverity}
+          <div className="flex items-center gap-2 pb-2 flex-wrap">
+            {(["ALL","HIGH","MED","LOW"] as const).map(s => (
+              <button type="button" key={s} onClick={() => setSeverityFilter(s)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                  severityFilter === s
+                    ? s === "HIGH" ? "bg-red-600 text-white"
+                      : s === "MED" ? "bg-yellow-600 text-white"
+                      : s === "LOW" ? "bg-gray-600 text-white"
+                      : "bg-blue-600 text-white"
+                    : "bg-gray-800 text-gray-400 hover:text-white"
+                }`}>
+                {s === "ALL" ? "Tous" : s}
+              </button>
+            ))}
+            <div className="w-px h-4 bg-gray-700 mx-1" />
+            <button type="button" onClick={cycleSeverity}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${severitySort !== "default" ? "bg-red-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
               {severitySort === "default" ? "Trier: sévérité" : severitySort === "HIGH" ? "HIGH ↓" : "LOW ↑"}
             </button>
