@@ -64,11 +64,16 @@ export default function ReportsPage() {
   async function generateNow() {
     setGenerating(true);
     try {
-      // Init DB in case table doesn't exist, then generate
       await fetch("/api/init", { method: "POST" });
-      await fetch("/api/reports/generate", { method: "POST" });
+      const res = await fetch("/api/reports/generate", { method: "POST" });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        alert(`Génération échouée (${res.status}) : ${txt.slice(0, 200)}`);
+      }
       await fetchReports();
-    } catch { /* ignore */ }
+    } catch (e) {
+      alert(`Erreur génération : ${e instanceof Error ? e.message : "réseau"}`);
+    }
     setGenerating(false);
   }
 

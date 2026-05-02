@@ -4,7 +4,7 @@ export const maxDuration = 120;
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAI } from "@/lib/ai";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { requireCronOrUser } from "@/lib/cron-auth";
 
 interface Site {
   id: number;
@@ -18,7 +18,7 @@ interface Site {
  * Stores results in competitor_research table.
  */
 export async function POST(request: Request) {
-  const unauthorized = requireCronSecret(request);
+  const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
   const sql = getSQL();

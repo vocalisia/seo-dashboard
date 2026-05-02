@@ -3,8 +3,9 @@ export const maxDuration = 60;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { askAI } from "@/lib/ai";
 import { resolvePublishedArticleLiveUrl } from "@/lib/autopilot-published-url";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { requireCronOrUser } from "@/lib/cron-auth";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -221,7 +222,65 @@ async function insertAlerts(
 // Email via Resend
 // ---------------------------------------------------------------------------
 
-async function sendAlertEmail(alerts: AlertPayload[], sites: SiteRow[]): Promise<void> {
+// ---------------------------------------------------------------------------
+// AI executive summary
+// ---------------------------------------------------------------------------
+async function generateAiSummary(alerts: AlertPayload[], sites: SiteRow[]): Promise<string> {
+  if (alerts.length === 0) return "";
+  const siteMap = new Map(sites.map((s) => [s.id, s.name]));
+  const condensed = alerts.slice(0, 20).map((a) =>
+    `- [${a.severity.toUpperCase()}] ${siteMap.get(a.site_id) ?? "?"} / "${a.keyword}" → ${a.message}`
+  ).join("\n");
+
+  try {
+    return await askAI(
+      [
+        { role: "system", content: "Tu es un Head of SEO. Tu reçois les alertes du jour. Tu rédiges un résumé exécutif ULTRA-COURT (max 6 lignes) en français : 1) gravité globale (rouge/orange/vert), 2) priorité n°1 à régler aujourd'hui, 3) qui appeler. Marqueurs 🔴 🟡 🟢 🚀." },
+        { role: "user", content: `Alertes SEO du jour (${alerts.length} au total) :\n${condensed}` },
+      ],
+      "smart",
+      400
+    );
+  } catch {
+    return "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Slack webhook
+// ---------------------------------------------------------------------------
+async function sendAlertSlack(alerts: AlertPayload[], sites: SiteRow[], aiSummary: string): Promise<void> {
+  const webhook = process.env.SLACK_WEBHOOK_URL;
+  if (!webhook || alerts.length === 0) return;
+
+  const siteMap = new Map(sites.map((s) => [s.id, s.name]));
+  const critical = alerts.filter((a) => a.severity === "critical").length;
+  const warning = alerts.filter((a) => a.severity === "warning").length;
+
+  const lines = alerts.slice(0, 10).map((a) => {
+    const badge = a.severity === "critical" ? "🔴" : a.severity === "warning" ? "🟡" : "🔵";
+    return `${badge} *${siteMap.get(a.site_id) ?? "?"}* / \`${a.keyword}\` — ${a.message}`;
+  }).join("\n");
+
+  const blocks = [
+    { type: "header", text: { type: "plain_text", text: `🚨 SEO Alerts — ${alerts.length} (🔴 ${critical} / 🟡 ${warning})` } },
+    ...(aiSummary ? [{ type: "section", text: { type: "mrkdwn", text: `*🤖 IA Head of SEO :*\n${aiSummary}` } }] : []),
+    { type: "section", text: { type: "mrkdwn", text: lines } },
+    ...(alerts.length > 10 ? [{ type: "context", elements: [{ type: "mrkdwn", text: `+${alerts.length - 10} autres alertes (voir email/dashboard)` }] }] : []),
+  ];
+
+  try {
+    await fetch(webhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocks, text: `${alerts.length} alertes SEO` }),
+    });
+  } catch (err) {
+    console.error("Slack webhook failed:", err);
+  }
+}
+
+async function sendAlertEmail(alerts: AlertPayload[], sites: SiteRow[], aiSummary: string): Promise<void> {
   const resendKey = process.env.RESEND_API_KEY;
   const alertEmail = process.env.ALERT_EMAIL;
   if (!resendKey || !alertEmail || alerts.length === 0) return;
@@ -242,8 +301,16 @@ async function sendAlertEmail(alerts: AlertPayload[], sites: SiteRow[]): Promise
     })
     .join("");
 
+  const aiBlock = aiSummary
+    ? `<div style="background:#1e293b;color:#e2e8f0;padding:16px;border-radius:8px;margin-bottom:18px;font-family:sans-serif;font-size:13px;line-height:1.6;border-left:4px solid #3b82f6">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#60a5fa;font-weight:bold;margin-bottom:8px">🤖 IA Head of SEO</div>
+        <div style="white-space:pre-wrap">${aiSummary.replace(/</g, "&lt;")}</div>
+      </div>`
+    : "";
+
   const html = `
 <h2>🚨 SEO Alerts — ${alerts.length} issue(s) detected</h2>
+${aiBlock}
 <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
   <thead><tr><th>Severity</th><th>Site</th><th>Type</th><th>Keyword</th><th>Details</th></tr></thead>
   <tbody>${rows}</tbody>
@@ -275,7 +342,7 @@ async function sendAlertEmail(alerts: AlertPayload[], sites: SiteRow[]): Promise
 // ---------------------------------------------------------------------------
 
 export async function POST(request: Request) {
-  const unauthorized = requireCronSecret(request);
+  const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
   const sql = getSQL();
@@ -327,8 +394,14 @@ export async function POST(request: Request) {
     // Persist
     await insertAlerts(sql, allAlerts);
 
-    // Email
-    await sendAlertEmail(allAlerts, sites);
+    // AI exec summary (used by both email + Slack)
+    const aiSummary = await generateAiSummary(allAlerts, sites);
+
+    // Email + Slack in parallel
+    await Promise.all([
+      sendAlertEmail(allAlerts, sites, aiSummary),
+      sendAlertSlack(allAlerts, sites, aiSummary),
+    ]);
 
     return NextResponse.json({
       success: true,
@@ -338,6 +411,9 @@ export async function POST(request: Request) {
         position_drop: allAlerts.filter((a) => a.alert_type === "position_drop").length,
         not_indexed: allAlerts.filter((a) => a.alert_type === "not_indexed").length,
       },
+      ai_summary: aiSummary || null,
+      slack: !!process.env.SLACK_WEBHOOK_URL,
+      email: !!(process.env.RESEND_API_KEY && process.env.ALERT_EMAIL),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

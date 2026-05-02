@@ -3,6 +3,9 @@
     "deploymentEnabled": false
   },
   "crons": [
-    { "path": "/api/cron/gsc-weekly", "schedule": "0 8 * * 1" }
+    { "path": "/api/cron/gsc-weekly", "schedule": "0 8 * * 1" },
+    { "path": "/api/cron/gsc-daily", "schedule": "0 7 * * *" },
+    { "path": "/api/cron/alerts-daily", "schedule": "30 7 * * *" },
+    { "path": "/api/cron/serp-track-weekly", "schedule": "0 9 * * 1" }
   ]
 }

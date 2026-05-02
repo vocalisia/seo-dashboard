@@ -39,13 +39,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           }),
         ]
       : []),
-    ...(isDev && localDevPassword
+    ...(localDevPassword
       ? [
           Credentials({
             id: "credentials",
-            name: "Local",
+            name: "Login Vocalis",
             credentials: {
-              email: { label: "Email", type: "email" },
+              email: { label: "Login", type: "text" },
               password: { label: "Mot de passe", type: "password" },
             },
             async authorize(credentials) {
@@ -53,7 +53,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                 credentials?.email === localDevEmail &&
                 credentials?.password === localDevPassword
               ) {
-                return { id: "local-dev", email: localDevEmail, name: "Dev local" };
+                return { id: "vocalis-admin", email: localDevEmail, name: "Vocalis Admin" };
               }
               return null;
             },

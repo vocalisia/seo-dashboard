@@ -3,7 +3,7 @@ export const maxDuration = 300;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { requireCronSecret, hasValidCronSecret } from "@/lib/cron-auth";
+import { requireCronOrUser, hasValidCronSecret } from "@/lib/cron-auth";
 import { requireApiSession } from "@/lib/api-auth";
 import { getGoogleAuth } from "@/lib/google-auth";
 import { logAutopilot } from "@/lib/autopilot-log";
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
 
 // Vercel cron utilise GET — accepte aussi
 export async function GET(request: Request) {
-  const unauthorized = requireCronSecret(request);
+  const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
   return runVerification();
 }

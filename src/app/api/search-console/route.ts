@@ -79,7 +79,7 @@ export async function GET(request: NextRequest) {
       const rows = countryFilter
         ? await sql`
             WITH w0 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks, SUM(impressions) AS impressions
               FROM search_console_data
               WHERE site_id = ${id}
                 AND date >= NOW() - INTERVAL '7 days'
@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
               ROUND((w2.pos - w1.pos)::numeric, 1) AS gain_w1_w2,
               ROUND((w3.pos - w2.pos)::numeric, 1) AS gain_w2_w3,
               ROUND((w4.pos - w3.pos)::numeric, 1) AS gain_w3_w4,
-              w0.clicks AS clicks_now,
+              w0.clicks AS clicks_now, w0.impressions AS impressions_now,
               w1.clicks AS clicks_prev,
               (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain
             FROM w0
@@ -153,7 +153,7 @@ export async function GET(request: NextRequest) {
           `
         : await sql`
             WITH w0 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
+              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks, SUM(impressions) AS impressions
               FROM search_console_data
               WHERE site_id = ${id}
                 AND date >= NOW() - INTERVAL '7 days'
@@ -207,7 +207,7 @@ export async function GET(request: NextRequest) {
               ROUND((w2.pos - w1.pos)::numeric, 1) AS gain_w1_w2,
               ROUND((w3.pos - w2.pos)::numeric, 1) AS gain_w2_w3,
               ROUND((w4.pos - w3.pos)::numeric, 1) AS gain_w3_w4,
-              w0.clicks AS clicks_now,
+              w0.clicks AS clicks_now, w0.impressions AS impressions_now,
               w1.clicks AS clicks_prev,
               (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain
             FROM w0

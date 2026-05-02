@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { requireCronOrUser } from "@/lib/cron-auth";
 import { getGoogleAuthWithWriteScope } from "@/lib/google-auth";
 import { getSQL } from "@/lib/db";
 
@@ -352,7 +352,7 @@ async function sendAlertEmail(drops: SiteDrop[]): Promise<boolean> {
 // ── Main handler ─────────────────────────────────────────────────────────────
 
 export async function GET(request: Request): Promise<NextResponse> {
-  const authError = requireCronSecret(request);
+  const authError = await requireCronOrUser(request);
   if (authError) return authError;
 
   await ensureGscSnapshotsTable();

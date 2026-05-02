@@ -26,13 +26,14 @@ interface GainData {
   gain: number;
   gain_w1_w2: number | null; gain_w2_w3: number | null; gain_w3_w4: number | null;
   clicks_now: number; clicks_prev: number; clicks_gain: number;
+  impressions_now: number;
 }
 
 interface GainLabels { w0: string; w1: string; w2: string; w3: string; w4: string }
 
 const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec4899","#f97316","#14b8a6","#6366f1","#84cc16","#f43f5e","#a855f7","#0ea5e9","#22c55e","#eab308"];
 
-type Period = "7" | "30" | "90";
+type Period = "3" | "7" | "30" | "90";
 type TabType = "keywords" | "gains" | "analytics" | "device";
 
 interface DeviceRow {
@@ -72,6 +73,50 @@ function volLabel(vol: number): { label: string; color: string } {
   return { label: `${vol.toLocaleString()}`, color: "text-gray-500" };
 }
 
+// CTR moyen Google par position (basé sur Sistrix 2024)
+function ctrAtPosition(pos: number): number {
+  if (pos <= 1) return 0.32;
+  if (pos <= 2) return 0.18;
+  if (pos <= 3) return 0.12;
+  if (pos <= 5) return 0.07;
+  if (pos <= 7) return 0.04;
+  if (pos <= 10) return 0.025;
+  if (pos <= 15) return 0.012;
+  if (pos <= 20) return 0.006;
+  if (pos <= 30) return 0.003;
+  return 0.001;
+}
+
+// Score d'opportunité : combien de clics gagnerais-tu en passant top 3 ?
+// = volume mensuel × (CTR_top3 - CTR_actuel)
+function opportunityScore(monthlyVolume: number, currentPos: number): number {
+  if (monthlyVolume <= 0 || currentPos <= 0) return 0;
+  if (currentPos <= 3) return 0; // déjà top — focus retention
+  const ctrTarget = ctrAtPosition(3);
+  const ctrNow = ctrAtPosition(currentPos);
+  const gain = monthlyVolume * (ctrTarget - ctrNow);
+  return Math.max(0, Math.round(gain));
+}
+
+function oppLabel(score: number): { label: string; color: string; emoji: string } {
+  if (score >= 500) return { label: `+${score.toLocaleString()} clics/mois`, color: "text-orange-400 font-bold", emoji: "🎯" };
+  if (score >= 100) return { label: `+${score.toLocaleString()} clics/mois`, color: "text-yellow-400 font-semibold", emoji: "💎" };
+  if (score >= 20) return { label: `+${score.toLocaleString()}`, color: "text-blue-400", emoji: "📈" };
+  if (score > 0) return { label: `+${score}`, color: "text-gray-400", emoji: "" };
+  return { label: "—", color: "text-gray-600", emoji: "" };
+}
+
+// Action recommandée selon position + volume
+function recommendedAction(position: number, monthlyVolume: number): { label: string; cta: string; type: "push" | "optimize" | "maintain" | "create" } {
+  if (position <= 0) return { label: "Pas de data", cta: "—", type: "create" };
+  if (position <= 3) return { label: "🏆 Maintenir top 3", cta: "Track", type: "maintain" };
+  if (position <= 10) return { label: "✨ Optimiser meta + CTR", cta: "Optimiser", type: "optimize" };
+  if (position <= 20 && monthlyVolume >= 100) return { label: "🚀 Pousser top 10", cta: "Pousser", type: "push" };
+  if (position <= 30 && monthlyVolume >= 500) return { label: "📝 Renforcer contenu + backlinks", cta: "Renforcer", type: "push" };
+  if (monthlyVolume >= 1000) return { label: "🔨 Créer article dédié", cta: "Créer", type: "create" };
+  return { label: "💤 Faible priorité", cta: "—", type: "maintain" };
+}
+
 function solution(pos: number): string {
   if (pos <= 3) return "🏆 Top 3 — maintenir";
   if (pos <= 10) return "✅ Page 1 — optimise CTR (meta title/description)";
@@ -86,7 +131,7 @@ export default function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<Record<number, TabType>>({});
-  const [period, setPeriod] = useState<Period>("30");
+  const [period, setPeriod] = useState<Period>("3");
   const [keywords, setKeywords] = useState<Record<string, QueryData[]>>({});
   const [gains, setGains] = useState<Record<number, GainData[]>>({});
   const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
@@ -96,7 +141,7 @@ export default function DashboardPage() {
   const [siteSortDir, setSiteSortDir] = useState<"asc"|"desc">("desc");
   const [sortCol, setSortCol] = useState<"clicks"|"impressions"|"ctr"|"position"|"volume">("clicks");
   const [sortDir, setSortDir] = useState<"asc"|"desc">("desc");
-  const [gainSortCol, setGainSortCol] = useState<"gain"|"position_now"|"clicks_gain">("gain");
+  const [gainSortCol, setGainSortCol] = useState<"gain"|"position_now"|"clicks_gain"|"volume"|"opportunity">("gain");
   const [gainSortDir, setGainSortDir] = useState<"asc"|"desc">("desc");
   const [analytics, setAnalytics] = useState<Record<number, AnalyticsDay[]>>({});
   const [activeKw, setActiveKw] = useState<{siteId: number; query: string} | null>(null);
@@ -105,13 +150,47 @@ export default function DashboardPage() {
   const [deviceData, setDeviceData] = useState<Record<number, DeviceRow[]>>({});
   const [langFilter, setLangFilter] = useState<string>(""); // "" | "fr" | "en" | "de" | ...
   const [configError, setConfigError] = useState<string | null>(null);
+  const [aiModal, setAiModal] = useState<{
+    siteId: number; query: string; actionType: string; loading: boolean; response?: string; error?: string;
+  } | null>(null);
 
-  async function fetchSites(lang?: string) {
+  async function askAiAgent(siteId: number, query: string, position: number, monthlyVolume: number, actionType: "push" | "optimize" | "maintain" | "create") {
+    setAiModal({ siteId, query, actionType, loading: true });
+    try {
+      const site = sites.find(s => s.id === siteId);
+      const res = await fetch("/api/ai/seo-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          siteId,
+          query,
+          position,
+          monthlyVolume,
+          actionType,
+          siteUrl: site?.url,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAiModal({ siteId, query, actionType, loading: false, response: data.response });
+      } else {
+        setAiModal({ siteId, query, actionType, loading: false, error: data.error || "Erreur IA" });
+      }
+    } catch (e) {
+      setAiModal({ siteId, query, actionType, loading: false, error: e instanceof Error ? e.message : "Erreur réseau" });
+    }
+  }
+
+  async function fetchSites(lang?: string, p?: Period) {
     setLoading(true);
     setConfigError(null);
     try {
-      const langQs = (lang || langFilter) ? `?language=${lang || langFilter}` : "";
-      const res = await fetch(`/api/sites${langQs}`);
+      const langKey = lang ?? langFilter;
+      const periodKey = p ?? period;
+      const params = new URLSearchParams();
+      if (langKey) params.set("language", langKey);
+      params.set("days", periodKey);
+      const res = await fetch(`/api/sites?${params.toString()}`);
       const data = await res.json() as unknown;
       if (data && typeof data === "object" && data !== null && "error" in data) {
         const err = data as { error?: string; message?: string };
@@ -231,6 +310,7 @@ export default function DashboardPage() {
 
   async function changePeriod(p: Period) {
     setPeriod(p);
+    await fetchSites(undefined, p);
     if (expanded) await loadKeywords(expanded, p);
   }
 
@@ -323,6 +403,64 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
+      {/* AI Action Modal */}
+      {aiModal && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setAiModal(null)}
+        >
+          <div
+            className="bg-gray-900 border border-blue-500/30 rounded-xl max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-wider text-blue-400 font-semibold">🤖 Agent IA SEO — {aiModal.actionType}</div>
+                <div className="text-lg font-bold mt-1 text-white">&ldquo;{aiModal.query}&rdquo;</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAiModal(null)}
+                className="text-gray-400 hover:text-white text-2xl px-2"
+                title="Fermer"
+              >×</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              {aiModal.loading && (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-400">
+                  <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+                  <div className="text-sm">L&apos;IA analyse ton mot-clé et génère un plan d&apos;action...</div>
+                </div>
+              )}
+              {aiModal.error && (
+                <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-4 text-red-300 text-sm">
+                  Erreur : {aiModal.error}
+                </div>
+              )}
+              {aiModal.response && (
+                <div className="prose prose-invert prose-sm max-w-none whitespace-pre-wrap text-gray-200 leading-relaxed">
+                  {aiModal.response}
+                </div>
+              )}
+            </div>
+            {aiModal.response && (
+              <div className="px-6 py-3 border-t border-gray-800 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => navigator.clipboard.writeText(aiModal.response!)}
+                  className="px-3 py-1.5 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition"
+                >📋 Copier</button>
+                <button
+                  type="button"
+                  onClick={() => setAiModal(null)}
+                  className="px-3 py-1.5 text-xs rounded bg-blue-600 hover:bg-blue-700 text-white transition"
+                >Fermer</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
@@ -337,7 +475,7 @@ export default function DashboardPage() {
             className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm w-48 focus:outline-none focus:border-blue-500"
           />
           <div className="flex bg-gray-800 border border-gray-700 rounded-lg overflow-hidden text-sm">
-            {(["7","30","90"] as Period[]).map(p => (
+            {(["3","7","30","90"] as Period[]).map(p => (
               <button key={p} onClick={() => changePeriod(p)}
                 className={`px-3 py-2 transition ${period === p ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"}`}>
                 {p}j
@@ -550,8 +688,17 @@ export default function DashboardPage() {
             .filter(g => !search || g.query.toLowerCase().includes(search.toLowerCase()))
             .sort((a, b) => {
               let va = 0, vb = 0;
+              const volEst = (g: GainData) => {
+                const impr = Number(g.impressions_now) || 0;
+                const pos = Number(g.position_now) || 0;
+                if (impr <= 0 || pos <= 0) return 0;
+                return estimatedMonthlyVolume(Math.round(impr * (30 / 7)), pos);
+              };
+              const oppEst = (g: GainData) => opportunityScore(volEst(g), Number(g.position_now) || 0);
               if (gainSortCol === "position_now") { va = Number(a.position_now); vb = Number(b.position_now); }
               else if (gainSortCol === "clicks_gain") { va = Number(a.clicks_gain); vb = Number(b.clicks_gain); }
+              else if (gainSortCol === "volume") { va = volEst(a); vb = volEst(b); }
+              else if (gainSortCol === "opportunity") { va = oppEst(a); vb = oppEst(b); }
               else { va = Number(a.gain); vb = Number(b.gain); }
               return gainSortDir === "asc" ? va - vb : vb - va;
             });
@@ -578,7 +725,7 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-6 text-sm">
                   <div className="text-right">
                     <div className="text-blue-400 font-bold">{(Number(site.gsc_clicks_30d)||0).toLocaleString()}</div>
-                    <div className="text-xs text-gray-500">clics/30j</div>
+                    <div className="text-xs text-gray-500">clics/{period}j</div>
                   </div>
                   <div className="text-right">
                     <div className="text-purple-400 font-bold">{(Number(site.gsc_impressions_30d)||0).toLocaleString()}</div>
@@ -713,14 +860,14 @@ export default function DashboardPage() {
                             <th className="text-right py-2 px-2 cursor-pointer select-none"
                               onClick={() => { if (gainSortCol === "position_now") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("position_now"); setGainSortDir("asc"); } }}>
                               <div className={`inline-flex flex-col items-end ${gainSortCol === "position_now" ? "text-white" : "hover:text-gray-300"}`}>
-                                <span>Cette sem.</span>
+                                <span>Cette sem. {gainSortCol === "position_now" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
                                 <span className="text-[9px] text-gray-600">{gainLabels?.w0 || ""}</span>
                               </div>
                             </th>
                             <th className="text-right py-2 px-2 cursor-pointer select-none"
                               onClick={() => { if (gainSortCol === "gain") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("gain"); setGainSortDir("desc"); } }}>
                               <div className={`inline-flex flex-col items-end ${gainSortCol === "gain" ? "text-white" : "hover:text-gray-300"}`}>
-                                <span>S-1</span>
+                                <span>S-1 {gainSortCol === "gain" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
                                 <span className="text-[9px] text-gray-600">{gainLabels?.w1 || ""}</span>
                               </div>
                             </th>
@@ -744,7 +891,24 @@ export default function DashboardPage() {
                             </th>
                             <th className="text-right py-2 px-3 cursor-pointer select-none"
                               onClick={() => { if (gainSortCol === "clicks_gain") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("clicks_gain"); setGainSortDir("desc"); } }}>
-                              <span className={gainSortCol === "clicks_gain" ? "text-white" : "hover:text-gray-300"}>Clics +/-</span>
+                              <span className={gainSortCol === "clicks_gain" ? "text-white" : "hover:text-gray-300"}>Clics +/- {gainSortCol === "clicks_gain" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
+                            </th>
+                            <th className="text-right py-2 px-3 cursor-pointer select-none"
+                              title="Volume mensuel estimé d'après impressions GSC + position moyenne. Clique pour trier."
+                              onClick={() => { if (gainSortCol === "volume") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("volume"); setGainSortDir("desc"); } }}>
+                              <span className={gainSortCol === "volume" ? "text-white" : "text-gray-400 hover:text-gray-300"}>
+                                Volume / mois {gainSortCol === "volume" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
+                              </span>
+                            </th>
+                            <th className="text-right py-2 px-3 cursor-pointer select-none"
+                              title="Score = clics gagnables si tu passes top 3. Tri = quick wins prioritaires."
+                              onClick={() => { if (gainSortCol === "opportunity") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("opportunity"); setGainSortDir("desc"); } }}>
+                              <span className={gainSortCol === "opportunity" ? "text-white" : "text-gray-400 hover:text-gray-300"}>
+                                Opportunité {gainSortCol === "opportunity" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
+                              </span>
+                            </th>
+                            <th className="text-left py-2 px-3" title="Action recommandée + IA agent disponible">
+                              <span className="text-gray-400">Action</span>
                             </th>
                             <th className="text-right py-2 px-3">Tendance 5 sem.</th>
                           </tr>
@@ -790,6 +954,56 @@ export default function DashboardPage() {
                                   <span className={Number(g.clicks_gain) > 0 ? "text-green-400" : Number(g.clicks_gain) < 0 ? "text-red-400" : "text-gray-500"}>
                                     {Number(g.clicks_gain) > 0 ? "+" : ""}{Number(g.clicks_gain)}
                                   </span>
+                                </td>
+                                <td className="text-right py-2 px-3">
+                                  {(() => {
+                                    const impr = Number(g.impressions_now) || 0;
+                                    const pos = Number(g.position_now) || 0;
+                                    if (impr <= 0 || pos <= 0) return <span className="text-gray-600 text-xs">—</span>;
+                                    // Weekly impressions → ~monthly volume estimate
+                                    const monthlyImpr = impr * (30 / 7);
+                                    const vol = estimatedMonthlyVolume(Math.round(monthlyImpr), pos);
+                                    const { label, color } = volLabel(vol);
+                                    return <span className={`text-xs font-semibold ${color}`}>{label}</span>;
+                                  })()}
+                                </td>
+                                <td className="text-right py-2 px-3">
+                                  {(() => {
+                                    const impr = Number(g.impressions_now) || 0;
+                                    const pos = Number(g.position_now) || 0;
+                                    if (impr <= 0 || pos <= 0) return <span className="text-gray-600 text-xs">—</span>;
+                                    const monthlyVol = estimatedMonthlyVolume(Math.round(impr * (30 / 7)), pos);
+                                    const score = opportunityScore(monthlyVol, pos);
+                                    const { label, color, emoji } = oppLabel(score);
+                                    return <span className={`text-xs ${color}`} title={`Si tu passes top 3, tu gagnes ~${score} clics/mois`}>{emoji} {label}</span>;
+                                  })()}
+                                </td>
+                                <td className="py-2 px-3">
+                                  {(() => {
+                                    const impr = Number(g.impressions_now) || 0;
+                                    const pos = Number(g.position_now) || 0;
+                                    const monthlyVol = impr > 0 && pos > 0 ? estimatedMonthlyVolume(Math.round(impr * (30 / 7)), pos) : 0;
+                                    const action = recommendedAction(pos, monthlyVol);
+                                    const btnColor = action.type === "push" ? "bg-orange-500/20 text-orange-300 border-orange-500/40 hover:bg-orange-500/30" :
+                                                     action.type === "optimize" ? "bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30" :
+                                                     action.type === "create" ? "bg-purple-500/20 text-purple-300 border-purple-500/40 hover:bg-purple-500/30" :
+                                                     "bg-gray-700/30 text-gray-400 border-gray-600/40";
+                                    return (
+                                      <div className="flex flex-col gap-1">
+                                        <span className="text-[11px] text-gray-300">{action.label}</span>
+                                        {action.cta !== "—" && (
+                                          <button
+                                            type="button"
+                                            onClick={() => askAiAgent(site.id, g.query, pos, monthlyVol, action.type)}
+                                            className={`text-[10px] px-2 py-0.5 rounded border ${btnColor} transition w-fit`}
+                                            title="Demander à l'IA un plan d'action détaillé"
+                                          >
+                                            🤖 IA : {action.cta}
+                                          </button>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
                                 </td>
                                 <td className="text-right py-2 px-3">
                                   <svg width="80" height="22" className="inline-block">

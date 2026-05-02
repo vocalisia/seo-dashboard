@@ -3,7 +3,7 @@ export const maxDuration = 300; // 5 min max (Vercel Pro)
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { requireCronOrUser } from "@/lib/cron-auth";
 
 interface Site {
   id: number;
@@ -140,10 +140,32 @@ ${
 }
 
 export async function POST(request: Request) {
-  const unauthorized = requireCronSecret(request);
+  const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
   const sql = getSQL();
+
+  // Kill switch — check global toggle (default ON if not set)
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS app_config (
+        key VARCHAR(100) PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `;
+    const cfg = await sql`SELECT value FROM app_config WHERE key = 'autopilot_enabled'`;
+    if (cfg.length > 0 && cfg[0].value === false) {
+      return NextResponse.json({
+        success: true,
+        message: "Autopilot disabled by user — skipped",
+        skipped: true,
+        results: [],
+      });
+    }
+  } catch (e) {
+    console.error("Toggle check failed:", e);
+  }
 
   try {
     // Get all active sites with their target languages

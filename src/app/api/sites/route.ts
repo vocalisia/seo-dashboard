@@ -3,6 +3,28 @@ import { requireApiSession } from "@/lib/api-auth";
 import { isLocalDevDemoMode, LOCAL_DEMO_SITES } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
 
+// In-memory cache (per-instance) — TTL 5 minutes. Saves ~200ms / heavy SQL on Neon.
+type CacheEntry = { data: unknown; ts: number };
+const SITE_CACHE = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+function getCached(key: string): unknown | null {
+  const e = SITE_CACHE.get(key);
+  if (!e) return null;
+  if (Date.now() - e.ts > CACHE_TTL_MS) {
+    SITE_CACHE.delete(key);
+    return null;
+  }
+  return e.data;
+}
+function setCached(key: string, data: unknown): void {
+  SITE_CACHE.set(key, { data, ts: Date.now() });
+  // Limit size to prevent memory growth
+  if (SITE_CACHE.size > 50) {
+    const oldest = [...SITE_CACHE.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+    if (oldest) SITE_CACHE.delete(oldest[0]);
+  }
+}
+
 // Language → target countries (ISO-3)
 const LANG_COUNTRIES: Record<string, string[]> = {
   fr: ["FRA","BEL","CHE","LUX","MCO","CAN"],
@@ -37,6 +59,18 @@ export async function GET(request: NextRequest) {
 
   const language = request.nextUrl.searchParams.get("language");
   const countryFilter = language && LANG_COUNTRIES[language] ? LANG_COUNTRIES[language] : null;
+  const daysParam = request.nextUrl.searchParams.get("days");
+  const days = Math.max(1, Math.min(365, parseInt(daysParam ?? "30", 10) || 30));
+  const noCache = request.nextUrl.searchParams.get("nocache") === "1";
+
+  // Check cache (unless ?nocache=1)
+  const cacheKey = `sites:${language || "all"}:${days}`;
+  if (!noCache) {
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return NextResponse.json(cached, { headers: { "X-Cache": "HIT" } });
+    }
+  }
 
   try {
     const sql = getSQL();
@@ -60,7 +94,7 @@ export async function GET(request: NextRequest) {
               SUM(pageviews) as total_pageviews,
               SUM(organic_sessions) as total_organic
             FROM analytics_daily
-            WHERE date >= NOW() - INTERVAL '30 days'
+            WHERE date >= CURRENT_DATE - ${days}::int
             GROUP BY site_id
           ) a ON a.site_id = s.id
           LEFT JOIN (
@@ -69,7 +103,7 @@ export async function GET(request: NextRequest) {
               SUM(impressions) as total_impressions,
               AVG(NULLIF(position, 0)) as avg_position
             FROM search_console_data
-            WHERE date >= NOW() - INTERVAL '30 days'
+            WHERE date >= CURRENT_DATE - ${days}::int
               AND country = ANY(${countryFilter})
             GROUP BY site_id
           ) gsc ON gsc.site_id = s.id
@@ -94,7 +128,7 @@ export async function GET(request: NextRequest) {
               SUM(pageviews) as total_pageviews,
               SUM(organic_sessions) as total_organic
             FROM analytics_daily
-            WHERE date >= NOW() - INTERVAL '30 days'
+            WHERE date >= CURRENT_DATE - ${days}::int
             GROUP BY site_id
           ) a ON a.site_id = s.id
           LEFT JOIN (
@@ -103,14 +137,15 @@ export async function GET(request: NextRequest) {
               SUM(impressions) as total_impressions,
               AVG(NULLIF(position, 0)) as avg_position
             FROM search_console_data
-            WHERE date >= NOW() - INTERVAL '30 days'
+            WHERE date >= CURRENT_DATE - ${days}::int
             GROUP BY site_id
           ) gsc ON gsc.site_id = s.id
           WHERE s.is_active = true
           ORDER BY s.name
         `;
 
-    return NextResponse.json(rows);
+    setCached(cacheKey, rows);
+    return NextResponse.json(rows, { headers: { "X-Cache": "MISS" } });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

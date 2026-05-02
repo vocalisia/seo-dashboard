@@ -84,12 +84,40 @@ export default function AutopilotPage() {
   const [error, setError] = useState<string | null>(null);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchResult, setBatchResult] = useState<{ published: number; failed: number; total: number } | null>(null);
+  const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(true);
+  const [togglingAutopilot, setTogglingAutopilot] = useState(false);
 
   useEffect(() => {
     fetchSites();
     fetchHistory();
     fetchSiteLangs();
+    fetchAutopilotToggle();
   }, []);
+
+  async function fetchAutopilotToggle() {
+    try {
+      const res = await fetch("/api/autopilot/toggle");
+      const data = await res.json();
+      if (typeof data?.enabled === "boolean") setAutopilotEnabled(data.enabled);
+    } catch { /* ignore */ }
+  }
+
+  async function toggleAutopilot() {
+    setTogglingAutopilot(true);
+    const next = !autopilotEnabled;
+    try {
+      const res = await fetch("/api/autopilot/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      const data = await res.json();
+      if (data?.success) setAutopilotEnabled(data.enabled);
+    } catch (e) {
+      alert(`Erreur: ${e instanceof Error ? e.message : "réseau"}`);
+    }
+    setTogglingAutopilot(false);
+  }
 
   async function fetchSiteLangs() {
     try {
@@ -260,12 +288,45 @@ export default function AutopilotPage() {
       </div>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {/* Big ON/OFF kill switch */}
+        <div className={`rounded-xl p-5 flex items-center justify-between gap-4 border-2 transition ${
+          autopilotEnabled
+            ? "bg-emerald-950/30 border-emerald-500/50"
+            : "bg-red-950/30 border-red-500/50"
+        }`}>
+          <div className="flex items-center gap-4">
+            <div className={`w-3 h-3 rounded-full ${autopilotEnabled ? "bg-emerald-400 animate-pulse" : "bg-red-400"}`} />
+            <div>
+              <div className="text-xs uppercase tracking-wider font-bold text-white">
+                {autopilotEnabled ? "🟢 Autopilot ACTIVÉ" : "🔴 Autopilot DÉSACTIVÉ"}
+              </div>
+              <div className="text-sm text-gray-300 mt-1">
+                {autopilotEnabled
+                  ? "Le cron lundi 9h00 publiera des articles automatiquement."
+                  : "Aucun article ne sera publié par le cron lundi 9h00."}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={toggleAutopilot}
+            disabled={togglingAutopilot}
+            className={`px-6 py-3 rounded-lg font-bold text-sm transition disabled:opacity-50 ${
+              autopilotEnabled
+                ? "bg-red-600 hover:bg-red-700 text-white"
+                : "bg-emerald-600 hover:bg-emerald-700 text-white"
+            }`}
+          >
+            {togglingAutopilot ? "..." : autopilotEnabled ? "⏸️ Désactiver" : "▶️ Activer"}
+          </button>
+        </div>
+
         {/* Status card */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex items-center gap-4">
           <Clock className="w-8 h-8 text-blue-400 flex-shrink-0" />
           <div>
             <div className="text-sm text-gray-400">Prochain run automatique</div>
-            <div className="font-medium text-white">{nextMondayAt9()}</div>
+            <div className="font-medium text-white">{autopilotEnabled ? nextMondayAt9() : "— (désactivé)"}</div>
           </div>
           <div className="ml-auto flex items-center gap-3">
             <Link

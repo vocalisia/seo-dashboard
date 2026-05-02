@@ -11,7 +11,7 @@ type Props = {
 
 export function LoginForm({ showDevLogin }: Props) {
   const router = useRouter();
-  const [email, setEmail] = useState("admin@localhost");
+  const [email, setEmail] = useState("vocalis");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -29,7 +29,7 @@ export function LoginForm({ showDevLogin }: Props) {
     if (res?.ok) {
       router.push("/dashboard");
     } else {
-      setError("Email ou mot de passe incorrect (vérifie LOCAL_DEV_EMAIL / LOCAL_DEV_PASSWORD dans .env.local).");
+      setError("Login ou mot de passe incorrect.");
     }
     setLoading(false);
   }
@@ -47,17 +47,15 @@ export function LoginForm({ showDevLogin }: Props) {
 
         {showDevLogin && (
           <form onSubmit={handleLocalSubmit} className="space-y-4 mb-8">
-            <p className="text-amber-200/90 text-xs font-medium text-center bg-amber-950/40 border border-amber-800/50 rounded-lg px-3 py-2">
-              Mode développement local uniquement (npm run dev)
-            </p>
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Email</label>
+              <label className="block text-sm text-gray-400 mb-1">Login</label>
               <input
-                type="email"
+                type="text"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:border-blue-500"
                 autoComplete="username"
+                placeholder="vocalis"
               />
             </div>
             <div>
@@ -77,7 +75,7 @@ export function LoginForm({ showDevLogin }: Props) {
               disabled={loading}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition disabled:opacity-50"
             >
-              {loading ? "Connexion…" : "Se connecter (local)"}
+              {loading ? "Connexion…" : "Se connecter"}
             </button>
           </form>
         )}

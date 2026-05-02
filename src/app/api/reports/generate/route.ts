@@ -1,7 +1,7 @@
 import { getSQL, initDB } from "@/lib/db";
 import { NextResponse } from "next/server";
 import { askAI } from "@/lib/ai";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { requireCronOrUser } from "@/lib/cron-auth";
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -44,8 +44,13 @@ Sois très concret et actionnable. Format markdown.`;
 }
 
 export async function POST(request: Request) {
-  const unauthorized = requireCronSecret(request);
-  if (unauthorized) return unauthorized;
+  // Allow if either: (a) cron secret valid (cron call), (b) authenticated user (manual button)
+  const cronUnauthorized = await requireCronOrUser(request);
+  if (cronUnauthorized) {
+    const { requireApiSession } = await import("@/lib/api-auth");
+    const auth = await requireApiSession();
+    if (auth.unauthorized) return auth.unauthorized;
+  }
 
   try {
     await initDB(); // ensure weekly_reports table exists
