@@ -48,6 +48,7 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [lastGenerated, setLastGenerated] = useState<string | null>(null);
 
   const fetchReports = async () => {
     setLoading(true);
@@ -69,6 +70,8 @@ export default function ReportsPage() {
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
         alert(`Génération échouée (${res.status}) : ${txt.slice(0, 200)}`);
+      } else {
+        setLastGenerated(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
       }
       await fetchReports();
     } catch (e) {
@@ -88,11 +91,16 @@ export default function ReportsPage() {
           <h1 className="text-xl font-bold">Rapports SEO hebdomadaires</h1>
           <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full">Lundi 8h auto</span>
         </div>
-        <button onClick={generateNow} disabled={generating}
-          className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
-          {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          {generating ? "Génération en cours..." : "Générer maintenant"}
-        </button>
+        <div className="flex items-center gap-3">
+          {lastGenerated && (
+            <span className="text-xs bg-green-500/20 text-green-400 px-3 py-1 rounded-full">✓ Régénéré à {lastGenerated}</span>
+          )}
+          <button type="button" onClick={generateNow} disabled={generating}
+            className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
+            {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            {generating ? "Génération en cours..." : "Générer maintenant"}
+          </button>
+        </div>
       </header>
 
       <div className="px-6 py-6">
@@ -103,7 +111,7 @@ export default function ReportsPage() {
             <FileText className="w-12 h-12 text-gray-700 mx-auto mb-4" />
             <p className="text-gray-500 mb-2">Aucun rapport généré</p>
             <p className="text-gray-600 text-sm mb-6">Les rapports sont générés automatiquement chaque lundi à 8h.<br />Clique sur &quot;Générer maintenant&quot; pour créer le premier rapport.</p>
-            <button onClick={generateNow} disabled={generating}
+            <button type="button" onClick={generateNow} disabled={generating}
               className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-xl text-sm font-medium flex items-center gap-2 mx-auto disabled:opacity-50">
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />}
               {generating ? "Génération..." : "Générer le premier rapport"}

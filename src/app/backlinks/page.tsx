@@ -44,7 +44,7 @@ export default function BacklinksPage() {
         if (Array.isArray(data)) {
           const list = data as Site[];
           setSites(list);
-          if (list.length > 0) setSelectedSiteId("all");
+          if (list.length > 0) setSelectedSiteId(list[0].id);
         }
       })
       .catch(() => {});
