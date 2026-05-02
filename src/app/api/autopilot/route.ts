@@ -576,7 +576,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     if (!dry_run && repoConfig) {
       const ext = repoConfig.format === "md" ? "md" : "mdx";
       const filePath = `${repoConfig.articlePath}/${langPrefix}${articleSlug}-${today}.${ext}`;
-      const commitMsg = `feat: add ${lang.label} SEO article "${keyword}" via autopilot`;
+      const commitMsg = `feat: add ${lang.label} SEO article "${keyword}" via autopilot [skip ci]`;
 
       try {
         githubUrl = await publishToGitHub(
