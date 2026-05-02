@@ -51,9 +51,6 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     articlePath: "content/posts",
     format: "mdx",
     i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
-    enabled: false,
-    disabledReason:
-      "trust-vault.com renvoie HTTP 200 mais affiche un titre 'Article introuvable' pour les nouveaux articles : le pipeline Next.js du site ne pré-build pas les MDX poussés en autopilot. Re-active uniquement après avoir vérifié qu'un nouvel MDX y rend correctement.",
   },
   trustly: {
     repo: "vocalisia/trust-ai-blog",
