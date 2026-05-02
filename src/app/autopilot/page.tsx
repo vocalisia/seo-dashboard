@@ -737,7 +737,7 @@ export default function AutopilotPage() {
                         )}
                       </td>
                       <td className="px-5 py-3 whitespace-nowrap">
-                        {run.published_url ? (
+                        {run.published_url && run.status === "published" ? (
                           <a
                             href={run.published_url}
                             target="_blank"

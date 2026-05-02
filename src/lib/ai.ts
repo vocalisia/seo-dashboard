@@ -47,8 +47,10 @@ export async function askAI(
   return callOpenAICompat(baseUrl, apiKey, MODELS[model], messages, maxTokens);
 }
 
-// Generate image via DALL-E 3 (OpenAI) — reliable, hosted URL
+// Generate image via DALL-E 3 (OpenAI) then persist to Vercel Blob (permanent URL)
 export async function generateImage(prompt: string): Promise<string | null> {
+  let tempUrl: string | null = null;
+
   // Try OpenAI DALL-E 3 first (most reliable for hosted URLs)
   const openaiKey = process.env.OPENAI_API_KEY;
   if (openaiKey) {
@@ -60,8 +62,7 @@ export async function generateImage(prompt: string): Promise<string | null> {
       });
       if (res.ok) {
         const data = await res.json() as { data: { url: string }[] };
-        const url = data.data?.[0]?.url;
-        if (url) return url;
+        tempUrl = data.data?.[0]?.url ?? null;
       }
     } catch {
       // fall through to Mammouth
@@ -69,30 +70,50 @@ export async function generateImage(prompt: string): Promise<string | null> {
   }
 
   // Fallback: Mammouth Gemini image via chat completions
-  const mammouthKey = process.env.MAMMOUTH_API_KEY;
-  if (mammouthKey) {
-    try {
-      const res = await fetch(`${MAMMOUTH_BASE}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${mammouthKey}` },
-        body: JSON.stringify({
-          model: "gemini-3-pro-image-preview",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 512,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json() as { choices: { message: { content: string } }[] };
-        const content = data.choices?.[0]?.message?.content ?? "";
-        const urlMatch = content.match(/https?:\/\/[^\s"'<>]+\.(jpg|jpeg|png|webp)/i);
-        if (urlMatch) return urlMatch[0];
+  if (!tempUrl) {
+    const mammouthKey = process.env.MAMMOUTH_API_KEY;
+    if (mammouthKey) {
+      try {
+        const res = await fetch(`${MAMMOUTH_BASE}/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${mammouthKey}` },
+          body: JSON.stringify({
+            model: "gemini-3-pro-image-preview",
+            messages: [{ role: "user", content: prompt }],
+            max_tokens: 512,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json() as { choices: { message: { content: string } }[] };
+          const content = data.choices?.[0]?.message?.content ?? "";
+          const urlMatch = content.match(/https?:\/\/[^\s"'<>]+\.(jpg|jpeg|png|webp)/i);
+          if (urlMatch) tempUrl = urlMatch[0];
+        }
+      } catch {
+        // no image
       }
-    } catch {
-      // no image
     }
   }
 
-  return null;
+  if (!tempUrl) return null;
+
+  // Persist to Vercel Blob for permanent URL (DALL-E URLs expire in ~1h)
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const { put } = await import("@vercel/blob");
+      const imgRes = await fetch(tempUrl);
+      if (imgRes.ok) {
+        const blob = await imgRes.blob();
+        const filename = `autopilot/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
+        const { url: permanentUrl } = await put(filename, blob, { access: "public" });
+        return permanentUrl;
+      }
+    } catch (err) {
+      console.error("[generateImage] Blob upload failed, using temp URL:", err);
+    }
+  }
+
+  return tempUrl;
 }
 
 async function callOpenAICompat(
