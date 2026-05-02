@@ -21,6 +21,8 @@ export type SiteRepoConfig = {
    * vocalis-blog → contenu rendu sur vocalis.blog).
    */
   publicUrlOverride?: string;
+  /** Si true, le slug n'inclut PAS le suffixe date (ex: trustly-ai utilise slug brut sans -YYYY-MM-DD) */
+  noDateSuffix?: boolean;
 };
 
 export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
@@ -57,6 +59,8 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     repo: "vocalisia/trust-ai-blog",
     articlePath: "content/blog",
     format: "mdx",
+    noDateSuffix: true,
+    i18nBlogPath: { fr: "/blog", en: "/blog", default: "/blog" },
   },
   iapmesuisse: {
     repo: "vocalisia/iapmesuisse",

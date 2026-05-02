@@ -71,7 +71,9 @@ export function buildPublishedArticleUrl(
   const langPrefix =
     !repoConfig?.i18nBlogPath && language !== "fr" ? `${language}-` : "";
   const blogPath = blogPathForLocale(repoConfig, language);
-  const pathSlug = `${langPrefix}${articleSlug}-${slugDate}`;
+  const pathSlug = repoConfig?.noDateSuffix
+    ? `${langPrefix}${articleSlug}`
+    : `${langPrefix}${articleSlug}-${slugDate}`;
   // publicUrlOverride : utilisé quand le repo de déploiement sert un autre
   // domaine que celui défini dans la table `sites` (ex. vocalis.pro publie
   // via vocalis-blog repo, et le contenu apparaît sur vocalis.blog).

@@ -408,7 +408,7 @@ title: "H1 SEO-optimized in ${lang.articleLang}, 50-65 chars. Rules: (1) MUST co
 description: "Meta description 145-160 chars in ${lang.articleLang}. MUST contain '${keyword}' and summarize the SPECIFIC angle of the article (not generic). Include a call-to-action verb."
 date: "${today}"
 tags: ["${keyword.split(" ")[0]}", "tag2", "tag3", "tag4"]
-slug: "${langPrefix}${articleSlug}-${today}"
+slug: "${repoConfig?.noDateSuffix ? `${langPrefix}${articleSlug}` : `${langPrefix}${articleSlug}-${today}`}"
 image: "/placeholder.jpg"
 author: "SEO Autopilot"
 lang: "${language}"
@@ -575,7 +575,8 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     let githubUrl: string | null = null;
     if (!dry_run && repoConfig) {
       const ext = repoConfig.format === "md" ? "md" : "mdx";
-      const filePath = `${repoConfig.articlePath}/${langPrefix}${articleSlug}-${today}.${ext}`;
+      const fileSlug = repoConfig.noDateSuffix ? `${langPrefix}${articleSlug}` : `${langPrefix}${articleSlug}-${today}`;
+      const filePath = `${repoConfig.articlePath}/${fileSlug}.${ext}`;
       const commitMsg = `feat: add ${lang.label} SEO article "${keyword}" via autopilot`;
 
       try {
