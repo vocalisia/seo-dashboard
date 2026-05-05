@@ -181,7 +181,7 @@ export default function OpportunitiesPage() {
       .then((data: unknown) => {
         if (Array.isArray(data)) {
           setSites(data as Site[]);
-          if ((data as Site[]).length > 0) setSelectedSite("all");
+          if ((data as Site[]).length > 0) setSelectedSite((data as Site[])[0]);
         }
       })
       .catch(() => {});

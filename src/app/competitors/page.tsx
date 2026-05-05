@@ -132,7 +132,7 @@ export default function CompetitorsPage() {
       const list = Array.isArray(d) ? d : d.sites ?? [];
       if (list.length > 0) {
         setSites(list);
-        if (!selectedSite) setSelectedSite("all");
+        if (!selectedSite && list.length > 0) setSelectedSite(list[0].id);
       }
     } catch { /* ignore */ }
   }

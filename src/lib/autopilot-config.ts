@@ -109,17 +109,13 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     repo: "vocalisia/agents-ia-pro",
     articlePath: "content/blog",
     format: "mdx",
-    enabled: false,
-    disabledReason:
-      "agents-ia.pro sert des fichiers HTML statiques (.html dans le sitemap). Le repo vocalisia/agents-ia-pro n'est pas le source de déploiement effectif du blog.",
+    i18nBlogPath: { fr: "/blog", default: "/blog" },
   },
   "master-seller": {
     repo: "vocalisia/master-seller",
     articlePath: "content/blog",
     format: "mdx",
-    enabled: false,
-    disabledReason:
-      "master-seller.fr est servi en HTML+Tailwind+VanillaJS (sans pipeline MDX). Les MDX poussés ne sont jamais rendus → 404.",
+    i18nBlogPath: { fr: "/blog", default: "/blog" },
   },
   whatsapp: {
     repo: "vocalisia/agent-whatsapp-ia-business",

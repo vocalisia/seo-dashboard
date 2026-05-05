@@ -63,7 +63,7 @@ export default function HealthPage() {
       const list = Array.isArray(d) ? d : [];
       if (list.length > 0) {
         setSites(list);
-        if (!selectedSite) setSelectedSite("all");
+        if (!selectedSite && list.length > 0) setSelectedSite(list[0].id);
         setLoadingAll(true);
         const batch = list.slice(0, 16);
         const results: { name: string; grade: string; score: number; id: number }[] = [];

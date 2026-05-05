@@ -92,7 +92,7 @@ export default function AuthorityPage() {
       const list = Array.isArray(d) ? d : [];
       if (list.length > 0) {
         setSites(list);
-        if (!selectedSite) setSelectedSite("all");
+        if (!selectedSite && list.length > 0) setSelectedSite(list[0].id);
         // Fetch all scores in parallel (chunks of 4)
         setLoadingAll(true);
         const batch = list.slice(0, 16);

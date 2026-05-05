@@ -61,7 +61,7 @@ export default function KeywordsProPage() {
         const data = await res.json() as Site[] | { sites?: Site[] };
         const list = Array.isArray(data) ? data : (data.sites ?? []);
         setSites(list);
-        if (list.length > 0) setSelectedSite("all");
+        if (list.length > 0) setSelectedSite(list[0].id);
       } catch { /* ignore */ }
     })();
   }, []);

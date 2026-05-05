@@ -36,7 +36,7 @@ export default function ClustersPage() {
       const res = await fetch("/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
-      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite("all"); }
+      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
     } catch { /* ignore */ }
   }
 

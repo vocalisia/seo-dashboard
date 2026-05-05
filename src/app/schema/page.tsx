@@ -51,7 +51,7 @@ export default function SchemaPage() {
     fetch("/api/sites")
       .then((r) => r.json())
       .then((d: unknown) => {
-        if (Array.isArray(d)) setSites(d as Site[]);
+        if (Array.isArray(d)) { setSites(d as Site[]); if ((d as Site[]).length > 0) setSelectedSite((d as Site[])[0].id); }
       })
       .catch(() => undefined);
   }, []);
