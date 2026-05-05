@@ -46,15 +46,23 @@ export async function GET(req: NextRequest) {
     if (!url) return NextResponse.json({ error: "url required" }, { status: 400 });
 
     const encodedUrl = encodeURIComponent(url);
-    const baseUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodedUrl}`;
+    const apiKey = process.env.PAGESPEED_API_KEY;
+    const keyParam = apiKey ? `&key=${apiKey}` : "";
+    const baseUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodedUrl}${keyParam}`;
 
-    const [mobileRes, desktopRes] = await Promise.all([
-      fetch(`${baseUrl}&strategy=mobile`),
-      fetch(`${baseUrl}&strategy=desktop`),
-    ]);
+    // Séquentiel pour éviter le rate-limit (1 QPS sans clé)
+    const mobileRes = await fetch(`${baseUrl}&strategy=mobile`);
+    await new Promise((r) => setTimeout(r, 1100));
+    const desktopRes = await fetch(`${baseUrl}&strategy=desktop`);
 
     if (!mobileRes.ok || !desktopRes.ok) {
-      return NextResponse.json({ error: "PageSpeed API error" }, { status: 502 });
+      const errBody = await mobileRes.text().catch(() => "");
+      const isQuota = errBody.includes("429") || mobileRes.status === 429;
+      return NextResponse.json({
+        error: isQuota
+          ? "Quota Google PageSpeed dépassé — réessaie dans 1 minute ou ajoute PAGESPEED_API_KEY dans Vercel"
+          : `PageSpeed API error (${mobileRes.status})`,
+      }, { status: 502 });
     }
 
     const [mobileData, desktopData] = await Promise.all([
