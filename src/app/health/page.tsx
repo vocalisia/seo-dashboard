@@ -121,7 +121,12 @@ export default function HealthPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchSites(); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selectedSite && selectedSite !== "all") { void fetchHealth(); } }, [selectedSite]);
+  useEffect(() => {
+    if (selectedSite && selectedSite !== "all") {
+      void fetchHealth();
+      void checkBroken();
+    }
+  }, [selectedSite]);
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
