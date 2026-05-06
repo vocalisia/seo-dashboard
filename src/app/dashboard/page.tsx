@@ -16,7 +16,7 @@ interface Site {
 
 interface QueryData {
   query: string; total_clicks: number; total_impressions: number;
-  avg_ctr: number; avg_position: number;
+  avg_ctr: number; avg_position: number; first_seen?: string | null;
 }
 
 interface GainData {
@@ -817,6 +817,9 @@ export default function DashboardPage() {
                               <td className="py-2 px-5 text-gray-600 text-xs">{j + 1}</td>
                               <td className="py-2 px-3 font-medium text-gray-200 flex items-center gap-1">
                                 {kw.query}
+                                {kw.first_seen && (Date.now() - new Date(kw.first_seen).getTime()) < 14 * 24 * 60 * 60 * 1000 && (
+                                  <span className="text-[9px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded font-bold shrink-0">NEW</span>
+                                )}
                                 <ChevronDown className={`w-3 h-3 text-gray-500 transition-transform ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "rotate-180" : ""}`} />
                               </td>
                               <td className="text-right py-2 px-3 text-blue-400 font-semibold">{Number(kw.total_clicks)}</td>

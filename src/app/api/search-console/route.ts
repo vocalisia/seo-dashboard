@@ -47,8 +47,9 @@ export async function GET(request: NextRequest) {
               SUM(clicks) as total_clicks,
               SUM(impressions) as total_impressions,
               AVG(ctr) as avg_ctr,
-              AVG(position) as avg_position
-            FROM search_console_data
+              AVG(position) as avg_position,
+              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
+            FROM search_console_data d
             WHERE site_id = ${id}
               AND date >= NOW() - INTERVAL '1 day' * ${days}
               AND query IS NOT NULL
@@ -62,8 +63,9 @@ export async function GET(request: NextRequest) {
               SUM(clicks) as total_clicks,
               SUM(impressions) as total_impressions,
               AVG(ctr) as avg_ctr,
-              AVG(position) as avg_position
-            FROM search_console_data
+              AVG(position) as avg_position,
+              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
+            FROM search_console_data d
             WHERE site_id = ${id}
               AND date >= NOW() - INTERVAL '1 day' * ${days}
               AND query IS NOT NULL
