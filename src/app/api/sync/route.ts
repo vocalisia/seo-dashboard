@@ -99,6 +99,7 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: 
   let totalInserted = 0;
 
   for (const row of rows) {
+    if ((row.position || 0) > 200) continue;
     await sql`
       INSERT INTO search_console_data
       (site_id, date, query, page, clicks, impressions, ctr, position)
