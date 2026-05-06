@@ -51,19 +51,16 @@ interface AnalyticsDay {
   bounce_rate: number; avg_session_duration: number;
 }
 
-// Impression share par position (% des recherches où tu apparais)
+// Volume estimé = impressions / share (% des recherches totales où on apparaît)
+// Calibré pour rester réaliste : aux positions profondes Google nous affiche encore
+// (impressions ≈ vraies recherches). Plafonné à 3x pour éviter les nombres absurdes.
 function estimatedMonthlyVolume(impressions: number, position: number): number {
-  const share = position <= 1 ? 0.90
-    : position <= 2 ? 0.78
-    : position <= 3 ? 0.65
-    : position <= 5 ? 0.48
-    : position <= 7 ? 0.35
-    : position <= 10 ? 0.25
-    : position <= 15 ? 0.14
-    : position <= 20 ? 0.08
-    : position <= 30 ? 0.04
-    : position <= 50 ? 0.02
-    : 0.01;
+  if (impressions <= 0 || position <= 0) return 0;
+  const share = position <= 3 ? 0.95
+    : position <= 10 ? 0.80
+    : position <= 20 ? 0.60
+    : position <= 50 ? 0.45
+    : 0.35;
   return Math.round(impressions / share);
 }
 
