@@ -66,6 +66,11 @@ export default function KeywordsProPage() {
     })();
   }, []);
 
+  useEffect(() => {
+    if (selectedSite) void fetchKeywords();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSite]);
+
   async function fetchKeywords() {
     if (!selectedSite) return;
     setLoading(true);
