@@ -27,6 +27,7 @@ interface GainData {
   gain_w1_w2: number | null; gain_w2_w3: number | null; gain_w3_w4: number | null;
   clicks_now: number; clicks_prev: number; clicks_gain: number;
   impressions_now: number;
+  first_seen?: string | null;
 }
 
 interface GainLabels { w0: string; w1: string; w2: string; w3: string; w4: string }
@@ -944,7 +945,12 @@ export default function DashboardPage() {
                             const range = Math.max(0.1, maxV - minV);
                             return (
                               <tr key={j} className="border-b border-gray-800/40 hover:bg-gray-800/20">
-                                <td className="py-2 px-5 font-medium text-gray-200">{g.query}</td>
+                                <td className="py-2 px-5 font-medium text-gray-200">
+                                  {g.query}
+                                  {g.first_seen && (Date.now() - new Date(g.first_seen).getTime()) < 14 * 24 * 60 * 60 * 1000 && (
+                                    <span className="ml-2 text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-bold align-middle">NEW</span>
+                                  )}
+                                </td>
                                 <td className="text-right py-2 px-2">{renderCell(g.position_now, g.position_prev)}</td>
                                 <td className="text-right py-2 px-2">{renderCell(g.position_prev, g.position_w2)}</td>
                                 <td className="text-right py-2 px-2">{renderCell(g.position_w2, g.position_w3)}</td>

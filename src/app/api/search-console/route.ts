@@ -140,7 +140,8 @@ export async function GET(request: NextRequest) {
               ROUND((w4.pos - w3.pos)::numeric, 1) AS gain_w3_w4,
               w0.clicks AS clicks_now, w0.impressions AS impressions_now,
               w1.clicks AS clicks_prev,
-              (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain
+              (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain,
+              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen
             FROM w0
             LEFT JOIN w1 ON w1.query = w0.query
             LEFT JOIN w2 ON w2.query = w0.query
@@ -209,7 +210,8 @@ export async function GET(request: NextRequest) {
               ROUND((w4.pos - w3.pos)::numeric, 1) AS gain_w3_w4,
               w0.clicks AS clicks_now, w0.impressions AS impressions_now,
               w1.clicks AS clicks_prev,
-              (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain
+              (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain,
+              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen
             FROM w0
             LEFT JOIN w1 ON w1.query = w0.query
             LEFT JOIN w2 ON w2.query = w0.query
