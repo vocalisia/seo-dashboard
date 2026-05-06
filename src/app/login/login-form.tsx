@@ -11,7 +11,7 @@ type Props = {
 
 export function LoginForm({ showDevLogin }: Props) {
   const router = useRouter();
-  const [email, setEmail] = useState("vocalis");
+  const [email, setEmail] = useState("contact@vocalis.pro");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
