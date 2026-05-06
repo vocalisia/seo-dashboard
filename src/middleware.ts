@@ -4,8 +4,8 @@ import type { NextRequest } from "next/server";
 
 // ── HTTP Basic Auth (1ère couche avant NextAuth) ──────────────────────────
 function checkBasicAuth(req: NextRequest): NextResponse | null {
-  const basicUser = process.env.BASIC_AUTH_USER;
-  const basicPass = process.env.BASIC_AUTH_PASS;
+  const basicUser = process.env.BASIC_AUTH_USER?.trim();
+  const basicPass = process.env.BASIC_AUTH_PASS?.trim();
   if (!basicUser || !basicPass) return null; // désactivé si vars non définies
 
   const authHeader = req.headers.get("authorization") ?? "";
