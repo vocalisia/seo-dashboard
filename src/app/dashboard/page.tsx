@@ -135,6 +135,7 @@ export default function DashboardPage() {
   const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
   const [kwLoading, setKwLoading] = useState<number | null>(null);
   const [search, setSearch] = useState("");
+  const [kwTypeFilter, setKwTypeFilter] = useState<"all"|"longtail"|"questions">("all");
   const [siteSortCol, setSiteSortCol] = useState<"clicks"|"impressions"|"position">("clicks");
   const [siteSortDir, setSiteSortDir] = useState<"asc"|"desc">("desc");
   const [sortCol, setSortCol] = useState<"clicks"|"impressions"|"ctr"|"position"|"volume">("clicks");
@@ -671,8 +672,14 @@ export default function DashboardPage() {
           const isOpen = expanded === site.id;
           const tab = activeTab[site.id] || "keywords";
           const kwKey = `${site.id}-${period}-${langFilter || "all"}`;
+          const QUESTION_WORDS = ["comment","pourquoi","quand","quel","quelle","quels","quelles","qu'est","qu est","how","what","why","when","which","where","who","is","are","does","do","can","best","top"];
           const kws = (keywords[kwKey] || [])
             .filter(k => !search || k.query.toLowerCase().includes(search.toLowerCase()))
+            .filter(k => {
+              if (kwTypeFilter === "longtail") return k.query.trim().split(/\s+/).length >= 4;
+              if (kwTypeFilter === "questions") return QUESTION_WORDS.some(w => k.query.toLowerCase().startsWith(w + " ") || k.query.toLowerCase().includes(" " + w + " "));
+              return true;
+            })
             .sort((a, b) => {
               let va = 0, vb = 0;
               if (sortCol === "position") { va = Number(a.avg_position); vb = Number(b.avg_position); }
@@ -761,6 +768,16 @@ export default function DashboardPage() {
                     </button>
                   </div>
 
+                  {tab === "keywords" && (
+                    <div className="flex gap-1 px-4 py-2">
+                      {(["all","longtail","questions"] as const).map(f => (
+                        <button key={f} type="button" onClick={() => setKwTypeFilter(f)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
+                          {f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {kwLoading === site.id ? (
                     <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                   ) : tab === "keywords" ? (
