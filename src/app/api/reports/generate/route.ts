@@ -40,7 +40,7 @@ Génère un rapport structuré avec :
 
 Sois très concret et actionnable. Format markdown.`;
 
-  return await askAI([{ role: "user", content: prompt }], "fast", 1200);
+  return await askAI([{ role: "user", content: prompt }], "search", 1200);
 }
 
 export async function POST(request: Request) {
