@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Globe, Search, MousePointerClick,
   BarChart3, RefreshCw, Loader2, ChevronDown, ChevronRight,
-  PlaySquare, TrendingUp, TrendingDown, X, Smartphone
+  PlaySquare, TrendingUp, TrendingDown, X, Smartphone, ChevronsDownUp, ChevronsUpDown
 } from "lucide-react";
 import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
@@ -127,13 +127,13 @@ export default function DashboardPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [activeTab, setActiveTab] = useState<Record<number, TabType>>({});
   const [period, setPeriod] = useState<Period>("3");
   const [keywords, setKeywords] = useState<Record<string, QueryData[]>>({});
   const [gains, setGains] = useState<Record<number, GainData[]>>({});
   const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
-  const [kwLoading, setKwLoading] = useState<number | null>(null);
+  const [kwLoadingIds, setKwLoadingIds] = useState<Set<number>>(new Set());
   const [search, setSearch] = useState("");
   const [kwTypeFilter, setKwTypeFilter] = useState<"all"|"longtail"|"questions">("all");
   const [siteSortCol, setSiteSortCol] = useState<"clicks"|"impressions"|"position">("clicks");
@@ -214,14 +214,14 @@ export default function DashboardPage() {
   async function loadKeywords(siteId: number, p: Period) {
     const key = `${siteId}-${p}-${langFilter || "all"}`;
     if (keywords[key]) return;
-    setKwLoading(siteId);
+    setKwLoadingIds(prev => new Set(prev).add(siteId));
     try {
       const langQs = langFilter ? `&language=${langFilter}` : "";
       const res = await fetch(`/api/search-console?siteId=${siteId}&type=queries&days=${p}&limit=300${langQs}`);
       const data = await res.json();
       if (Array.isArray(data)) setKeywords(prev => ({ ...prev, [key]: data }));
     } catch { /* ignore */ }
-    setKwLoading(null);
+    setKwLoadingIds(prev => { const n = new Set(prev); n.delete(siteId); return n; });
   }
 
   async function loadGains(siteId: number, force = false) {
@@ -250,33 +250,47 @@ export default function DashboardPage() {
     // Re-fetch sites with new country filter → updates clics/impr/position per site
     await fetchSites(lang);
 
-    // Re-fetch keywords for expanded site
-    if (expanded) {
-      const p = period;
-      const langQs = lang ? `&language=${lang}` : "";
-      setKwLoading(expanded);
+    // Re-fetch keywords for all expanded sites
+    const p = period;
+    const langQs = lang ? `&language=${lang}` : "";
+    for (const expandedId of expandedIds) {
+      setKwLoadingIds(prev => new Set(prev).add(expandedId));
       try {
-        const res = await fetch(`/api/search-console?siteId=${expanded}&type=queries&days=${p}&limit=300${langQs}`);
+        const res = await fetch(`/api/search-console?siteId=${expandedId}&type=queries&days=${p}&limit=300${langQs}`);
         const data = await res.json();
         if (Array.isArray(data)) {
-          const key = `${expanded}-${p}-${lang || "all"}`;
-          setKeywords({ [key]: data });
+          const key = `${expandedId}-${p}-${lang || "all"}`;
+          setKeywords(prev => ({ ...prev, [key]: data }));
         }
       } catch { /* ignore */ }
-      setKwLoading(null);
-      // Re-fetch gains aussi (4 semaines)
-      void loadGains(expanded, true);
+      setKwLoadingIds(prev => { const n = new Set(prev); n.delete(expandedId); return n; });
+      void loadGains(expandedId, true);
     }
   }
 
   async function toggleSite(siteId: number) {
-    if (expanded === siteId) { setExpanded(null); return; }
-    setExpanded(siteId);
-    const tab = activeTab[siteId] || "keywords";
-    if (tab === "keywords") {
-      await loadKeywords(siteId, period);
-      loadGains(siteId); // load gains silently for delta display
-    } else await loadGains(siteId);
+    const wasOpen = expandedIds.has(siteId);
+    setExpandedIds(prev => { const n = new Set(prev); wasOpen ? n.delete(siteId) : n.add(siteId); return n; });
+    if (!wasOpen) {
+      const tab = activeTab[siteId] || "keywords";
+      if (tab === "keywords") {
+        await loadKeywords(siteId, period);
+        loadGains(siteId);
+      } else await loadGains(siteId);
+    }
+  }
+
+  async function toggleAll() {
+    if (expandedIds.size === sites.length) {
+      setExpandedIds(new Set());
+    } else {
+      const allIds = sites.map(s => s.id);
+      setExpandedIds(new Set(allIds));
+      for (const id of allIds) {
+        void loadKeywords(id, period);
+        void loadGains(id);
+      }
+    }
   }
 
   async function loadAnalytics(siteId: number, p: Period) {
@@ -310,7 +324,7 @@ export default function DashboardPage() {
   async function changePeriod(p: Period) {
     setPeriod(p);
     await fetchSites(undefined, p);
-    if (expanded) await loadKeywords(expanded, p);
+    for (const id of expandedIds) await loadKeywords(id, p);
   }
 
   async function openKwHistory(siteId: number, query: string) {
@@ -658,6 +672,13 @@ export default function DashboardPage() {
             </button>
           );
         })}
+        <div className="ml-auto flex items-center gap-2">
+          <button type="button" onClick={toggleAll}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-700 bg-gray-800 text-gray-400 hover:text-white hover:border-gray-500 transition">
+            {expandedIds.size === sites.length ? <ChevronsDownUp className="w-3 h-3" /> : <ChevronsUpDown className="w-3 h-3" />}
+            {expandedIds.size === sites.length ? "Tout fermer" : "Tout ouvrir"}
+          </button>
+        </div>
       </div>
 
       {/* Sites */}
@@ -669,7 +690,7 @@ export default function DashboardPage() {
           else { va = Number(a.gsc_clicks_30d); vb = Number(b.gsc_clicks_30d); }
           return siteSortDir === "asc" ? va - vb : vb - va;
         }).map((site, i) => {
-          const isOpen = expanded === site.id;
+          const isOpen = expandedIds.has(site.id);
           const tab = activeTab[site.id] || "keywords";
           const kwKey = `${site.id}-${period}-${langFilter || "all"}`;
           const QUESTION_WORDS = ["comment","pourquoi","quand","quel","quelle","quels","quelles","qu'est","qu est","how","what","why","when","which","where","who","is","are","does","do","can","best","top"];
@@ -778,7 +799,7 @@ export default function DashboardPage() {
                       ))}
                     </div>
                   )}
-                  {kwLoading === site.id ? (
+                  {kwLoadingIds.has(site.id) ? (
                     <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                   ) : tab === "keywords" ? (
                     kws.length === 0 ? (
@@ -1057,7 +1078,7 @@ export default function DashboardPage() {
                   )}
                   {tab === "analytics" && (() => {
                     const aData = analytics[site.id] || [];
-                    if (kwLoading === site.id) return <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>;
+                    if (kwLoadingIds.has(site.id)) return <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>;
                     if (aData.length === 0) return (
                       <div className="py-8 text-center space-y-2">
                         <p className="text-gray-500 text-sm">Pas de données GA4 pour ce site</p>

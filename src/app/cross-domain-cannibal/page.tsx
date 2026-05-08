@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, ChevronLeft, GitMerge, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, ChevronLeft, GitMerge, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 
 interface SitePerf {
   site_id: number; site_name: string; page: string;
@@ -19,7 +19,7 @@ interface Conflict {
 export default function CrossDomainCannibalPage() {
   const [rows, setRows] = useState<Conflict[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetch("/api/cross-domain-cannibal?days=28&limit=100")
@@ -61,17 +61,27 @@ export default function CrossDomainCannibalPage() {
       </div>
 
       <div className="px-6 pb-10 space-y-2">
+        {!loading && rows.length > 0 && (
+          <div className="flex justify-end pb-1">
+            <button type="button"
+              onClick={() => expandedKeys.size === rows.length ? setExpandedKeys(new Set()) : setExpandedKeys(new Set(rows.map(r => r.query)))}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-800 text-gray-400 hover:text-white transition">
+              {expandedKeys.size === rows.length ? <ChevronsDownUp className="w-3 h-3" /> : <ChevronsUpDown className="w-3 h-3" />}
+              {expandedKeys.size === rows.length ? "Tout fermer" : "Tout ouvrir"}
+            </button>
+          </div>
+        )}
         {loading ? (
           <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-pink-500" /></div>
         ) : rows.length === 0 ? (
           <div className="py-12 text-center text-gray-500">Aucun conflit cross-domain — tes sites se respectent 🎉</div>
         ) : (
           rows.map((r, i) => {
-            const isOpen = expanded === r.query;
+            const isOpen = expandedKeys.has(r.query);
             return (
               <div key={i} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                 <div className="px-5 py-3 cursor-pointer hover:bg-gray-800/40 flex items-center justify-between"
-                  onClick={() => setExpanded(isOpen ? null : r.query)}>
+                  onClick={() => setExpandedKeys(prev => { const n = new Set(prev); isOpen ? n.delete(r.query) : n.add(r.query); return n; })}>
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                     <span className="font-medium">{r.query}</span>

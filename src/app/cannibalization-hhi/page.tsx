@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, ChevronLeft, AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, ChevronLeft, AlertTriangle, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 
 interface Site { id: number; name: string }
 interface CannibRow {
@@ -26,7 +26,7 @@ export default function CannibalizationHHIPage() {
   const [siteId, setSiteId] = useState<SiteFilter | null>(null);
   const [rows, setRows] = useState<CannibRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [severitySort, setSeveritySort] = useState<SeverityOrder>("default");
   const [severityFilter, setSeverityFilter] = useState<"ALL"|"HIGH"|"MED"|"LOW">("ALL");
   const [groupBySite, setGroupBySite] = useState(false);
@@ -138,6 +138,19 @@ export default function CannibalizationHHIPage() {
                 Grouper par site
               </button>
             )}
+            <div className="ml-auto">
+              <button type="button"
+                onClick={() => {
+                  const allKeys = sortedRows.map(r => r.query);
+                  expandedKeys.size === allKeys.length
+                    ? setExpandedKeys(new Set())
+                    : setExpandedKeys(new Set(allKeys));
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-800 text-gray-400 hover:text-white transition">
+                {expandedKeys.size === sortedRows.length ? <ChevronsDownUp className="w-3 h-3" /> : <ChevronsUpDown className="w-3 h-3" />}
+                {expandedKeys.size === sortedRows.length ? "Tout fermer" : "Tout ouvrir"}
+              </button>
+            </div>
           </div>
         )}
         {loading ? (
@@ -153,11 +166,11 @@ export default function CannibalizationHHIPage() {
                 </div>
               )}
               {items.map((r, i) => {
-            const isOpen = expanded === r.query;
+            const isOpen = expandedKeys.has(r.query);
             return (
               <div key={i} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                 <div className="px-5 py-3 cursor-pointer hover:bg-gray-800/40 flex items-center justify-between"
-                  onClick={() => setExpanded(isOpen ? null : r.query)}>
+                  onClick={() => setExpandedKeys(prev => { const n = new Set(prev); isOpen ? n.delete(r.query) : n.add(r.query); return n; })}>
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                     <span className={`text-xs font-bold px-2 py-0.5 rounded ${
