@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BarChart3, FileText, RefreshCw, Loader2, ChevronDown, ChevronRight, ArrowLeft, TrendingUp } from "lucide-react";
+import { BarChart3, FileText, RefreshCw, Loader2, ChevronDown, ChevronRight, ArrowLeft, TrendingUp, ChevronsDownUp, ChevronsUpDown, Copy } from "lucide-react";
 import Link from "next/link";
 
 interface Report {
@@ -14,6 +14,18 @@ interface Report {
   recommendations: string;
   top_opportunities: { query: string; impressions: number; position: number }[];
   created_at: string;
+}
+
+function fmtDate(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch { return iso; }
+}
+
+function fmtWeek(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  } catch { return iso; }
 }
 
 function MarkdownText({ text }: { text: string }) {
@@ -43,12 +55,20 @@ function MarkdownText({ text }: { text: string }) {
   );
 }
 
+function buildFullText(reports: Report[]): string {
+  return reports.map(r => {
+    const ops = r.top_opportunities?.map(o => `  - ${o.query} (pos ${o.position}, ${o.impressions} imp.)`).join('\n') || "  Aucune";
+    return `=== ${r.site_name} (${r.site_url}) ===\nAnalysé le : ${fmtDate(r.created_at)}\nSemaine du : ${fmtWeek(r.week_start)}\n\n${r.summary}\n\nOpportunités :\n${ops}\n\nAnalyse IA :\n${r.recommendations}`;
+  }).join('\n\n' + '─'.repeat(60) + '\n\n');
+}
+
 export default function ReportsPage() {
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const fetchReports = async () => {
     setLoading(true);
@@ -61,6 +81,31 @@ export default function ReportsPage() {
   };
 
   useEffect(() => { setTimeout(() => { void fetchReports(); }, 0); }, []);
+
+  const allExpanded = reports.length > 0 && expandedIds.size === reports.length;
+
+  function toggleExpand(id: number) {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (allExpanded) {
+      setExpandedIds(new Set());
+    } else {
+      setExpandedIds(new Set(reports.map(r => r.id)));
+    }
+  }
+
+  async function copyAll() {
+    const text = buildFullText(reports);
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
 
   async function generateNow() {
     setGenerating(true);
@@ -93,7 +138,7 @@ export default function ReportsPage() {
         </div>
         <div className="flex items-center gap-3">
           {lastGenerated && (
-            <span className="text-xs bg-green-500/20 text-green-400 px-3 py-1 rounded-full">✓ Régénéré à {lastGenerated}</span>
+            <span className="text-xs bg-green-500/20 text-green-400 px-3 py-1 rounded-full">Régénéré à {lastGenerated}</span>
           )}
           <button type="button" onClick={generateNow} disabled={generating}
             className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
@@ -119,13 +164,29 @@ export default function ReportsPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            <p className="text-sm text-gray-500">{reports.length} sites analysés — semaine du {reports[0]?.week_start}</p>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-gray-500">
+                {reports.length} sites — dernière analyse le {fmtDate(reports[0]?.created_at)}
+              </p>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={copyAll}
+                  className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition">
+                  <Copy className="w-3 h-3" />
+                  {copied ? "Copié !" : "Copier tout"}
+                </button>
+                <button type="button" onClick={toggleAll}
+                  className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition">
+                  {allExpanded ? <ChevronsDownUp className="w-3 h-3" /> : <ChevronsUpDown className="w-3 h-3" />}
+                  {allExpanded ? "Tout fermer" : "Tout ouvrir"}
+                </button>
+              </div>
+            </div>
             {reports.map(report => (
               <div key={report.id} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-                <div onClick={() => setExpanded(expanded === report.id ? null : report.id)}
+                <div onClick={() => toggleExpand(report.id)}
                   className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-800/50 transition">
                   <div className="flex items-center gap-3">
-                    {expanded === report.id ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                    {expandedIds.has(report.id) ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
                     <div>
                       <span className="font-semibold">{report.site_name}</span>
                       <span className="text-xs text-gray-500 ml-2">{report.site_url}</span>
@@ -138,18 +199,16 @@ export default function ReportsPage() {
                         {report.top_opportunities.length} opportunités
                       </span>
                     )}
-                    <span className="text-xs text-gray-600">Semaine du {report.week_start}</span>
+                    <span className="text-xs text-gray-600">Analysé le {fmtDate(report.created_at)}</span>
                   </div>
                 </div>
 
-                {expanded === report.id && (
+                {expandedIds.has(report.id) && (
                   <div className="border-t border-gray-800 px-6 py-5 space-y-5">
-                    {/* Summary */}
                     <div className="bg-gray-800/50 rounded-lg px-4 py-3 text-sm text-gray-400">
                       {report.summary}
                     </div>
 
-                    {/* Opportunities */}
                     {report.top_opportunities && report.top_opportunities.length > 0 && (
                       <div>
                         <h3 className="text-xs font-semibold text-yellow-400 uppercase tracking-wider mb-2">Mots clés à attaquer (pos 11-20)</h3>
@@ -164,7 +223,6 @@ export default function ReportsPage() {
                       </div>
                     )}
 
-                    {/* AI Recommendations */}
                     <div>
                       <h3 className="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-3">Analyse & recommandations IA</h3>
                       <MarkdownText text={report.recommendations} />

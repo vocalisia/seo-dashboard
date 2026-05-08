@@ -40,7 +40,7 @@ Génère un rapport structuré avec :
 
 Sois très concret et actionnable. Format markdown.`;
 
-  return await askAI([{ role: "user", content: prompt }], "smart", 1500);
+  return await askAI([{ role: "user", content: prompt }], "fast", 1200);
 }
 
 export async function POST(request: Request) {
@@ -129,19 +129,24 @@ export async function POST(request: Request) {
             query: String(q.query), impressions: Number(q.impressions), position: Number(q.position)
           }));
 
-        const aiReport = await analyzeWithAI(site.name, site.url, {
-          topQueries: topQueries.map((q: Record<string, unknown>) => ({
-            query: String(q.query), clicks: Number(q.clicks), impressions: Number(q.impressions), position: Number(q.position)
-          })),
-          gains, losses, totalClicks, totalImpressions, avgPosition: avgPos,
-        });
+        const aiReport = await Promise.race([
+          analyzeWithAI(site.name, site.url, {
+            topQueries: topQueries.map((q: Record<string, unknown>) => ({
+              query: String(q.query), clicks: Number(q.clicks), impressions: Number(q.impressions), position: Number(q.position)
+            })),
+            gains, losses, totalClicks, totalImpressions, avgPosition: avgPos,
+          }),
+          new Promise<string>((_, reject) =>
+            setTimeout(() => reject(new Error("AI timeout")), 20000)
+          ),
+        ]).catch(() => `Données semaine du ${weekStartStr} — ${totalClicks} clics, ${totalImpressions} impressions, position moy. ${avgPos.toFixed(1)}. Analyse IA indisponible.`);
 
         await sql`
           INSERT INTO weekly_reports (site_id, week_start, summary, recommendations, top_opportunities)
           VALUES (
             ${site.id}, ${weekStartStr},
             ${`Semaine du ${weekStartStr} — ${totalClicks} clics, ${totalImpressions} impressions, position moy. ${avgPos.toFixed(1)}`},
-            ${aiReport || "Rapport non disponible (clé OpenAI manquante)"},
+            ${aiReport || "Rapport non disponible"},
             ${JSON.stringify(opportunities)}
           )
           ON CONFLICT (site_id, week_start) DO UPDATE SET
