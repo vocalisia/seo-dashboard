@@ -51,6 +51,9 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     articlePath: "content/posts",
     format: "mdx",
     i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
+    enabled: false,
+    disabledReason:
+      "trust-vault.com nécessite Supabase + Stripe + Prisma — le déploiement MDX via autopilot n'est pas testé avec l'auth/paywall de ce site. Activer manuellement après vérif pipeline.",
   },
   trustly: {
     repo: "vocalisia/trust-ai-blog",
@@ -63,19 +66,20 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     repo: "vocalisia/iapmesuisse",
     articlePath: "content/blog/fr",
     format: "md",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
+    // FR only — articlePath hardcoded to content/blog/fr; EN/DE would be written to fr/ but served from en/ → 404
+    i18nBlogPath: { fr: "/fr/blog", default: "/fr/blog" },
   },
   "iapme-suisse": {
     repo: "vocalisia/iapmesuisse",
     articlePath: "content/blog/fr",
     format: "md",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
+    i18nBlogPath: { fr: "/fr/blog", default: "/fr/blog" },
   },
   iapme: {
     repo: "vocalisia/iapmesuisse",
     articlePath: "content/blog/fr",
     format: "md",
-    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
+    i18nBlogPath: { fr: "/fr/blog", default: "/fr/blog" },
   },
   "hub-ai": {
     repo: "vocalisia/hub-ai",
@@ -110,12 +114,18 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     articlePath: "content/blog",
     format: "mdx",
     i18nBlogPath: { fr: "/blog", default: "/blog" },
+    enabled: false,
+    disabledReason:
+      "agents-ia.pro utilise des scripts Python (_generate_articles.py) pour générer des articles HTML. Le pipeline MDX autopilot est en conflit avec ce workflow existant.",
   },
   "master-seller": {
     repo: "vocalisia/master-seller",
     articlePath: "content/blog",
     format: "mdx",
     i18nBlogPath: { fr: "/blog", default: "/blog" },
+    enabled: false,
+    disabledReason:
+      "master-seller.fr n'a pas de connexion Vercel configurée dans ce repo — content/blog est vide (.gitkeep seul). Pipeline MDX non déployé en prod.",
   },
   whatsapp: {
     repo: "vocalisia/agent-whatsapp-ia-business",
