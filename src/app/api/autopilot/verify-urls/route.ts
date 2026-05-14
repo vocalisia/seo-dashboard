@@ -7,6 +7,7 @@ import { requireCronOrUser, hasValidCronSecret } from "@/lib/cron-auth";
 import { requireApiSession } from "@/lib/api-auth";
 import { getGoogleAuth } from "@/lib/google-auth";
 import { logAutopilot } from "@/lib/autopilot-log";
+import { isPublishBlockedByDomain } from "@/lib/autopilot-config";
 
 interface PublishedRun {
   id: number;
@@ -58,7 +59,31 @@ async function runVerification() {
     ORDER BY created_at DESC
   `) as PublishedRun[];
 
-  logAutopilot("verify_start", { count: rows.length });
+  // FAST-PATH : tag immédiatement comme "cleaned_blocked" tous les runs publiés
+  // sur un domaine bloqué (tesla-mag.ch, etc.). Pas besoin d'attendre un probe
+  // HTTP — on sait que ces URLs sont 404 par config.
+  const blockedRows = rows.filter((r) => isPublishBlockedByDomain(r.published_url));
+  if (blockedRows.length > 0) {
+    const blockedIds = blockedRows.map((r) => r.id);
+    await sql`
+      UPDATE autopilot_runs
+      SET status = 'cleaned_blocked'
+      WHERE id = ANY(${blockedIds})
+    `;
+    logAutopilot("verify_cleaned_blocked", {
+      count: blockedRows.length,
+      ids: blockedIds,
+    });
+  }
+
+  // Les rows restantes (domaines actifs) passent au probe HTTP normal
+  const probeRows = rows.filter((r) => !isPublishBlockedByDomain(r.published_url));
+
+  logAutopilot("verify_start", {
+    total: rows.length,
+    blocked_fastpath: blockedRows.length,
+    to_probe: probeRows.length,
+  });
 
   /**
    * Détecte hard 404 (HTTP 4xx) ET soft 404 (HTTP 200 mais `<title>` contient
@@ -82,15 +107,15 @@ async function runVerification() {
 
   const offenders: PublishedRun[] = [];
   // 6-way concurrent probe (lecture HTML plus chère que HEAD)
-  for (let i = 0; i < rows.length; i += 6) {
-    const batch = rows.slice(i, i + 6);
+  for (let i = 0; i < probeRows.length; i += 6) {
+    const batch = probeRows.slice(i, i + 6);
     const verdicts = await Promise.all(batch.map((r) => probe(r.published_url)));
     batch.forEach((r, j) => {
       if (verdicts[j] === "dead") offenders.push(r);
     });
   }
 
-  if (offenders.length === 0) {
+  if (offenders.length === 0 && blockedRows.length === 0) {
     logAutopilot("verify_done", { checked: rows.length, offenders: 0 });
     return NextResponse.json({ success: true, checked: rows.length, cleaned: 0, offenders: [] });
   }
@@ -207,12 +232,19 @@ ${cleaned.map((c) => `<li><a href="${c.url}">${c.url}</a> — Google: ${c.deinde
     }
   }
 
-  logAutopilot("verify_done", { checked: rows.length, offenders: offenders.length, cleaned: cleaned.length });
+  logAutopilot("verify_done", {
+    checked: rows.length,
+    offenders: offenders.length,
+    cleaned: cleaned.length,
+    cleaned_blocked: blockedRows.length,
+  });
 
   return NextResponse.json({
     success: true,
     checked: rows.length,
     cleaned: cleaned.length,
+    cleaned_blocked: blockedRows.length,
     offenders: cleaned,
+    blocked_urls: blockedRows.map((r) => ({ id: r.id, url: r.published_url })),
   });
 }

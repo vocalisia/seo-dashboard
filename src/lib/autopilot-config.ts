@@ -25,6 +25,42 @@ export type SiteRepoConfig = {
   noDateSuffix?: boolean;
 };
 
+/**
+ * Domaines absolument interdits à la publication autopilot, quelle que soit
+ * la résolution `resolveSiteRepoConfig`. Garde-fou final pour éviter qu'un
+ * nom de site mal normalisé en DB déclenche une publication 404.
+ * Ces domaines sont gérés ailleurs (WordPress externe, HTML statique, etc.).
+ */
+export const BLOCKED_PUBLISH_DOMAINS: ReadonlyArray<string> = [
+  "tesla-mag.ch",
+  "tesla-mag.ca",
+  "master-seller.fr",
+  "seo-true.com",
+  "trust-vault.com",
+  "cbdeuropa.com",
+  "agents-ia.pro",
+  "vocalis-ai.org",
+  "fitnessmaison.fr",
+  "factureimpayee.fr",
+  "factureimpayée.fr",
+  "xn--factureimpaye-mhb.fr",
+];
+
+/** Returns true if siteUrl matches a blocked domain (host comparison, case-insensitive). */
+export function isPublishBlockedByDomain(siteUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(siteUrl).hostname.toLowerCase();
+  } catch {
+    host = siteUrl.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  }
+  host = host.replace(/^www\./, "");
+  return BLOCKED_PUBLISH_DOMAINS.some((d) => {
+    const blocked = d.toLowerCase().replace(/^www\./, "");
+    return host === blocked || host.endsWith("." + blocked);
+  });
+}
+
 export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
   "vocalis-blog": {
     repo: "vocalisia/vocalis-blog",
@@ -45,6 +81,24 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     enabled: false,
     disabledReason:
       "tesla-mag.ch est sur WordPress Infomaniak avec pipeline Make.com (RSS → ChatGPT → WP). Le repo GitHub n'est pas la source de production.",
+  },
+  "tesla-mag-ca": {
+    repo: "vocalisia/tesla-mag-ca",
+    articlePath: "src/data/articles.ts",
+    format: "mdx",
+    i18nBlogPath: { fr: "/article", en: "/en/article", default: "/article" },
+    enabled: false,
+    disabledReason:
+      "tesla-mag.ca stocke les articles dans un tableau TypeScript (src/data/articles.ts), pas en MDX. Pipeline autopilot MDX incompatible — tracking GSC/GA4 OK, publication désactivée.",
+  },
+  "tesla-mag.ca": {
+    repo: "vocalisia/tesla-mag-ca",
+    articlePath: "src/data/articles.ts",
+    format: "mdx",
+    i18nBlogPath: { fr: "/article", en: "/en/article", default: "/article" },
+    enabled: false,
+    disabledReason:
+      "tesla-mag.ca stocke les articles dans un tableau TypeScript (src/data/articles.ts), pas en MDX. Pipeline autopilot MDX incompatible — tracking GSC/GA4 OK, publication désactivée.",
   },
   "trust-vault": {
     repo: "vocalisia/trust-vault",
@@ -133,6 +187,12 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     format: "mdx",
     i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
   },
+  "agentic-whatsup": {
+    repo: "vocalisia/agent-whatsapp-ia-business",
+    articlePath: "content/blog",
+    format: "mdx",
+    i18nBlogPath: { fr: "/fr/blog", en: "/en/blog", default: "/fr/blog" },
+  },
   "lead-gene": {
     repo: "vocalisia/lead-gene",
     articlePath: "content/blog",
@@ -163,6 +223,25 @@ export const SITE_REPO_MAP: Record<string, SiteRepoConfig> = {
     repo: "vocalisia/fitnessmaison",
     articlePath: "content/blog",
     format: "mdx",
+    enabled: false,
+    disabledReason:
+      "Domaine custom non encore connecté au repo vocalisia/fitnessmaison sur Vercel. Activer après configuration du domaine.",
+  },
+  factureimpayee: {
+    repo: "vocalisia/factureimpayee",
+    articlePath: "content/blog",
+    format: "mdx",
+    enabled: false,
+    disabledReason:
+      "factureimpayée.fr est un site Next.js autonome sans pipeline MDX autopilot — les articles sont gérés directement dans le repo factureimpayee/src, pas via autopilot.",
+  },
+  "facture-impayee": {
+    repo: "vocalisia/factureimpayee",
+    articlePath: "content/blog",
+    format: "mdx",
+    enabled: false,
+    disabledReason:
+      "factureimpayée.fr est un site Next.js autonome sans pipeline MDX autopilot — les articles sont gérés directement dans le repo factureimpayee/src, pas via autopilot.",
   },
 };
 
@@ -227,29 +306,69 @@ export const LANG_CONFIG: Record<string, LangConfigEntry> = {
   },
 };
 
+/**
+ * Normalize: lowercase + strip accents + replace ANY non-alphanum with hyphen + trim hyphens.
+ * Handles "Tesla Mag", "tesla-mag.ch", "TeslaMag.fr", "factureimpayée" uniformly.
+ */
+function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // strip diacritics
+    .replace(/[^a-z0-9]+/g, "-") // any non-alphanum run → hyphen
+    .replace(/^-+|-+$/g, ""); // trim leading/trailing
+}
+
+/** Compact form (alphanum only): "tesla-mag" → "teslamag". Used for camelCase / no-separator inputs. */
+function compactName(name: string): string {
+  return normalizeName(name).replace(/-/g, "");
+}
+
 /** Match dashboard site name to repo config (same rules as autopilot route). */
 export function resolveSiteRepoConfig(siteDisplayName: string): {
   normalizedSiteName: string;
   siteKey: string | null;
   repoConfig: SiteRepoConfig | null;
 } {
-  const normalizedSiteName = siteDisplayName.toLowerCase().replace(/[\s_]+/g, "-");
+  const normalizedSiteName = normalizeName(siteDisplayName);
+  const compactInput = compactName(siteDisplayName);
   const keys = Object.keys(SITE_REPO_MAP);
 
-  // 1. Match exact (vocalis-pro → "vocalis-pro" pas "vocalis-blog")
+  // 1. Match exact normalized (vocalis-pro → "vocalis-pro" pas "vocalis-blog")
   let siteKey: string | null =
-    keys.find((k) => k.toLowerCase() === normalizedSiteName) ?? null;
+    keys.find((k) => normalizeName(k) === normalizedSiteName) ?? null;
 
-  // 2. Sinon match prefix par clé la plus longue (évite "vocalis" → "vocalis-blog"
-  // quand "vocalis-pro" existe). Trier par longueur décroissante.
+  // 2. Match exact compact (covers "TeslaMag", "teslamag.ch", etc.)
+  if (!siteKey) {
+    siteKey = keys.find((k) => compactName(k) === compactInput) ?? null;
+  }
+
+  // 3. Longest-prefix substring on normalized form
   if (!siteKey) {
     siteKey =
       keys
         .slice()
         .sort((a, b) => b.length - a.length)
         .find((k) => {
-          const normK = k.toLowerCase();
+          const normK = normalizeName(k);
           return normalizedSiteName.includes(normK) || normK.includes(normalizedSiteName);
+        }) ?? null;
+  }
+
+  // 4. Longest-prefix substring on compact form (last-resort safety net for disabled sites
+  //    with weird display names — better a false positive matching a disabled config
+  //    than a null that lets autopilot publish to 404 URLs).
+  if (!siteKey && compactInput.length >= 4) {
+    siteKey =
+      keys
+        .slice()
+        .sort((a, b) => b.length - a.length)
+        .find((k) => {
+          const compactK = compactName(k);
+          return (
+            compactK.length >= 4 &&
+            (compactInput.includes(compactK) || compactK.includes(compactInput))
+          );
         }) ?? null;
   }
 

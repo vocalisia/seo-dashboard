@@ -10,7 +10,7 @@ import { publishToGitHub, listRepoFiles } from "@/lib/github";
 import { getGoogleAuth } from "@/lib/google-auth";
 import type { KeywordRow } from "@/lib/autopilot-keywords";
 import { pickFirstUsableKeyword } from "@/lib/autopilot-keywords";
-import { LANG_CONFIG, resolveSiteRepoConfig } from "@/lib/autopilot-config";
+import { LANG_CONFIG, resolveSiteRepoConfig, isPublishBlockedByDomain } from "@/lib/autopilot-config";
 import { logAutopilot } from "@/lib/autopilot-log";
 import {
   blogPathForLocale,
@@ -78,7 +78,27 @@ export async function POST(req: NextRequest) {
       enabled: repoConfig?.enabled !== false,
     });
 
-    // Garde-fou : si le repo est marqué disabled, on n'écrit rien — sinon
+    // Garde-fou #1 (par URL) : domaines hors pipeline autopilot (WordPress externe,
+    // HTML statique, etc.). Vérifié AVANT la résolution config pour bloquer même
+    // si le site name a une variante inattendue qui passe à travers le résolveur.
+    if (isPublishBlockedByDomain(site.url)) {
+      logAutopilot("publication_blocked_by_domain", {
+        site_id,
+        siteName: site.name,
+        siteUrl: site.url,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Publication bloquée pour ${site.name} : domaine ${site.url} hors pipeline autopilot.`,
+          disabled: true,
+          site_name: site.name,
+        },
+        { status: 422 }
+      );
+    }
+
+    // Garde-fou #2 (par config) : si le repo est marqué disabled, on n'écrit rien — sinon
     // on génère des fichiers MDX dans un repo qui n'est pas la source de
     // déploiement et on fabrique des URLs 404 publiques.
     if (repoConfig && repoConfig.enabled === false) {

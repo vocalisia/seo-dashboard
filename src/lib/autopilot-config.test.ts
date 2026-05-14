@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveSiteRepoConfig, SITE_REPO_MAP } from "./autopilot-config";
+import {
+  resolveSiteRepoConfig,
+  SITE_REPO_MAP,
+  isPublishBlockedByDomain,
+} from "./autopilot-config";
 
 describe("resolveSiteRepoConfig", () => {
   it("matches tesla-mag style site names", () => {
@@ -32,6 +36,7 @@ describe("resolveSiteRepoConfig", () => {
       "seo-true",
       "vocalis-ai",
       "trust-vault",
+      "fitness",
     ];
     for (const key of expectedDisabled) {
       expect(SITE_REPO_MAP[key]?.enabled).toBe(false);
@@ -50,7 +55,6 @@ describe("resolveSiteRepoConfig", () => {
       "lead-gene",
       "trustly",
       "woman-cute",
-      "fitness",
       "whatsapp",
     ];
     for (const key of expectedEnabled) {
@@ -89,5 +93,88 @@ describe("resolveSiteRepoConfig", () => {
     // (length 12) but never crashes.
     const r = resolveSiteRepoConfig("vocalis");
     expect(r.siteKey).toMatch(/^vocalis-/);
+  });
+
+  it("resolves accented site names (factureimpayée → factureimpayee)", () => {
+    const r1 = resolveSiteRepoConfig("factureimpayée");
+    expect(r1.siteKey).toBe("factureimpayee");
+    expect(r1.repoConfig?.enabled).toBe(false);
+
+    const r2 = resolveSiteRepoConfig("Facture Impayée");
+    expect(r2.siteKey).toBe("facture-impayee");
+    expect(r2.repoConfig?.enabled).toBe(false);
+  });
+
+  it("resolves tesla-mag variants to disabled config (zero 404 risk)", () => {
+    const variants = [
+      "tesla-mag",
+      "Tesla Mag",
+      "Tesla-Mag",
+      "tesla-mag.ch",
+      "tesla.mag",
+      "TeslaMag",
+      "teslamag",
+      "Tesla_Mag",
+      "TESLA MAG",
+    ];
+    for (const name of variants) {
+      const r = resolveSiteRepoConfig(name);
+      expect(r.siteKey, `failed for: ${name}`).toBe("tesla-mag");
+      expect(r.repoConfig?.enabled, `enabled for: ${name}`).toBe(false);
+    }
+  });
+
+  it("isPublishBlockedByDomain blocks all known-disabled domains (defense in depth)", () => {
+    const blocked = [
+      "https://tesla-mag.ch",
+      "https://www.tesla-mag.ch",
+      "https://tesla-mag.ch/produit",
+      "https://master-seller.fr",
+      "https://www.master-seller.fr/blog",
+      "https://seo-true.com",
+      "https://trust-vault.com/fr/blog",
+      "https://cbdeuropa.com",
+      "https://agents-ia.pro",
+      "https://vocalis-ai.org",
+      "https://factureimpayée.fr",
+      "https://factureimpayee.fr",
+      "https://xn--factureimpaye-mhb.fr",
+    ];
+    for (const url of blocked) {
+      expect(isPublishBlockedByDomain(url), `should block: ${url}`).toBe(true);
+    }
+    const allowed = [
+      "https://vocalis.blog",
+      "https://trustly-ai.com",
+      "https://ai-due.com",
+      "https://lead-gene.com",
+      "https://iapmesuisse.ch",
+      "https://agentic-whatsup.com",
+      "https://woman-cute.com",
+    ];
+    for (const url of allowed) {
+      expect(isPublishBlockedByDomain(url), `should NOT block: ${url}`).toBe(false);
+    }
+  });
+
+  it("resolves all disabled domain variants to disabled config", () => {
+    const cases: Array<[string, string]> = [
+      ["seo-true.com", "seo-true"],
+      ["SEOTrue", "seo-true"],
+      ["trust-vault.com", "trust-vault"],
+      ["TrustVault", "trust-vault"],
+      ["cbdeuropa.com", "cbd"],
+      ["agents-ia.pro", "agents-ia"],
+      ["AgentsIA", "agents-ia"],
+      ["master-seller.fr", "master-seller"],
+      ["MasterSeller", "master-seller"],
+      ["vocalis-ai.org", "vocalis-ai"],
+      ["VocalisAI", "vocalis-ai"],
+    ];
+    for (const [input, expectedKey] of cases) {
+      const r = resolveSiteRepoConfig(input);
+      expect(r.siteKey, `wrong key for: ${input}`).toBe(expectedKey);
+      expect(r.repoConfig?.enabled, `not disabled for: ${input}`).toBe(false);
+    }
   });
 });
