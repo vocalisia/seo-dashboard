@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
@@ -13,7 +12,10 @@ if (isProd && !nextAuthSecret) {
   throw new Error("NEXTAUTH_SECRET is required in production");
 }
 
-const nonProdFallbackSecret = !isProd && !nextAuthSecret ? `dev-secret-${randomUUID()}` : undefined;
+// Edge-safe random UUID (works on Edge Runtime, no Node 'crypto' import).
+const nonProdFallbackSecret = !isProd && !nextAuthSecret
+  ? `dev-secret-${globalThis.crypto.randomUUID()}`
+  : undefined;
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
