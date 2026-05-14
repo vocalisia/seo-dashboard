@@ -15,7 +15,8 @@
     "fix:internal-links": "node scripts/fix-internal-links.mjs",
     "env:pull": "npx vercel env pull .env.local",
     "sync:gsc": "node scripts/sync-gsc.mjs",
-    "sync:ga4": "node scripts/sync-ga4.mjs"
+    "sync:ga4": "node scripts/sync-ga4.mjs",
+    "prebuild": "node scripts/seo-tag-guard.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",
