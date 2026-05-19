@@ -123,7 +123,7 @@ export function analyzeGA4(html: string): {
     });
   }
 
-  // Logique consent inversée (rejected ? granted : denied)
+  // Logique consent inversée (rejected ? granted : denied) — track sur refus
   const invertedRegex =
     /rejected\s*\?\s*['"]granted['"]\s*:\s*['"]denied['"]/i;
   if (invertedRegex.test(html)) {
@@ -133,6 +133,19 @@ export function analyzeGA4(html: string): {
       code: "ga4_consent_inverted",
       message:
         "Logique consent inversée détectée (`rejected ? granted : denied`) — tracking actif sur les refus EU.",
+    });
+  }
+
+  // Logique opt-out (rejected/declined ? denied : granted) — track par défaut
+  const optoutRegex =
+    /(?:rejected|declined)\s*\?\s*['"]denied['"]\s*:\s*['"]granted['"]/i;
+  if (optoutRegex.test(html)) {
+    issues.push({
+      severity: "critical",
+      category: "ga4",
+      code: "ga4_consent_optout",
+      message:
+        "Logique consent OPT-OUT détectée (`rejected ? denied : granted`) — tracking actif par défaut, viole RGPD opt-in EU.",
     });
   }
 
