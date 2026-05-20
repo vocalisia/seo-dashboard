@@ -15,14 +15,15 @@ SITES = [
     "https://agentic-whatsup.com/",
     "https://lead-gene.com/fr",
     "https://woman-cute.com/",
-    "https://factureimpayee.fr/",
+    "https://xn--factureimpaye-mhb.fr/",
     "https://tesla-mag.ch/",
     "https://tesla-mag.ca/",
     "https://cbdeuropa.com/",
     "https://agents-ia.pro/",
-    "https://boursier.ch/",
     "https://epargne-suisse.ch/",
     "https://sante-lamal.ch/",
+    # "https://boursier.ch/",  # DNS not pointing to Vercel — domain inactive
+    # "https://factureimpayee.fr/",  # DNS broken — use punycode above
 ]
 
 def fetch(url):
