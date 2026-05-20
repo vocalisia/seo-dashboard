@@ -89,8 +89,14 @@ export function analyzeGA4(html: string): {
     });
   }
 
-  // Position du premier gtag.js script (pour mesurer l'ordre consent vs config)
-  const gtagJsIdx = html.indexOf("googletagmanager.com/gtag/js");
+  // Position du premier gtag.js SCRIPT (pas <link rel=preload> qui est juste un hint).
+  // Cherche `<script ... src="...gtag/js...">` pour mesurer l'ordre consent vs execution réelle.
+  const gtagScriptMatch = html.match(
+    /<script\s[^>]*src=["'][^"']*googletagmanager\.com\/gtag\/js[^"']*["']/
+  );
+  const gtagJsIdx = gtagScriptMatch && typeof gtagScriptMatch.index === "number"
+    ? gtagScriptMatch.index
+    : -1;
   const consentDefaultIdx = html.indexOf("gtag('consent','default'");
   const consentDefaultAltIdx = html.indexOf('gtag("consent","default"');
   const consentSpaceIdx = html.indexOf("gtag('consent', 'default'");

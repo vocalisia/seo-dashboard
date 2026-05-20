@@ -62,7 +62,9 @@ def analyze(url, html):
     for pat in (r"gtag\s*\(\s*['\"]consent['\"]\s*,\s*['\"]default['\"]",):
         m = re.search(pat, html)
         if m: consent_pos = m.start(); break
-    gtag_pos = html.find('googletagmanager.com/gtag/js')
+    # Match the actual <script> loader, not <link rel="preload" href=...> (preload is hint only, doesn't execute)
+    gtag_script_match = re.search(r"<script\s[^>]*src=['\"][^'\"]*googletagmanager\.com/gtag/js[^'\"]*['\"]", html)
+    gtag_pos = gtag_script_match.start() if gtag_script_match else -1
     if consent_pos > -1 and gtag_pos > -1 and consent_pos > gtag_pos:
         issues.append(('CRIT', 'consent_after', f'Consent default AFTER gtag.js (Next.js hoisting bug)'))
     return ga_ids, issues
