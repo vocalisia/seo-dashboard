@@ -21,6 +21,8 @@ SITES = [
     "https://cbdeuropa.com/",
     "https://agents-ia.pro/",
     "https://boursier.ch/",
+    "https://epargne-suisse.ch/",
+    "https://sante-lamal.ch/",
 ]
 
 def fetch(url):
