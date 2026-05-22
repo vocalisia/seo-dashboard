@@ -1,6 +1,7 @@
 import { getSQL } from "@/lib/db";
 import { requireApiSession } from "@/lib/api-auth";
 import { GSC_LAG_DAYS } from "@/lib/gsc-window";
+import { siteCountryCode } from "@/lib/site-country";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
@@ -18,21 +19,30 @@ export async function GET(request: NextRequest) {
     const sql = getSQL();
 
     if (type === "gsc") {
-      const rows = await sql`
-        SELECT
-          s.id as site_id, s.name, s.url,
-          date::text,
-          SUM(clicks) as clicks,
-          SUM(impressions) as impressions,
-          AVG(position) as position
-        FROM search_console_data d
-        JOIN sites s ON s.id = d.site_id
-        WHERE d.date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-          AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-          AND (d.country IS NULL OR d.country = '')
-        GROUP BY s.id, s.name, s.url, d.date
-        ORDER BY d.date ASC
-      `;
+      // Per-site TLD country filter (FRA / CHE / BEL / CAN) + NULL fallback.
+      // Build site → country map first, then aggregate per site/date.
+      const siteRows = (await sql`SELECT id, url FROM sites WHERE is_active = true`) as Array<{ id: number; url: string }>;
+      const rows: Array<Record<string, unknown>> = [];
+      for (const s of siteRows) {
+        const cc = siteCountryCode(s.url);
+        const r = (await sql`
+          SELECT
+            s.id as site_id, s.name, s.url,
+            d.date::text,
+            SUM(d.clicks) as clicks,
+            SUM(d.impressions) as impressions,
+            AVG(d.position) as position
+          FROM search_console_data d
+          JOIN sites s ON s.id = d.site_id
+          WHERE d.site_id = ${s.id}
+            AND d.date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+            AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+            AND (d.country IS NULL OR d.country = '' OR d.country = ${cc})
+          GROUP BY s.id, s.name, s.url, d.date
+          ORDER BY d.date ASC
+        `) as Array<Record<string, unknown>>;
+        rows.push(...r);
+      }
       return NextResponse.json(rows);
     }
 
@@ -53,31 +63,66 @@ export async function GET(request: NextRequest) {
 
     // type=summary - totals per site per period (all active sites, even with 0 data)
     if (type === "summary") {
-      const rows = await sql`
-        SELECT
-          s.id as site_id, s.name, s.url,
-          COALESCE(SUM(d.clicks), 0) as clicks,
-          COALESCE(SUM(d.impressions), 0) as impressions,
-          COALESCE(AVG(NULLIF(d.position, 0)), 0) as position,
-          COALESCE(COUNT(DISTINCT d.date), 0) as days_with_data,
-          COALESCE(SUM(a.sessions), 0) as sessions,
-          COALESCE(SUM(a.users), 0) as users,
-          COALESCE(SUM(a.pageviews), 0) as pageviews,
-          COALESCE(SUM(a.organic_sessions), 0) as organic_sessions,
-          COALESCE(AVG(a.avg_session_duration), 0) as avg_duration,
-          COALESCE(AVG(a.bounce_rate), 0) as bounce_rate
-        FROM sites s
-        LEFT JOIN search_console_data d ON d.site_id = s.id
-          AND d.date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-          AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-          AND (d.country IS NULL OR d.country = '')
-        LEFT JOIN analytics_daily a ON a.site_id = s.id
-          AND a.date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
-        WHERE s.is_active = true
-        GROUP BY s.id, s.name, s.url
-        ORDER BY COALESCE(SUM(d.clicks), 0) DESC
-      `;
-      return NextResponse.json(rows);
+      const siteRows = (await sql`SELECT id, name, url FROM sites WHERE is_active = true`) as Array<{ id: number; name: string; url: string }>;
+      const out: Array<Record<string, unknown>> = [];
+      for (const s of siteRows) {
+        const cc = siteCountryCode(s.url);
+        const r = (await sql`
+          SELECT
+            ${s.id}::int as site_id, ${s.name}::text as name, ${s.url}::text as url,
+            COALESCE((SELECT SUM(clicks) FROM search_console_data
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND (country IS NULL OR country = '' OR country = ${cc})
+            ), 0) as clicks,
+            COALESCE((SELECT SUM(impressions) FROM search_console_data
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND (country IS NULL OR country = '' OR country = ${cc})
+            ), 0) as impressions,
+            COALESCE((SELECT AVG(NULLIF(position, 0)) FROM search_console_data
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND (country IS NULL OR country = '' OR country = ${cc})
+            ), 0) as position,
+            COALESCE((SELECT COUNT(DISTINCT date) FROM search_console_data
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND (country IS NULL OR country = '' OR country = ${cc})
+            ), 0) as days_with_data,
+            COALESCE((SELECT SUM(sessions) FROM analytics_daily
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
+            ), 0) as sessions,
+            COALESCE((SELECT SUM(users) FROM analytics_daily
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
+            ), 0) as users,
+            COALESCE((SELECT SUM(pageviews) FROM analytics_daily
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
+            ), 0) as pageviews,
+            COALESCE((SELECT SUM(organic_sessions) FROM analytics_daily
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
+            ), 0) as organic_sessions,
+            COALESCE((SELECT AVG(avg_session_duration) FROM analytics_daily
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
+            ), 0) as avg_duration,
+            COALESCE((SELECT AVG(bounce_rate) FROM analytics_daily
+              WHERE site_id = ${s.id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
+            ), 0) as bounce_rate
+        `) as Array<Record<string, unknown>>;
+        if (r[0]) out.push(r[0]);
+      }
+      out.sort((a, b) => Number(b.clicks ?? 0) - Number(a.clicks ?? 0));
+      return NextResponse.json(out);
     }
 
     return NextResponse.json({ error: "Invalid type" }, { status: 400 });

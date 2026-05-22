@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { GSC_LAG_DAYS } from "@/lib/gsc-window";
+import { siteCountryCode } from "@/lib/site-country";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,9 @@ export async function GET(req: NextRequest) {
     const sql = getSQL();
     const siteIdNum = parseInt(siteId, 10);
 
+    const siteRow = (await sql`SELECT url FROM sites WHERE id = ${siteIdNum}`) as Array<{ url: string }>;
+    const cc = siteCountryCode(siteRow[0]?.url ?? "");
+
     const overview = await sql`
       SELECT
         device,
@@ -33,6 +37,7 @@ export async function GET(req: NextRequest) {
         AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
         AND device IS NOT NULL
         AND device != ''
+        AND (country IS NULL OR country = '' OR country = ${cc})
       GROUP BY device
       ORDER BY SUM(clicks) DESC
     `;
@@ -50,6 +55,7 @@ export async function GET(req: NextRequest) {
         AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
         AND device IS NOT NULL
         AND device != ''
+        AND (country IS NULL OR country = '' OR country = ${cc})
       GROUP BY device, query
       ORDER BY device, SUM(clicks) DESC
     `;

@@ -17,6 +17,8 @@ interface Site {
 interface QueryData {
   query: string; total_clicks: number; total_impressions: number;
   avg_ctr: number; avg_position: number; first_seen?: string | null;
+  // From tracked_keywords JOIN
+  volume_market?: number | null; volume_fr?: number | null; market?: string | null;
 }
 
 interface GainData {
@@ -28,6 +30,8 @@ interface GainData {
   clicks_now: number; clicks_prev: number; clicks_gain: number;
   impressions_now: number;
   first_seen?: string | null;
+  // From tracked_keywords JOIN
+  volume_market?: number | null; volume_fr?: number | null; market?: string | null;
 }
 
 interface GainLabels { w0: string; w1: string; w2: string; w3: string; w4: string }
@@ -62,6 +66,22 @@ function estimatedMonthlyVolume(impressions: number, position: number): number {
     : position <= 50 ? 0.45
     : 0.35;
   return Math.round(impressions / share);
+}
+
+// Prefer DB-stored real volume (DataForSEO / Ahrefs / Keyword Planner via sync)
+// over the impression-based estimate. DB volumes come from `tracked_keywords`
+// (columns volume_market / volume_fr) populated by the sync script.
+function resolveVolume(
+  volMarket: number | null | undefined,
+  volFr: number | null | undefined,
+  impressions: number,
+  position: number,
+): number {
+  const m = Number(volMarket ?? 0);
+  if (m > 0) return m;
+  const f = Number(volFr ?? 0);
+  if (f > 0) return f;
+  return estimatedMonthlyVolume(impressions, position);
 }
 
 function volLabel(vol: number): { label: string; color: string } {
@@ -609,6 +629,9 @@ export default function DashboardPage() {
           <Link href="/pagerank" className="bg-teal-600/20 hover:bg-teal-600/40 text-teal-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-teal-800/40">
             🔗 PageRank
           </Link>
+          <Link href="/ga4-audit" className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-blue-800/40">
+            📊 Audit GA4
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
@@ -706,7 +729,7 @@ export default function DashboardPage() {
               if (sortCol === "position") { va = Number(a.avg_position); vb = Number(b.avg_position); }
               else if (sortCol === "impressions") { va = Number(a.total_impressions); vb = Number(b.total_impressions); }
               else if (sortCol === "ctr") { va = Number(a.avg_ctr); vb = Number(b.avg_ctr); }
-              else if (sortCol === "volume") { va = estimatedMonthlyVolume(Number(a.total_impressions), Number(a.avg_position)); vb = estimatedMonthlyVolume(Number(b.total_impressions), Number(b.avg_position)); }
+              else if (sortCol === "volume") { va = resolveVolume(a.volume_market, a.volume_fr, Number(a.total_impressions), Number(a.avg_position)); vb = resolveVolume(b.volume_market, b.volume_fr, Number(b.total_impressions), Number(b.avg_position)); }
               else { va = Number(a.total_clicks); vb = Number(b.total_clicks); }
               return sortDir === "asc" ? va - vb : vb - va;
             });
@@ -717,8 +740,8 @@ export default function DashboardPage() {
               const volEst = (g: GainData) => {
                 const impr = Number(g.impressions_now) || 0;
                 const pos = Number(g.position_now) || 0;
-                if (impr <= 0 || pos <= 0) return 0;
-                return estimatedMonthlyVolume(Math.round(impr * (30 / 7)), pos);
+                const monthlyImpr = impr * (30 / 7);
+                return resolveVolume(g.volume_market, g.volume_fr, Math.round(monthlyImpr), pos);
               };
               const oppEst = (g: GainData) => opportunityScore(volEst(g), Number(g.position_now) || 0);
               if (gainSortCol === "position_now") { va = Number(a.position_now); vb = Number(b.position_now); }
@@ -877,7 +900,7 @@ export default function DashboardPage() {
                               </td>
                               <td className="text-right py-2 px-3">
                                 {(() => {
-                                  const vol = estimatedMonthlyVolume(Number(kw.total_impressions), Number(kw.avg_position));
+                                  const vol = resolveVolume(kw.volume_market, kw.volume_fr, Number(kw.total_impressions), Number(kw.avg_position));
                                   const { label, color } = volLabel(vol);
                                   return <span className={`text-xs font-medium ${color}`}>{label}</span>;
                                 })()}
@@ -1003,10 +1026,8 @@ export default function DashboardPage() {
                                   {(() => {
                                     const impr = Number(g.impressions_now) || 0;
                                     const pos = Number(g.position_now) || 0;
-                                    if (impr <= 0 || pos <= 0) return <span className="text-gray-600 text-xs">—</span>;
-                                    // Weekly impressions → ~monthly volume estimate
-                                    const monthlyImpr = impr * (30 / 7);
-                                    const vol = estimatedMonthlyVolume(Math.round(monthlyImpr), pos);
+                                    const vol = resolveVolume(g.volume_market, g.volume_fr, Math.round(impr * (30 / 7)), pos);
+                                    if (vol <= 0) return <span className="text-gray-600 text-xs">—</span>;
                                     const { label, color } = volLabel(vol);
                                     return <span className={`text-xs font-semibold ${color}`}>{label}</span>;
                                   })()}
@@ -1015,8 +1036,8 @@ export default function DashboardPage() {
                                   {(() => {
                                     const impr = Number(g.impressions_now) || 0;
                                     const pos = Number(g.position_now) || 0;
-                                    if (impr <= 0 || pos <= 0) return <span className="text-gray-600 text-xs">—</span>;
-                                    const monthlyVol = estimatedMonthlyVolume(Math.round(impr * (30 / 7)), pos);
+                                    if (pos <= 0) return <span className="text-gray-600 text-xs">—</span>;
+                                    const monthlyVol = resolveVolume(g.volume_market, g.volume_fr, Math.round(impr * (30 / 7)), pos);
                                     const score = opportunityScore(monthlyVol, pos);
                                     const { label, color, emoji } = oppLabel(score);
                                     return <span className={`text-xs ${color}`} title={`Si tu passes top 3, tu gagnes ~${score} clics/mois`}>{emoji} {label}</span>;
@@ -1026,7 +1047,7 @@ export default function DashboardPage() {
                                   {(() => {
                                     const impr = Number(g.impressions_now) || 0;
                                     const pos = Number(g.position_now) || 0;
-                                    const monthlyVol = impr > 0 && pos > 0 ? estimatedMonthlyVolume(Math.round(impr * (30 / 7)), pos) : 0;
+                                    const monthlyVol = pos > 0 ? resolveVolume(g.volume_market, g.volume_fr, Math.round(impr * (30 / 7)), pos) : 0;
                                     const action = recommendedAction(pos, monthlyVol);
                                     const btnColor = action.type === "push" ? "bg-orange-500/20 text-orange-300 border-orange-500/40 hover:bg-orange-500/30" :
                                                      action.type === "optimize" ? "bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30" :

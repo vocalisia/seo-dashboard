@@ -1,6 +1,7 @@
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { GSC_LAG_DAYS } from "@/lib/gsc-window";
+import { siteCountryCode } from "@/lib/site-country";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
@@ -30,56 +31,91 @@ export async function GET(request: NextRequest) {
     return NextResponse.json([]);
   }
 
-  // Resolve filter: explicit country > language mapping > none
-  const countryFilter: string[] | null = country
-    ? [country]
-    : language && LANG_COUNTRIES[language]
-      ? LANG_COUNTRIES[language]
-      : null;
-
   try {
     const sql = getSQL();
     const id = parseInt(siteId);
 
+    // Resolve filter: explicit country > language mapping > site TLD > none.
+    // Default (no override) = ALWAYS the site's TLD country with NULL fallback.
+    let countryFilter: string[] | null;
+    if (country) {
+      countryFilter = [country];
+    } else if (language && LANG_COUNTRIES[language]) {
+      countryFilter = LANG_COUNTRIES[language];
+    } else {
+      const siteRow = (await sql`SELECT url FROM sites WHERE id = ${id}`) as Array<{ url: string }>;
+      const url = siteRow[0]?.url ?? "";
+      countryFilter = [siteCountryCode(url)];
+    }
+
     if (type === "queries") {
+      // countryFilter is always set (TLD default), but keep the legacy branch as a safety net.
       const rows = countryFilter
         ? await sql`
-            SELECT query,
-              SUM(clicks) as total_clicks,
-              SUM(impressions) as total_impressions,
-              AVG(ctr) as avg_ctr,
-              AVG(position) as avg_position,
-              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
-            FROM search_console_data d
-            WHERE site_id = ${id}
-              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-              AND query IS NOT NULL
-              AND position BETWEEN 1 AND 200
-              AND country = ANY(${countryFilter})
-              AND country IS NOT NULL
-              AND country <> ''
-            GROUP BY query
-            ORDER BY total_clicks DESC
-            LIMIT ${limit}
+            SELECT q.query,
+              q.total_clicks,
+              q.total_impressions,
+              q.avg_ctr,
+              q.avg_position,
+              q.first_seen,
+              tk.volume_market,
+              tk.volume_fr,
+              tk.market
+            FROM (
+              SELECT query,
+                SUM(clicks) as total_clicks,
+                SUM(impressions) as total_impressions,
+                AVG(ctr) as avg_ctr,
+                AVG(position) as avg_position,
+                (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
+              FROM search_console_data d
+              WHERE site_id = ${id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND query IS NOT NULL
+                AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
+              GROUP BY query
+              ORDER BY total_clicks DESC
+              LIMIT ${limit}
+            ) q
+            LEFT JOIN tracked_keywords tk
+              ON tk.site_id = ${id}
+             AND LOWER(tk.keyword) = LOWER(q.query)
+             AND tk.is_active = TRUE
           `
         : await sql`
-            SELECT query,
-              SUM(clicks) as total_clicks,
-              SUM(impressions) as total_impressions,
-              AVG(ctr) as avg_ctr,
-              AVG(position) as avg_position,
-              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
-            FROM search_console_data d
-            WHERE site_id = ${id}
-              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-              AND query IS NOT NULL
-              AND position BETWEEN 1 AND 200
-              AND (country IS NULL OR country = '')
-            GROUP BY query
-            ORDER BY total_clicks DESC
-            LIMIT ${limit}
+            SELECT q.query,
+              q.total_clicks,
+              q.total_impressions,
+              q.avg_ctr,
+              q.avg_position,
+              q.first_seen,
+              tk.volume_market,
+              tk.volume_fr,
+              tk.market
+            FROM (
+              SELECT query,
+                SUM(clicks) as total_clicks,
+                SUM(impressions) as total_impressions,
+                AVG(ctr) as avg_ctr,
+                AVG(position) as avg_position,
+                (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
+              FROM search_console_data d
+              WHERE site_id = ${id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND query IS NOT NULL
+                AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '')
+              GROUP BY query
+              ORDER BY total_clicks DESC
+              LIMIT ${limit}
+            ) q
+            LEFT JOIN tracked_keywords tk
+              ON tk.site_id = ${id}
+             AND LOWER(tk.keyword) = LOWER(q.query)
+             AND tk.is_active = TRUE
           `;
       return NextResponse.json(rows);
     }
@@ -95,9 +131,7 @@ export async function GET(request: NextRequest) {
                 AND date >= NOW() - INTERVAL '7 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND country = ANY(${countryFilter})
-                AND country IS NOT NULL
-                AND country <> ''
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             ),
             w1 AS (
@@ -108,9 +142,7 @@ export async function GET(request: NextRequest) {
                 AND date <  NOW() - INTERVAL '7 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND country = ANY(${countryFilter})
-                AND country IS NOT NULL
-                AND country <> ''
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             ),
             w2 AS (
@@ -121,9 +153,7 @@ export async function GET(request: NextRequest) {
                 AND date <  NOW() - INTERVAL '14 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND country = ANY(${countryFilter})
-                AND country IS NOT NULL
-                AND country <> ''
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             ),
             w3 AS (
@@ -134,9 +164,7 @@ export async function GET(request: NextRequest) {
                 AND date <  NOW() - INTERVAL '21 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND country = ANY(${countryFilter})
-                AND country IS NOT NULL
-                AND country <> ''
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             ),
             w4 AS (
@@ -147,9 +175,7 @@ export async function GET(request: NextRequest) {
                 AND date <  NOW() - INTERVAL '28 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND country = ANY(${countryFilter})
-                AND country IS NOT NULL
-                AND country <> ''
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             )
             SELECT
@@ -166,12 +192,18 @@ export async function GET(request: NextRequest) {
               w0.clicks AS clicks_now, w0.impressions AS impressions_now,
               w1.clicks AS clicks_prev,
               (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain,
-              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen
+              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen,
+              tk.volume_market,
+              tk.volume_fr,
+              tk.market
             FROM w0
             LEFT JOIN w1 ON w1.query = w0.query
             LEFT JOIN w2 ON w2.query = w0.query
             LEFT JOIN w3 ON w3.query = w0.query
             LEFT JOIN w4 ON w4.query = w0.query
+            LEFT JOIN tracked_keywords tk ON tk.site_id = ${id}
+              AND LOWER(tk.keyword) = LOWER(w0.query)
+              AND tk.is_active = TRUE
             WHERE w1.pos IS NOT NULL
               AND ABS(w1.pos - w0.pos) > 0.5
             ORDER BY (w1.pos - w0.pos) DESC NULLS LAST
@@ -246,12 +278,18 @@ export async function GET(request: NextRequest) {
               w0.clicks AS clicks_now, w0.impressions AS impressions_now,
               w1.clicks AS clicks_prev,
               (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain,
-              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen
+              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen,
+              tk.volume_market,
+              tk.volume_fr,
+              tk.market
             FROM w0
             LEFT JOIN w1 ON w1.query = w0.query
             LEFT JOIN w2 ON w2.query = w0.query
             LEFT JOIN w3 ON w3.query = w0.query
             LEFT JOIN w4 ON w4.query = w0.query
+            LEFT JOIN tracked_keywords tk ON tk.site_id = ${id}
+              AND LOWER(tk.keyword) = LOWER(w0.query)
+              AND tk.is_active = TRUE
             WHERE w1.pos IS NOT NULL
               AND ABS(w1.pos - w0.pos) > 0.5
             ORDER BY (w1.pos - w0.pos) DESC NULLS LAST
@@ -291,9 +329,7 @@ export async function GET(request: NextRequest) {
               AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
               AND page IS NOT NULL
               AND position BETWEEN 1 AND 200
-              AND country = ANY(${countryFilter})
-              AND country IS NOT NULL
-              AND country <> ''
+              AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
             GROUP BY page
             ORDER BY total_clicks DESC
             LIMIT ${limit}

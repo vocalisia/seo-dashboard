@@ -2,6 +2,7 @@ import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { requireApiSession } from "@/lib/api-auth";
 import { isLocalDevDemoMode, LOCAL_DEMO_SITES } from "@/lib/local-dev";
 import { GSC_LAG_DAYS } from "@/lib/gsc-window";
+import { siteCountryCode } from "@/lib/site-country";
 import { NextRequest, NextResponse } from "next/server";
 
 // In-memory cache (per-instance) — TTL 5 minutes. Saves ~200ms / heavy SQL on Neon.
@@ -76,79 +77,99 @@ export async function GET(request: NextRequest) {
   try {
     const sql = getSQL();
 
-    const rows = countryFilter
-      ? await sql`
-          SELECT
-            s.*,
-            COALESCE(a.total_sessions, 0) as total_sessions_30d,
-            COALESCE(a.total_users, 0) as total_users_30d,
-            COALESCE(a.total_pageviews, 0) as total_pageviews_30d,
-            COALESCE(a.total_organic, 0) as organic_sessions_30d,
-            COALESCE(gsc.total_clicks, 0) as gsc_clicks_30d,
-            COALESCE(gsc.total_impressions, 0) as gsc_impressions_30d,
-            COALESCE(gsc.avg_position, 0) as avg_position_30d
-          FROM sites s
-          LEFT JOIN (
-            SELECT site_id,
-              SUM(sessions) as total_sessions,
-              SUM(users) as total_users,
-              SUM(pageviews) as total_pageviews,
-              SUM(organic_sessions) as total_organic
-            FROM analytics_daily
-            WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
-            GROUP BY site_id
-          ) a ON a.site_id = s.id
-          LEFT JOIN (
-            SELECT site_id,
-              SUM(clicks) as total_clicks,
-              SUM(impressions) as total_impressions,
-              AVG(NULLIF(position, 0)) as avg_position
-            FROM search_console_data
-            WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-              AND country = ANY(${countryFilter})
-              AND country IS NOT NULL
-              AND country <> ''
-            GROUP BY site_id
-          ) gsc ON gsc.site_id = s.id
-          WHERE s.is_active = true
-          ORDER BY s.name
-        `
-      : await sql`
-          SELECT
-            s.*,
-            COALESCE(a.total_sessions, 0) as total_sessions_30d,
-            COALESCE(a.total_users, 0) as total_users_30d,
-            COALESCE(a.total_pageviews, 0) as total_pageviews_30d,
-            COALESCE(a.total_organic, 0) as organic_sessions_30d,
-            COALESCE(gsc.total_clicks, 0) as gsc_clicks_30d,
-            COALESCE(gsc.total_impressions, 0) as gsc_impressions_30d,
-            COALESCE(gsc.avg_position, 0) as avg_position_30d
-          FROM sites s
-          LEFT JOIN (
-            SELECT site_id,
-              SUM(sessions) as total_sessions,
-              SUM(users) as total_users,
-              SUM(pageviews) as total_pageviews,
-              SUM(organic_sessions) as total_organic
-            FROM analytics_daily
-            WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
-            GROUP BY site_id
-          ) a ON a.site_id = s.id
-          LEFT JOIN (
-            SELECT site_id,
-              SUM(clicks) as total_clicks,
-              SUM(impressions) as total_impressions,
-              AVG(NULLIF(position, 0)) as avg_position
-            FROM search_console_data
-            WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-              AND (country IS NULL OR country = '')
-            GROUP BY site_id
-          ) gsc ON gsc.site_id = s.id
-          WHERE s.is_active = true
-          ORDER BY s.name
-        `;
+    // Get all active sites first so we can compute per-site TLD country filter.
+    const siteList = (await sql`
+      SELECT id, url FROM sites WHERE is_active = true ORDER BY id
+    `) as Array<{ id: number; url: string }>;
+
+    // Build site_id → country list (primary country + NULL fallback)
+    // If language is explicit, override with the language-mapped country list.
+    const siteCountryMap: Record<number, string[]> = {};
+    for (const s of siteList) {
+      siteCountryMap[s.id] = countryFilter ?? [siteCountryCode(s.url)];
+    }
+
+    // Aggregate analytics_daily (no country dim)
+    const analyticsAgg = (await sql`
+      SELECT site_id,
+        SUM(sessions) as total_sessions,
+        SUM(users) as total_users,
+        SUM(pageviews) as total_pageviews,
+        SUM(organic_sessions) as total_organic
+      FROM analytics_daily
+      WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
+      GROUP BY site_id
+    `) as Array<Record<string, unknown>>;
+    const aMap = new Map<number, Record<string, unknown>>();
+    for (const r of analyticsAgg) aMap.set(Number(r.site_id), r);
+
+    // Aggregate GSC per site using its TLD country (FRA/CHE/BEL/CAN…) — NULL fallback included
+    // to avoid losing rows where GSC sync did not record a country.
+    const gscRows = (await sql`
+      SELECT site_id,
+        SUM(clicks) as total_clicks,
+        SUM(impressions) as total_impressions,
+        AVG(NULLIF(position, 0)) as avg_position
+      FROM search_console_data d
+      WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+        AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+        AND (
+          country IS NULL OR country = '' OR
+          country = ANY(
+            SELECT UNNEST(${
+              // flatten union of all relevant countries; per-site filter applied below
+              Array.from(new Set(Object.values(siteCountryMap).flat()))
+            }::text[])
+          )
+        )
+      GROUP BY site_id
+    `) as Array<Record<string, unknown>>;
+    // The blanket aggregation above includes too much; recompute per-site with exact filter.
+    const gscMap = new Map<number, { total_clicks: number; total_impressions: number; avg_position: number }>();
+    for (const s of siteList) {
+      const wanted = siteCountryMap[s.id];
+      const row = (await sql`
+        SELECT
+          COALESCE(SUM(clicks), 0) as total_clicks,
+          COALESCE(SUM(impressions), 0) as total_impressions,
+          COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
+        FROM search_console_data
+        WHERE site_id = ${s.id}
+          AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+          AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+          AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+      `) as Array<Record<string, unknown>>;
+      const r = row[0] ?? {};
+      gscMap.set(s.id, {
+        total_clicks: Number(r.total_clicks ?? 0),
+        total_impressions: Number(r.total_impressions ?? 0),
+        avg_position: Number(r.avg_position ?? 0),
+      });
+    }
+    // Drop the over-broad blanket result (kept for future debug)
+    void gscRows;
+
+    // Rebuild full site rows with joined data
+    const fullSites = (await sql`
+      SELECT * FROM sites WHERE is_active = true ORDER BY name
+    `) as Array<Record<string, unknown>>;
+
+    const rows = fullSites.map((s) => {
+      const id = Number(s.id);
+      const a = aMap.get(id) ?? {};
+      const g = gscMap.get(id) ?? { total_clicks: 0, total_impressions: 0, avg_position: 0 };
+      return {
+        ...s,
+        total_sessions_30d: Number(a.total_sessions ?? 0),
+        total_users_30d: Number(a.total_users ?? 0),
+        total_pageviews_30d: Number(a.total_pageviews ?? 0),
+        organic_sessions_30d: Number(a.total_organic ?? 0),
+        gsc_clicks_30d: g.total_clicks,
+        gsc_impressions_30d: g.total_impressions,
+        avg_position_30d: g.avg_position,
+        country_filter: siteCountryMap[id] ?? [],
+      };
+    });
 
     setCached(cacheKey, rows);
     return NextResponse.json(rows, { headers: { "X-Cache": "MISS" } });
