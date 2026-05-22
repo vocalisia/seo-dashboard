@@ -1,30 +1,24 @@
-// Unified AI client — uses Mammouth (priority) or Anthropic OAuth fallback
-// Mammouth is OpenAI-compatible: https://api.mammouth.ai/v1
+// Unified AI client — Anthropic-first (Sonnet/Haiku/Opus) with Mammouth OpenAI-compat fallback.
+// Mammouth budget exceeded 2026-05-22 → primary path is now Anthropic native API.
 
 const MAMMOUTH_BASE = "https://api.mammouth.ai/v1";
+const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
+const ANTHROPIC_VERSION = "2023-06-01";
 
-// Model aliases — Mammouth IDs (vérifier via /v1/models)
+// Anthropic-native model IDs (used when ANTHROPIC_API_KEY is set)
+// Mammouth IDs are aliased for fallback path
 export const MODELS = {
-  // Tâches SEO assignées
-  fast:        "gemini-2.5-flash",            // briefs rapides → Gemini Flash
-  smart:       "claude-sonnet-4-6",           // rapports hebdo → Sonnet (meilleur FR)
-  cluster:     "gemini-2.5-flash",            // clustering mots clés
-  search:      "sonar-pro",                    // recherche SERP temps réel → Perplexity
-  creative:    "mistral-large-3",              // rédaction créative → Mistral
+  // SEO task assignments
+  fast:        "claude-haiku-4-5",     // briefs rapides → Haiku (rapide + pas cher)
+  smart:       "claude-sonnet-4-6",    // rapports hebdo → Sonnet (qualité FR)
+  cluster:     "claude-haiku-4-5",     // clustering mots clés
+  search:      "claude-sonnet-4-6",    // ex-Perplexity (budget out) → Sonnet
+  creative:    "claude-sonnet-4-6",    // rédaction créative
 
-  // Tous les modèles dispo
+  // Direct aliases
   haiku:       "claude-haiku-4-5",
   sonnet:      "claude-sonnet-4-6",
   opus:        "claude-opus-4-6",
-  geminiFlash: "gemini-2.5-flash",
-  geminiPro:   "gemini-2.5-pro",
-  gpt4o:       "gpt-4o",
-  gpt5:        "gpt-5",
-  deepseek:    "deepseek-v3.2",
-  mistral:     "mistral-large-3",
-  perplexity:  "sonar-pro",
-  llama:       "llama-4-maverick",
-  grok:        "grok-4-1-fast",
 };
 
 interface Message { role: "user" | "assistant" | "system"; content: string; }
@@ -34,24 +28,33 @@ export async function askAI(
   model: keyof typeof MODELS = "fast",
   maxTokens = 1500
 ): Promise<string> {
-  const apiKey = process.env.MAMMOUTH_API_KEY || process.env.ANTHROPIC_API_KEY;
-  const baseUrl = process.env.MAMMOUTH_API_KEY ? MAMMOUTH_BASE : "https://api.anthropic.com/v1";
+  const modelId = MODELS[model];
+  const anthKey = process.env.ANTHROPIC_API_KEY;
 
-  if (!apiKey) {
-    // Last resort: try local Claude Code OAuth token
-    const localToken = await getLocalOAuthToken();
-    if (!localToken) throw new Error("No AI API key configured");
-    return callOpenAICompat("https://api.anthropic.com/v1", localToken, MODELS[model], messages, maxTokens);
+  // Primary path: Anthropic native
+  if (anthKey) {
+    return callAnthropicNative(anthKey, modelId, messages, maxTokens);
   }
 
-  return callOpenAICompat(baseUrl, apiKey, MODELS[model], messages, maxTokens);
+  // Fallback 1: Mammouth (OpenAI-compat) — budget likely out but kept for resilience
+  const mammKey = process.env.MAMMOUTH_API_KEY;
+  if (mammKey) {
+    return callOpenAICompat(MAMMOUTH_BASE, mammKey, modelId, messages, maxTokens);
+  }
+
+  // Fallback 2: local Claude Code OAuth token (dev only)
+  const localToken = await getLocalOAuthToken();
+  if (localToken) {
+    return callAnthropicNative(localToken, modelId, messages, maxTokens, true);
+  }
+
+  throw new Error("No AI API key configured (ANTHROPIC_API_KEY or MAMMOUTH_API_KEY)");
 }
 
 // Generate image via DALL-E 3 (OpenAI) then persist to Vercel Blob (permanent URL)
 export async function generateImage(prompt: string): Promise<string | null> {
   let tempUrl: string | null = null;
 
-  // Try OpenAI DALL-E 3 first (most reliable for hosted URLs)
   const openaiKey = process.env.OPENAI_API_KEY;
   if (openaiKey) {
     try {
@@ -65,11 +68,11 @@ export async function generateImage(prompt: string): Promise<string | null> {
         tempUrl = data.data?.[0]?.url ?? null;
       }
     } catch {
-      // fall through to Mammouth
+      // fall through
     }
   }
 
-  // Fallback: Mammouth Gemini image via chat completions
+  // Fallback: Mammouth Gemini image (if still configured)
   if (!tempUrl) {
     const mammouthKey = process.env.MAMMOUTH_API_KEY;
     if (mammouthKey) {
@@ -97,7 +100,7 @@ export async function generateImage(prompt: string): Promise<string | null> {
 
   if (!tempUrl) return null;
 
-  // Persist to Vercel Blob for permanent URL (DALL-E URLs expire in ~1h)
+  // Persist to Vercel Blob for permanent URL
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     try {
       const { put } = await import("@vercel/blob");
@@ -116,6 +119,54 @@ export async function generateImage(prompt: string): Promise<string | null> {
   return tempUrl;
 }
 
+// Anthropic native API: /v1/messages with x-api-key header (or Bearer for OAuth)
+async function callAnthropicNative(
+  apiKey: string,
+  model: string,
+  messages: Message[],
+  maxTokens: number,
+  useBearer = false
+): Promise<string> {
+  // Anthropic requires system separated from messages
+  const systemMsg = messages.find(m => m.role === "system")?.content ?? "";
+  const userMsgs = messages.filter(m => m.role !== "system").map(m => ({
+    role: m.role as "user" | "assistant",
+    content: m.content,
+  }));
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "anthropic-version": ANTHROPIC_VERSION,
+  };
+  if (useBearer) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  } else {
+    headers["x-api-key"] = apiKey;
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: maxTokens,
+    messages: userMsgs,
+  };
+  if (systemMsg) body.system = systemMsg;
+
+  const res = await fetch(`${ANTHROPIC_BASE}/messages`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Anthropic API error ${res.status}: ${err.slice(0, 300)}`);
+  }
+
+  const data = await res.json() as { content: { type: string; text: string }[] };
+  return data.content?.find(c => c.type === "text")?.text ?? "";
+}
+
+// Legacy OpenAI-compatible call (used by Mammouth fallback only)
 async function callOpenAICompat(
   baseUrl: string,
   apiKey: string,
@@ -151,7 +202,7 @@ async function getLocalOAuthToken(): Promise<string | null> {
     const token = creds.claudeAiOauth?.accessToken;
     if (!token) return null;
     const expiresAt = creds.claudeAiOauth?.expiresAt ?? 0;
-    if (Date.now() > expiresAt - 300_000) return null; // expired
+    if (Date.now() > expiresAt - 300_000) return null;
     return token;
   } catch {
     return null;
