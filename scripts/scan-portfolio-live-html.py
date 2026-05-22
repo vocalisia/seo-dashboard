@@ -22,6 +22,8 @@ SITES = [
     "https://agents-ia.pro/",
     "https://epargne-suisse.ch/",
     "https://sante-lamal.ch/",
+    "https://job-emploi.ch/",
+    "https://achetervoiture.be/",
     # "https://boursier.ch/",  # DNS not pointing to Vercel — domain inactive
     # "https://factureimpayee.fr/",  # DNS broken — use punycode above
 ]
