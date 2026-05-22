@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
+import { GSC_LAG_DAYS } from "@/lib/gsc-window";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,8 @@ export async function GET(req: NextRequest) {
         CAST(SUM(clicks) AS FLOAT) / NULLIF(SUM(impressions), 0) as ctr
       FROM search_console_data
       WHERE site_id = ${siteIdNum}
-        AND date >= NOW() - INTERVAL '1 day' * ${days}
+        AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+        AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
         AND device IS NOT NULL
         AND device != ''
       GROUP BY device
@@ -44,7 +46,8 @@ export async function GET(req: NextRequest) {
         AVG(position) as position
       FROM search_console_data
       WHERE site_id = ${siteIdNum}
-        AND date >= NOW() - INTERVAL '1 day' * ${days}
+        AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+        AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
         AND device IS NOT NULL
         AND device != ''
       GROUP BY device, query

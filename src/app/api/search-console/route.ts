@@ -1,5 +1,6 @@
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
+import { GSC_LAG_DAYS } from "@/lib/gsc-window";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
@@ -51,10 +52,13 @@ export async function GET(request: NextRequest) {
               (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
             FROM search_console_data d
             WHERE site_id = ${id}
-              AND date >= NOW() - INTERVAL '1 day' * ${days}
+              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
               AND query IS NOT NULL
               AND position BETWEEN 1 AND 200
               AND country = ANY(${countryFilter})
+              AND country IS NOT NULL
+              AND country <> ''
             GROUP BY query
             ORDER BY total_clicks DESC
             LIMIT ${limit}
@@ -68,9 +72,11 @@ export async function GET(request: NextRequest) {
               (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
             FROM search_console_data d
             WHERE site_id = ${id}
-              AND date >= NOW() - INTERVAL '1 day' * ${days}
+              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
               AND query IS NOT NULL
               AND position BETWEEN 1 AND 200
+              AND (country IS NULL OR country = '')
             GROUP BY query
             ORDER BY total_clicks DESC
             LIMIT ${limit}
@@ -90,6 +96,8 @@ export async function GET(request: NextRequest) {
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND country = ANY(${countryFilter})
+                AND country IS NOT NULL
+                AND country <> ''
               GROUP BY query
             ),
             w1 AS (
@@ -101,6 +109,8 @@ export async function GET(request: NextRequest) {
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND country = ANY(${countryFilter})
+                AND country IS NOT NULL
+                AND country <> ''
               GROUP BY query
             ),
             w2 AS (
@@ -112,6 +122,8 @@ export async function GET(request: NextRequest) {
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND country = ANY(${countryFilter})
+                AND country IS NOT NULL
+                AND country <> ''
               GROUP BY query
             ),
             w3 AS (
@@ -123,6 +135,8 @@ export async function GET(request: NextRequest) {
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND country = ANY(${countryFilter})
+                AND country IS NOT NULL
+                AND country <> ''
               GROUP BY query
             ),
             w4 AS (
@@ -134,6 +148,8 @@ export async function GET(request: NextRequest) {
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND country = ANY(${countryFilter})
+                AND country IS NOT NULL
+                AND country <> ''
               GROUP BY query
             )
             SELECT
@@ -169,6 +185,7 @@ export async function GET(request: NextRequest) {
                 AND date >= NOW() - INTERVAL '7 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w1 AS (
@@ -179,6 +196,7 @@ export async function GET(request: NextRequest) {
                 AND date <  NOW() - INTERVAL '7 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w2 AS (
@@ -189,6 +207,7 @@ export async function GET(request: NextRequest) {
                 AND date <  NOW() - INTERVAL '14 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w3 AS (
@@ -199,6 +218,7 @@ export async function GET(request: NextRequest) {
                 AND date <  NOW() - INTERVAL '21 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w4 AS (
@@ -209,6 +229,7 @@ export async function GET(request: NextRequest) {
                 AND date <  NOW() - INTERVAL '28 days'
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '')
               GROUP BY query
             )
             SELECT
@@ -266,10 +287,13 @@ export async function GET(request: NextRequest) {
               COUNT(DISTINCT query) as keyword_count
             FROM search_console_data
             WHERE site_id = ${id}
-              AND date >= NOW() - INTERVAL '1 day' * ${days}
+              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
               AND page IS NOT NULL
               AND position BETWEEN 1 AND 200
               AND country = ANY(${countryFilter})
+              AND country IS NOT NULL
+              AND country <> ''
             GROUP BY page
             ORDER BY total_clicks DESC
             LIMIT ${limit}
@@ -283,9 +307,11 @@ export async function GET(request: NextRequest) {
               COUNT(DISTINCT query) as keyword_count
             FROM search_console_data
             WHERE site_id = ${id}
-              AND date >= NOW() - INTERVAL '1 day' * ${days}
+              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
               AND page IS NOT NULL
               AND position BETWEEN 1 AND 200
+              AND (country IS NULL OR country = '')
             GROUP BY page
             ORDER BY total_clicks DESC
             LIMIT ${limit}

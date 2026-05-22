@@ -1,5 +1,6 @@
 import { getSQL } from "@/lib/db";
 import { requireApiSession } from "@/lib/api-auth";
+import { GSC_LAG_DAYS } from "@/lib/gsc-window";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
@@ -26,7 +27,9 @@ export async function GET(request: NextRequest) {
           AVG(position) as position
         FROM search_console_data d
         JOIN sites s ON s.id = d.site_id
-        WHERE d.date >= NOW() - INTERVAL '1 day' * ${days}
+        WHERE d.date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+          AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+          AND (d.country IS NULL OR d.country = '')
         GROUP BY s.id, s.name, s.url, d.date
         ORDER BY d.date ASC
       `;
@@ -42,7 +45,7 @@ export async function GET(request: NextRequest) {
           direct_sessions, bounce_rate, avg_session_duration
         FROM analytics_daily d
         JOIN sites s ON s.id = d.site_id
-        WHERE d.date >= NOW() - INTERVAL '1 day' * ${days}
+        WHERE d.date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
         ORDER BY d.date ASC
       `;
       return NextResponse.json(rows);
@@ -65,9 +68,11 @@ export async function GET(request: NextRequest) {
           COALESCE(AVG(a.bounce_rate), 0) as bounce_rate
         FROM sites s
         LEFT JOIN search_console_data d ON d.site_id = s.id
-          AND d.date >= NOW() - INTERVAL '1 day' * ${days}
+          AND d.date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+          AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+          AND (d.country IS NULL OR d.country = '')
         LEFT JOIN analytics_daily a ON a.site_id = s.id
-          AND a.date >= NOW() - INTERVAL '1 day' * ${days}
+          AND a.date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
         WHERE s.is_active = true
         GROUP BY s.id, s.name, s.url
         ORDER BY COALESCE(SUM(d.clicks), 0) DESC

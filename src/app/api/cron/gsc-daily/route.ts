@@ -12,10 +12,11 @@ export async function GET(request: Request) {
   if (unauthorized) return unauthorized;
 
   // Delegate to the existing /api/sync endpoint (uses same Google auth + DB writes)
-  // But limit to last 3 days to keep it fast
+  // Pull last 7 days so we cover the GSC 2-3d finalisation lag + a safety buffer.
+  // ON CONFLICT DO UPDATE makes re-ingesting prior dates idempotent.
   try {
     const baseUrl = process.env.NEXTAUTH_URL || process.env.AUTH_URL || "http://localhost:3000";
-    const res = await fetch(`${baseUrl}/api/sync?days=3`, {
+    const res = await fetch(`${baseUrl}/api/sync?days=7`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

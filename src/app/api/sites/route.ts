@@ -1,6 +1,7 @@
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { requireApiSession } from "@/lib/api-auth";
 import { isLocalDevDemoMode, LOCAL_DEMO_SITES } from "@/lib/local-dev";
+import { GSC_LAG_DAYS } from "@/lib/gsc-window";
 import { NextRequest, NextResponse } from "next/server";
 
 // In-memory cache (per-instance) — TTL 5 minutes. Saves ~200ms / heavy SQL on Neon.
@@ -94,7 +95,7 @@ export async function GET(request: NextRequest) {
               SUM(pageviews) as total_pageviews,
               SUM(organic_sessions) as total_organic
             FROM analytics_daily
-            WHERE date >= CURRENT_DATE - ${days}::int
+            WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
             GROUP BY site_id
           ) a ON a.site_id = s.id
           LEFT JOIN (
@@ -103,8 +104,11 @@ export async function GET(request: NextRequest) {
               SUM(impressions) as total_impressions,
               AVG(NULLIF(position, 0)) as avg_position
             FROM search_console_data
-            WHERE date >= CURRENT_DATE - ${days}::int
+            WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
               AND country = ANY(${countryFilter})
+              AND country IS NOT NULL
+              AND country <> ''
             GROUP BY site_id
           ) gsc ON gsc.site_id = s.id
           WHERE s.is_active = true
@@ -128,7 +132,7 @@ export async function GET(request: NextRequest) {
               SUM(pageviews) as total_pageviews,
               SUM(organic_sessions) as total_organic
             FROM analytics_daily
-            WHERE date >= CURRENT_DATE - ${days}::int
+            WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
             GROUP BY site_id
           ) a ON a.site_id = s.id
           LEFT JOIN (
@@ -137,7 +141,9 @@ export async function GET(request: NextRequest) {
               SUM(impressions) as total_impressions,
               AVG(NULLIF(position, 0)) as avg_position
             FROM search_console_data
-            WHERE date >= CURRENT_DATE - ${days}::int
+            WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+              AND (country IS NULL OR country = '')
             GROUP BY site_id
           ) gsc ON gsc.site_id = s.id
           WHERE s.is_active = true

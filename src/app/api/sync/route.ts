@@ -85,12 +85,15 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: 
   // 45j pour couvrir W4 (29-35j) du tableau Gains/semaine
   const startDate = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
-  // Query 1: query + page + date (aggregate, no country breakdown)
+  // Query 1: query + page + date (no country, no device) — country='' device='' rows
+  // Natural key: (site_id, date, COALESCE(query,''), COALESCE(page,''), COALESCE(country,''), COALESCE(device,''))
+  // UNIQUE INDEX uq_scd_natural_key enforces dedup at write time.
   const response = await searchConsole.searchanalytics.query({
     siteUrl,
     requestBody: {
       startDate, endDate,
       dimensions: ["query", "page", "date"],
+      dataState: "final", // exclude fresh/lag dates
       rowLimit: 25000, startRow: 0,
     },
   });
@@ -102,39 +105,55 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: 
     if ((row.position || 0) > 200) continue;
     await sql`
       INSERT INTO search_console_data
-      (site_id, date, query, page, clicks, impressions, ctr, position)
+      (site_id, date, query, page, clicks, impressions, ctr, position, country, device)
       VALUES (${siteId}, ${row.keys?.[2] || ""}, ${row.keys?.[0] || ""}, ${row.keys?.[1] || ""},
-              ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0})
-      ON CONFLICT DO NOTHING
+              ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0},
+              '', '')
+      ON CONFLICT (site_id, date, (COALESCE(query,'')), (COALESCE(page,'')), (COALESCE(country,'')), (COALESCE(device,'')))
+      DO UPDATE SET
+        clicks      = EXCLUDED.clicks,
+        impressions = EXCLUDED.impressions,
+        ctr         = EXCLUDED.ctr,
+        position    = EXCLUDED.position
     `;
     totalInserted++;
   }
 
-  // Query 2: by country (aggregated across dates) — stored with the latest date as reference
+  // Query 2: by country WITH date dimension so each row has its real date
+  // (previously collapsed all dates to endDate → 45× row inflation per query/page/country)
   try {
     const countryResponse = await searchConsole.searchanalytics.query({
       siteUrl,
       requestBody: {
         startDate, endDate,
-        dimensions: ["query", "page", "country"],
+        dimensions: ["query", "page", "country", "date"],
+        dataState: "final",
         rowLimit: 25000, startRow: 0,
       },
     });
     const countryRows = countryResponse.data.rows || [];
     for (const row of countryRows) {
+      if ((row.position || 0) > 200) continue;
       const country = (row.keys?.[2] || "").toUpperCase();
+      const realDate = row.keys?.[3] || endDate;
       await sql`
         INSERT INTO search_console_data
-        (site_id, date, query, page, clicks, impressions, ctr, position, country)
-        VALUES (${siteId}, ${endDate}, ${row.keys?.[0] || ""}, ${row.keys?.[1] || ""},
+        (site_id, date, query, page, clicks, impressions, ctr, position, country, device)
+        VALUES (${siteId}, ${realDate}, ${row.keys?.[0] || ""}, ${row.keys?.[1] || ""},
                 ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0},
-                ${country})
-        ON CONFLICT DO NOTHING
+                ${country}, '')
+        ON CONFLICT (site_id, date, (COALESCE(query,'')), (COALESCE(page,'')), (COALESCE(country,'')), (COALESCE(device,'')))
+        DO UPDATE SET
+          clicks      = EXCLUDED.clicks,
+          impressions = EXCLUDED.impressions,
+          ctr         = EXCLUDED.ctr,
+          position    = EXCLUDED.position
       `;
       totalInserted++;
     }
   } catch (err) {
-    console.error(`Country sync failed for site ${siteId}:`, err);
+    // GSC sometimes refuses 4 dims — fail soft, query 1 already covers date totals
+    console.error(`Country sync failed for site ${siteId}:`, err instanceof Error ? err.message : err);
   }
 
   return totalInserted;
