@@ -176,6 +176,44 @@ async function checkIndexation(
 }
 
 // ---------------------------------------------------------------------------
+// Check C — GA4 tag down (0 sessions yesterday, had traffic 2-8d ago)
+// ---------------------------------------------------------------------------
+
+async function checkGA4TagDown(
+  sql: ReturnType<typeof getSQL>,
+  siteId: number,
+  siteName: string
+): Promise<AlertPayload | null> {
+  const rows = await sql`
+    SELECT
+      s.ga_property_id,
+      COALESCE(SUM(CASE WHEN ad.date = CURRENT_DATE - 1 THEN ad.sessions ELSE 0 END), 0)::int AS sessions_yesterday,
+      COALESCE(SUM(CASE WHEN ad.date >= CURRENT_DATE - 8 AND ad.date < CURRENT_DATE - 1 THEN ad.sessions ELSE 0 END), 0)::int AS sessions_prev_7d
+    FROM sites s
+    LEFT JOIN analytics_daily ad ON ad.site_id = s.id AND ad.date >= CURRENT_DATE - 8
+    WHERE s.id = ${siteId} AND s.is_active = true AND s.ga_property_id IS NOT NULL
+    GROUP BY s.ga_property_id
+  `;
+
+  if (rows.length === 0) return null;
+  const r = rows[0];
+  const yesterday = Number(r.sessions_yesterday);
+  const prev7d = Number(r.sessions_prev_7d);
+
+  if (yesterday === 0 && prev7d > 0) {
+    return {
+      site_id: siteId,
+      alert_type: "ga4_tag_down",
+      severity: "critical",
+      keyword: `ga4:${siteName}`,
+      message: `Balise GA4 hors service — 0 sessions hier vs ${prev7d} sur les 7 jours précédents`,
+      data: { sessions_yesterday: yesterday, sessions_prev_7d: prev7d, property_id: r.ga_property_id },
+    };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Store alerts
 // ---------------------------------------------------------------------------
 
@@ -388,7 +426,9 @@ export async function POST(request: Request) {
         });
       }
 
-      // C) Competitor gains — skipped (no history table yet)
+      // C) GA4 tag down detection
+      const ga4Alert = await checkGA4TagDown(sql, site.id, site.name);
+      if (ga4Alert) allAlerts.push(ga4Alert);
     }
 
     // Persist
@@ -410,6 +450,7 @@ export async function POST(request: Request) {
       by_type: {
         position_drop: allAlerts.filter((a) => a.alert_type === "position_drop").length,
         not_indexed: allAlerts.filter((a) => a.alert_type === "not_indexed").length,
+        ga4_tag_down: allAlerts.filter((a) => a.alert_type === "ga4_tag_down").length,
       },
       ai_summary: aiSummary || null,
       slack: !!process.env.SLACK_WEBHOOK_URL,

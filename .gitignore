@@ -49,3 +49,13 @@ scripts/_cleanup_report_*.json
 scripts/_*_results.json
 scripts/_*_check.json
 logs/
+
+# Audit artifacts (keyword verification runs)
+_kw-verify/
+
+# Junk from bash output mistakes
+/'
+/0
+/500
+/NOW\(\)
+/20\}\]
