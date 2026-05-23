@@ -82,7 +82,18 @@ export async function GET(request: NextRequest) {
                 AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
                 AND (country IS NULL OR country = '' OR country = ${cc})
             ), 0) as impressions,
-            COALESCE((SELECT AVG(NULLIF(position, 0)) FROM search_console_data
+            -- C1: position from search_console_query_data (real Google query-level position).
+            -- Page-level fallback if query-level not yet synced for this site.
+            COALESCE((
+              SELECT COALESCE(
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0),
+                (SELECT AVG(NULLIF(position, 0)) FROM search_console_data
+                  WHERE site_id = ${s.id}
+                    AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                    AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                    AND (country IS NULL OR country = '' OR country = ${cc}))
+              )
+              FROM search_console_query_data
               WHERE site_id = ${s.id}
                 AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
                 AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date

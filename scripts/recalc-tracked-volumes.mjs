@@ -122,21 +122,23 @@ for (const s of sites) {
   console.log(`\n[${s.url}] (${cc}) — ${kws.length} keywords`);
 
   for (const k of kws) {
-    // Pull 28d impressions + BEST (MIN) page position for THIS keyword filtered by country.
-    // Bug B fix: previously used AVG(position) which is impressions-weighted and gets
-    // dragged down by deep pages also ranking for the same query. The relevant rank for
-    // the dashboard is the best-ranking page (MIN), which matches what users see in SERP.
+    // Pull 28d data from search_console_query_data (query-level, no page split).
+    // This returns Google's REAL displayed position — the same number that appears
+    // in the GSC UI. Page-level aggregation (search_console_data) over-counts deep
+    // pages and drags weighted-avg positions to absurd values.
+    // Position formula: impression-weighted average across daily rows (single page
+    // per day in GSC's natural query aggregation, so the weighted avg IS the true pos).
     const r = await sql`
       SELECT
-        COALESCE(SUM(impressions), 0)     AS impressions,
-        COALESCE(SUM(clicks), 0)          AS clicks,
-        MIN(NULLIF(position, 0))          AS position,
-        AVG(NULLIF(position, 0))          AS avg_position
-      FROM search_console_data
+        COALESCE(SUM(impressions), 0)                                              AS impressions,
+        COALESCE(SUM(clicks), 0)                                                   AS clicks,
+        COALESCE(SUM(position * impressions) / NULLIF(SUM(impressions), 0), NULL)  AS position,
+        AVG(NULLIF(position, 0))                                                   AS avg_position
+      FROM search_console_query_data
       WHERE site_id = ${s.id}
         AND LOWER(query) = LOWER(${k.keyword})
         AND date >= CURRENT_DATE - INTERVAL '28 days'
-        AND (country IS NULL OR country = '' OR country = ${cc})
+        AND country = ${cc}
         AND position BETWEEN 1 AND 200
     `;
     const row = r[0] || {};

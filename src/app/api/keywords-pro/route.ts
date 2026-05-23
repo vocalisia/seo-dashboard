@@ -33,31 +33,33 @@ export async function GET(req: NextRequest) {
   const isAll = siteId === "all";
 
   try {
+    // C1: position from search_console_query_data (real query-level Google position).
+    // clicks/impressions identical between tables; position differs (page-level over-aggregates).
     const rows = (isAll ? await sql`
       SELECT
         s.name AS site_name,
-        scd.query AS keyword,
-        SUM(scd.clicks)::int AS clicks,
-        SUM(scd.impressions)::int AS impressions,
-        AVG(scd.position)::float AS position
-      FROM search_console_data scd
-      JOIN sites s ON s.id = scd.site_id
-      WHERE scd.date >= NOW() - INTERVAL '30 days'
-        AND scd.query IS NOT NULL
-      GROUP BY s.name, scd.query
+        scq.query AS keyword,
+        SUM(scq.clicks)::int AS clicks,
+        SUM(scq.impressions)::int AS impressions,
+        (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) AS position
+      FROM search_console_query_data scq
+      JOIN sites s ON s.id = scq.site_id
+      WHERE scq.date >= NOW() - INTERVAL '30 days'
+        AND scq.query IS NOT NULL
+      GROUP BY s.name, scq.query
       HAVING
-        SUM(scd.clicks) >= ${minClicks}
-        AND array_length(string_to_array(scd.query, ' '), 1) >= ${minWords}
-        AND AVG(scd.position) BETWEEN ${posMin} AND ${posMax}
-      ORDER BY SUM(scd.clicks) DESC
+        SUM(scq.clicks) >= ${minClicks}
+        AND array_length(string_to_array(scq.query, ' '), 1) >= ${minWords}
+        AND (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) BETWEEN ${posMin} AND ${posMax}
+      ORDER BY SUM(scq.clicks) DESC
       LIMIT 500
     ` : await sql`
       SELECT
         query AS keyword,
         SUM(clicks)::int AS clicks,
         SUM(impressions)::int AS impressions,
-        AVG(position)::float AS position
-      FROM search_console_data
+        (SUM(impressions * position)::float / NULLIF(SUM(impressions), 0)) AS position
+      FROM search_console_query_data
       WHERE site_id = ${parseInt(siteId, 10)}
         AND date >= NOW() - INTERVAL '30 days'
         AND query IS NOT NULL
@@ -65,7 +67,7 @@ export async function GET(req: NextRequest) {
       HAVING
         SUM(clicks) >= ${minClicks}
         AND array_length(string_to_array(query, ' '), 1) >= ${minWords}
-        AND AVG(position) BETWEEN ${posMin} AND ${posMax}
+        AND (SUM(impressions * position)::float / NULLIF(SUM(impressions), 0)) BETWEEN ${posMin} AND ${posMax}
       ORDER BY SUM(clicks) DESC
       LIMIT 500
     `) as { keyword: string; clicks: number; impressions: number; position: number; site_name?: string }[];

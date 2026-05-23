@@ -105,49 +105,55 @@ export async function GET(request: NextRequest) {
 
     // Aggregate GSC per site using its TLD country (FRA/CHE/BEL/CAN…) — NULL fallback included
     // to avoid losing rows where GSC sync did not record a country.
-    const gscRows = (await sql`
-      SELECT site_id,
-        SUM(clicks) as total_clicks,
-        SUM(impressions) as total_impressions,
-        AVG(NULLIF(position, 0)) as avg_position
-      FROM search_console_data d
-      WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-        AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-        AND (
-          country IS NULL OR country = '' OR
-          country = ANY(
-            SELECT UNNEST(${
-              // flatten union of all relevant countries; per-site filter applied below
-              Array.from(new Set(Object.values(siteCountryMap).flat()))
-            }::text[])
-          )
-        )
-      GROUP BY site_id
-    `) as Array<Record<string, unknown>>;
-    // The blanket aggregation above includes too much; recompute per-site with exact filter.
+    // C1: avg_position read from search_console_query_data (query-level, real Google position).
+    // clicks/impressions stay on search_console_data (page-level totals identical).
     const gscMap = new Map<number, { total_clicks: number; total_impressions: number; avg_position: number }>();
     for (const s of siteList) {
       const wanted = siteCountryMap[s.id];
-      const row = (await sql`
+      const totalsRow = (await sql`
         SELECT
           COALESCE(SUM(clicks), 0) as total_clicks,
-          COALESCE(SUM(impressions), 0) as total_impressions,
-          COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
+          COALESCE(SUM(impressions), 0) as total_impressions
         FROM search_console_data
         WHERE site_id = ${s.id}
           AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
           AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
           AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
       `) as Array<Record<string, unknown>>;
-      const r = row[0] ?? {};
+      // Real Google position: impressions-weighted from query-level table (matches GSC UI)
+      const posRow = (await sql`
+        SELECT
+          COALESCE(
+            SUM(impressions * position)::float / NULLIF(SUM(impressions), 0),
+            0
+          ) as avg_position
+        FROM search_console_query_data
+        WHERE site_id = ${s.id}
+          AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+          AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+          AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+      `) as Array<Record<string, unknown>>;
+      const t = totalsRow[0] ?? {};
+      const p = posRow[0] ?? {};
+      let avg = Number(p.avg_position ?? 0);
+      // Fallback to page-level if query-level not yet synced for this site
+      if (avg === 0) {
+        const fallback = (await sql`
+          SELECT COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
+          FROM search_console_data
+          WHERE site_id = ${s.id}
+            AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+            AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+            AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+        `) as Array<Record<string, unknown>>;
+        avg = Number(fallback[0]?.avg_position ?? 0);
+      }
       gscMap.set(s.id, {
-        total_clicks: Number(r.total_clicks ?? 0),
-        total_impressions: Number(r.total_impressions ?? 0),
-        avg_position: Number(r.avg_position ?? 0),
+        total_clicks: Number(t.total_clicks ?? 0),
+        total_impressions: Number(t.total_impressions ?? 0),
+        avg_position: avg,
       });
     }
-    // Drop the over-broad blanket result (kept for future debug)
-    void gscRows;
 
     // Rebuild full site rows with joined data
     const fullSites = (await sql`
