@@ -49,7 +49,9 @@ export async function GET(request: NextRequest) {
     }
 
     if (type === "queries") {
-      // countryFilter is always set (TLD default), but keep the legacy branch as a safety net.
+      // Bug B fix: expose BOTH best_position (MIN page) and avg_position (legacy weighted)
+      // so the UI can show the real top-ranking page, not the impressions-weighted mean
+      // that gets dragged down by deep pages also ranking for the same query.
       const rows = countryFilter
         ? await sql`
             SELECT q.query,
@@ -57,6 +59,7 @@ export async function GET(request: NextRequest) {
               q.total_impressions,
               q.avg_ctr,
               q.avg_position,
+              q.best_position,
               q.first_seen,
               tk.volume_market,
               tk.volume_fr,
@@ -67,6 +70,7 @@ export async function GET(request: NextRequest) {
                 SUM(impressions) as total_impressions,
                 AVG(ctr) as avg_ctr,
                 AVG(position) as avg_position,
+                MIN(NULLIF(position, 0)) as best_position,
                 (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
               FROM search_console_data d
               WHERE site_id = ${id}
@@ -90,6 +94,7 @@ export async function GET(request: NextRequest) {
               q.total_impressions,
               q.avg_ctr,
               q.avg_position,
+              q.best_position,
               q.first_seen,
               tk.volume_market,
               tk.volume_fr,
@@ -100,6 +105,7 @@ export async function GET(request: NextRequest) {
                 SUM(impressions) as total_impressions,
                 AVG(ctr) as avg_ctr,
                 AVG(position) as avg_position,
+                MIN(NULLIF(position, 0)) as best_position,
                 (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
               FROM search_console_data d
               WHERE site_id = ${id}

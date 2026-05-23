@@ -122,17 +122,22 @@ for (const s of sites) {
   console.log(`\n[${s.url}] (${cc}) — ${kws.length} keywords`);
 
   for (const k of kws) {
-    // Pull 28d impressions + avg position for THIS keyword filtered by country
+    // Pull 28d impressions + BEST (MIN) page position for THIS keyword filtered by country.
+    // Bug B fix: previously used AVG(position) which is impressions-weighted and gets
+    // dragged down by deep pages also ranking for the same query. The relevant rank for
+    // the dashboard is the best-ranking page (MIN), which matches what users see in SERP.
     const r = await sql`
       SELECT
-        COALESCE(SUM(impressions), 0) AS impressions,
-        COALESCE(SUM(clicks), 0) AS clicks,
-        AVG(NULLIF(position, 0)) AS position
+        COALESCE(SUM(impressions), 0)     AS impressions,
+        COALESCE(SUM(clicks), 0)          AS clicks,
+        MIN(NULLIF(position, 0))          AS position,
+        AVG(NULLIF(position, 0))          AS avg_position
       FROM search_console_data
       WHERE site_id = ${s.id}
         AND LOWER(query) = LOWER(${k.keyword})
         AND date >= CURRENT_DATE - INTERVAL '28 days'
         AND (country IS NULL OR country = '' OR country = ${cc})
+        AND position BETWEEN 1 AND 200
     `;
     const row = r[0] || {};
     const impressions28d = Number(row.impressions ?? 0);
