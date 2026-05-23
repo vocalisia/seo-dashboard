@@ -156,6 +156,43 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: 
     console.error(`Country sync failed for site ${siteId}:`, err instanceof Error ? err.message : err);
   }
 
+  // Query 3 (Bug B fix): QUERY-LEVEL — no page split. Returns the position Google
+  // actually displays in the GSC UI (query+country aggregate). Stored in a separate
+  // table so page-level analyses still work but the keyword position is the real one.
+  try {
+    const queryResponse = await searchConsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        startDate, endDate,
+        dimensions: ["query", "country", "date"],
+        dataState: "final",
+        rowLimit: 25000, startRow: 0,
+      },
+    });
+    const queryRows = queryResponse.data.rows || [];
+    for (const row of queryRows) {
+      if ((row.position || 0) > 200) continue;
+      const country = (row.keys?.[1] || "").toUpperCase();
+      const realDate = row.keys?.[2] || endDate;
+      await sql`
+        INSERT INTO search_console_query_data
+        (site_id, date, query, country, device, clicks, impressions, ctr, position)
+        VALUES (${siteId}, ${realDate}, ${row.keys?.[0] || ""}, ${country}, '',
+                ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0})
+        ON CONFLICT (site_id, date, query, country, device)
+        DO UPDATE SET
+          clicks      = EXCLUDED.clicks,
+          impressions = EXCLUDED.impressions,
+          ctr         = EXCLUDED.ctr,
+          position    = EXCLUDED.position,
+          synced_at   = NOW()
+      `;
+      totalInserted++;
+    }
+  } catch (err) {
+    console.error(`Query-level sync failed for site ${siteId}:`, err instanceof Error ? err.message : err);
+  }
+
   return totalInserted;
 }
 

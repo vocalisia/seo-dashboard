@@ -49,17 +49,18 @@ export async function GET(request: NextRequest) {
     }
 
     if (type === "queries") {
-      // Bug B fix: expose BOTH best_position (MIN page) and avg_position (legacy weighted)
-      // so the UI can show the real top-ranking page, not the impressions-weighted mean
-      // that gets dragged down by deep pages also ranking for the same query.
+      // Bug B fix: use query-level position from search_console_query_data (no page split,
+      // matches what GSC UI displays). search_console_data is page-level → SUM(imp×pos)/
+      // SUM(imp) is impressions-weighted across pages and gets dragged down by deep pages.
+      // Fall back to page-level aggregation if query-level row not yet synced.
       const rows = countryFilter
         ? await sql`
             SELECT q.query,
-              q.total_clicks,
-              q.total_impressions,
-              q.avg_ctr,
-              q.avg_position,
-              q.best_position,
+              COALESCE(ql.clicks_q, q.total_clicks)                AS total_clicks,
+              COALESCE(ql.impressions_q, q.total_impressions)      AS total_impressions,
+              COALESCE(ql.ctr_q, q.avg_ctr)                        AS avg_ctr,
+              COALESCE(ql.position_q, q.avg_position)              AS avg_position,
+              q.avg_position                                       AS page_weighted_position,
               q.first_seen,
               tk.volume_market,
               tk.volume_fr,
@@ -70,7 +71,6 @@ export async function GET(request: NextRequest) {
                 SUM(impressions) as total_impressions,
                 AVG(ctr) as avg_ctr,
                 AVG(position) as avg_position,
-                MIN(NULLIF(position, 0)) as best_position,
                 (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
               FROM search_console_data d
               WHERE site_id = ${id}
@@ -83,6 +83,18 @@ export async function GET(request: NextRequest) {
               ORDER BY total_clicks DESC
               LIMIT ${limit}
             ) q
+            LEFT JOIN LATERAL (
+              SELECT SUM(clicks)                                                     AS clicks_q,
+                     SUM(impressions)                                                AS impressions_q,
+                     SUM(impressions * ctr)::float / NULLIF(SUM(impressions), 0)     AS ctr_q,
+                     SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS position_q
+              FROM search_console_query_data
+              WHERE site_id = ${id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND query = q.query
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
+            ) ql ON TRUE
             LEFT JOIN tracked_keywords tk
               ON tk.site_id = ${id}
              AND LOWER(tk.keyword) = LOWER(q.query)
@@ -90,11 +102,11 @@ export async function GET(request: NextRequest) {
           `
         : await sql`
             SELECT q.query,
-              q.total_clicks,
-              q.total_impressions,
-              q.avg_ctr,
-              q.avg_position,
-              q.best_position,
+              COALESCE(ql.clicks_q, q.total_clicks)                AS total_clicks,
+              COALESCE(ql.impressions_q, q.total_impressions)      AS total_impressions,
+              COALESCE(ql.ctr_q, q.avg_ctr)                        AS avg_ctr,
+              COALESCE(ql.position_q, q.avg_position)              AS avg_position,
+              q.avg_position                                       AS page_weighted_position,
               q.first_seen,
               tk.volume_market,
               tk.volume_fr,
@@ -105,7 +117,6 @@ export async function GET(request: NextRequest) {
                 SUM(impressions) as total_impressions,
                 AVG(ctr) as avg_ctr,
                 AVG(position) as avg_position,
-                MIN(NULLIF(position, 0)) as best_position,
                 (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
               FROM search_console_data d
               WHERE site_id = ${id}
@@ -118,6 +129,18 @@ export async function GET(request: NextRequest) {
               ORDER BY total_clicks DESC
               LIMIT ${limit}
             ) q
+            LEFT JOIN LATERAL (
+              SELECT SUM(clicks)                                                     AS clicks_q,
+                     SUM(impressions)                                                AS impressions_q,
+                     SUM(impressions * ctr)::float / NULLIF(SUM(impressions), 0)     AS ctr_q,
+                     SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS position_q
+              FROM search_console_query_data
+              WHERE site_id = ${id}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND query = q.query
+                AND (country IS NULL OR country = '')
+            ) ql ON TRUE
             LEFT JOIN tracked_keywords tk
               ON tk.site_id = ${id}
              AND LOWER(tk.keyword) = LOWER(q.query)
