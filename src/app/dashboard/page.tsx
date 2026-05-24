@@ -632,6 +632,9 @@ export default function DashboardPage() {
           <Link href="/ga4-audit" className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-blue-800/40">
             📊 Audit GA4
           </Link>
+          <Link href="/traffic-by-country" className="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-emerald-800/40">
+            🌍 Traffic by country
+          </Link>
           <button onClick={handleSync} disabled={syncing}
             className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
               syncing
