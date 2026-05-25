@@ -1,9 +1,29 @@
-// Unified AI client — Anthropic-first (Sonnet/Haiku/Opus) with Mammouth OpenAI-compat fallback.
-// Mammouth budget exceeded 2026-05-22 → primary path is Anthropic native API.
+// Unified AI client — Perplexity-first (web-grounded) → Anthropic → Mammouth fallback.
+//
+// Provider priority:
+// 1. Perplexity Sonar (web search built-in, cheaper for SEO competitor research)
+// 2. Anthropic Claude (high quality, no web search)
+// 3. Mammouth OpenAI-compat (legacy, budget OUT since 2026-05-22)
+//
+// To enable Perplexity: set PERPLEXITY_API_KEY in Vercel env.
+// Get key: https://www.perplexity.ai/settings/api (Pro subscription = $5/mo credit).
 
+const PERPLEXITY_BASE = "https://api.perplexity.ai";
 const MAMMOUTH_BASE = "https://api.mammouth.ai/v1";
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION = "2023-06-01";
+
+// Perplexity Sonar models map
+const PERPLEXITY_MODELS: Record<string, string> = {
+  fast: "sonar",              // cheap, fast, web search included
+  smart: "sonar-pro",         // higher quality
+  cluster: "sonar",
+  search: "sonar-pro",        // SEO research → best
+  creative: "sonar-pro",
+  haiku: "sonar",
+  sonnet: "sonar-pro",
+  opus: "sonar-reasoning",
+};
 
 // Anthropic-native model IDs (used when ANTHROPIC_API_KEY is set)
 // Use latest stable snapshot IDs (no `-latest` to avoid silent drift)
@@ -24,13 +44,13 @@ export const MODELS = {
 // Structured error class so API routes can surface the real reason.
 // Keeps backwards compatibility with `instanceof Error` checks.
 export class AIProviderError extends Error {
-  public readonly provider: "anthropic" | "mammouth" | "none";
+  public readonly provider: "perplexity" | "anthropic" | "mammouth" | "none";
   public readonly code: "no_key" | "credit_low" | "rate_limit" | "auth" | "model" | "network" | "unknown";
   public readonly status?: number;
 
   constructor(
     message: string,
-    opts: { provider: "anthropic" | "mammouth" | "none"; code: AIProviderError["code"]; status?: number }
+    opts: { provider: "perplexity" | "anthropic" | "mammouth" | "none"; code: AIProviderError["code"]; status?: number }
   ) {
     super(message);
     this.name = "AIProviderError";
@@ -48,9 +68,24 @@ export async function askAI(
   maxTokens = 1500
 ): Promise<string> {
   const modelId = MODELS[model];
+  const pplxKey = process.env.PERPLEXITY_API_KEY;
   const anthKey = process.env.ANTHROPIC_API_KEY;
 
-  // Primary path: Anthropic native
+  // Primary path: Perplexity Sonar (web-grounded, cheaper for SEO research)
+  if (pplxKey) {
+    try {
+      const pplxModel = PERPLEXITY_MODELS[model] ?? "sonar";
+      return await callPerplexity(pplxKey, pplxModel, messages, maxTokens);
+    } catch (err) {
+      // Fall through on credit/auth issues; surface other errors
+      if (!(err instanceof AIProviderError) || (err.code !== "credit_low" && err.code !== "auth" && err.code !== "no_key")) {
+        throw err;
+      }
+      // Continue to next provider on key/budget issues
+    }
+  }
+
+  // Fallback 1: Anthropic native
   if (anthKey) {
     try {
       return await callAnthropicNative(anthKey, modelId, messages, maxTokens);
@@ -61,8 +96,7 @@ export async function askAI(
         if (mammKey) {
           try {
             return await callOpenAICompat(MAMMOUTH_BASE, mammKey, modelId, messages, maxTokens);
-          } catch (mammErr) {
-            // Surface the original Anthropic credit_low error, not the Mammouth one (Mammouth is also OUT).
+          } catch {
             throw err;
           }
         }
@@ -71,22 +105,70 @@ export async function askAI(
     }
   }
 
-  // Fallback 1: Mammouth (OpenAI-compat) — budget OUT since 2026-05-22, kept only if explicitly set.
+  // Fallback 2: Mammouth (OpenAI-compat) — budget OUT since 2026-05-22, kept only if explicitly set.
   const mammKey = process.env.MAMMOUTH_API_KEY;
   if (mammKey) {
     return callOpenAICompat(MAMMOUTH_BASE, mammKey, modelId, messages, maxTokens);
   }
 
-  // Fallback 2: local Claude Code OAuth token (dev only)
+  // Fallback 3: local Claude Code OAuth token (dev only)
   const localToken = await getLocalOAuthToken();
   if (localToken) {
     return callAnthropicNative(localToken, modelId, messages, maxTokens, true);
   }
 
   throw new AIProviderError(
-    "No AI API key configured. Set ANTHROPIC_API_KEY in Vercel env.",
+    "No AI API key configured. Set PERPLEXITY_API_KEY (preferred) or ANTHROPIC_API_KEY in Vercel env.",
     { provider: "none", code: "no_key" }
   );
+}
+
+// Perplexity Sonar API (OpenAI-compatible chat completions endpoint, web-grounded)
+async function callPerplexity(
+  apiKey: string,
+  model: string,
+  messages: Message[],
+  maxTokens: number
+): Promise<string> {
+  const res = await fetch(`${PERPLEXITY_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      max_tokens: maxTokens,
+      temperature: 0.2,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    let code: AIProviderError["code"] = "unknown";
+    let userMsg = `Perplexity API error ${res.status}`;
+    if (res.status === 401 || res.status === 403) {
+      code = "auth";
+      userMsg = "Perplexity auth failed — vérifie PERPLEXITY_API_KEY";
+    } else if (res.status === 429) {
+      code = "rate_limit";
+      userMsg = "Perplexity rate limit — réessaie dans quelques secondes";
+    } else if (res.status === 400 && /ExceededBudget|budget|insufficient|quota/i.test(err)) {
+      code = "credit_low";
+      userMsg = "Crédit Perplexity épuisé — recharge sur perplexity.ai/settings/api";
+    } else if (res.status === 404 && /model/i.test(err)) {
+      code = "model";
+      userMsg = `Modèle Perplexity inconnu: ${model}`;
+    } else if (res.status >= 500) {
+      code = "network";
+      userMsg = `Perplexity indisponible (${res.status}) — réessaie`;
+    }
+    throw new AIProviderError(userMsg, { provider: "perplexity", code, status: res.status });
+  }
+
+  const data = await res.json() as { choices: { message: { content: string } }[] };
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 // Generate image via DALL-E 3 (OpenAI) then persist to Vercel Blob (permanent URL)

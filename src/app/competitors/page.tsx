@@ -158,13 +158,17 @@ export default function CompetitorsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite }),
       });
-      const d = await res.json() as ResearchResult & { mode?: string; sites_processed?: number; sites_total?: number };
+      const d = await res.json() as ResearchResult & { mode?: string; sites_processed?: number; sites_total?: number; cached?: boolean; stale?: boolean };
       if (d.success) {
         setResult(d);
         if (selectedSite === "all") {
           showNotification("success", `Analyse multi-sites: ${d.sites_processed ?? 0}/${d.sites_total ?? 0} sites traités`);
         } else {
           await fetchCached();
+          const compCount = d.competitors?.length ?? 0;
+          const gapCount = d.gaps?.length ?? 0;
+          const tag = d.cached ? (d.stale ? "cache ancien" : "depuis cache") : "fresh AI";
+          showNotification("success", `Analyse OK — ${compCount} concurrents, ${gapCount} gaps (${tag})`);
         }
       } else {
         setError(d.error ?? "Erreur inconnue");
