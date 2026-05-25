@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAI, AIProviderError } from "@/lib/ai";
 
 interface Site {
   id: number;
@@ -10,65 +10,51 @@ interface Site {
   url: string;
 }
 
-interface CompetitorData {
-  domain: string;
-  description: string;
-  keywords: { keyword: string; volume: number; position: number }[];
+type SQLClient = ReturnType<typeof getSQL>;
+
+interface ResearchResult {
+  competitors: { domain: string; description: string }[];
+  gaps: {
+    keyword: string;
+    volume: number;
+    competitor: string;
+    competitor_position: number;
+    difficulty: string;
+    intent: string;
+  }[];
+  ourKeywordsCount: number;
 }
 
-/**
- * POST /api/competitors
- * body: { site_id: number }
- *
- * Uses Perplexity (via Mammouth) to:
- * 1. Find 5-10 direct competitors
- * 2. Extract their top keywords with estimated volume
- * 3. Compare with our GSC keywords
- * 4. Return gaps (keywords where competitor ranks but we don't, volume >= 1000)
- */
-export async function POST(req: NextRequest) {
-  let body: { site_id?: number };
-  try {
-    body = (await req.json()) as { site_id?: number };
-  } catch {
-    return NextResponse.json({ success: false, error: "Invalid JSON" }, { status: 400 });
+function formatAIError(err: unknown): string {
+  if (err instanceof AIProviderError) {
+    // Human-readable, provider-aware
+    return err.message;
   }
-
-  const { site_id } = body;
-  if (!site_id) {
-    return NextResponse.json({ success: false, error: "site_id required" }, { status: 400 });
+  if (err instanceof Error) {
+    return err.message.slice(0, 300);
   }
+  return "AI research failed — réessaie";
+}
 
-  const sql = getSQL();
+async function runResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
+  const ourKeywords = (await sql`
+    SELECT query,
+           SUM(clicks) AS clicks,
+           SUM(impressions) AS impressions,
+           AVG(position) AS position
+    FROM search_console_data
+    WHERE site_id = ${site.id}
+      AND date >= NOW() - INTERVAL '30 days'
+      AND query IS NOT NULL
+    GROUP BY query
+    ORDER BY SUM(impressions) DESC
+    LIMIT 100
+  `) as { query: string; clicks: string; impressions: string; position: string }[];
 
-  try {
-    // 1. Get site info
-    const sites = (await sql`SELECT * FROM sites WHERE id = ${site_id} LIMIT 1`) as Site[];
-    if (sites.length === 0) {
-      return NextResponse.json({ success: false, error: "Site not found" }, { status: 404 });
-    }
-    const site = sites[0];
+  const ourTopKeywords = ourKeywords.slice(0, 20).map((k) => k.query).join(", ");
+  const ourKeywordSet = new Set(ourKeywords.map((k) => k.query.toLowerCase()));
 
-    // 2. Get our current keywords from GSC
-    const ourKeywords = (await sql`
-      SELECT query,
-             SUM(clicks) AS clicks,
-             SUM(impressions) AS impressions,
-             AVG(position) AS position
-      FROM search_console_data
-      WHERE site_id = ${site_id}
-        AND date >= NOW() - INTERVAL '30 days'
-        AND query IS NOT NULL
-      GROUP BY query
-      ORDER BY SUM(impressions) DESC
-      LIMIT 100
-    `) as { query: string; clicks: string; impressions: string; position: string }[];
-
-    const ourTopKeywords = ourKeywords.slice(0, 20).map((k) => k.query).join(", ");
-    const ourKeywordSet = new Set(ourKeywords.map((k) => k.query.toLowerCase()));
-
-    // 3. Ask Perplexity to find competitors + their keywords
-    const competitorPrompt = `Analyse the website ${site.url} (${site.name}).
+  const competitorPrompt = `Analyse the website ${site.url} (${site.name}).
 
 TASK 1: Find the 5-8 direct competitors of this website. These are sites targeting the same audience and topics.
 
@@ -83,10 +69,7 @@ Identify GAPS = keywords where competitors rank well but "${site.url}" does NOT 
 RESPOND IN STRICT JSON FORMAT ONLY (no markdown, no explanation):
 {
   "competitors": [
-    {
-      "domain": "competitor1.com",
-      "description": "Brief description of what they do"
-    }
+    { "domain": "competitor1.com", "description": "Brief description of what they do" }
   ],
   "keyword_gaps": [
     {
@@ -107,98 +90,167 @@ Rules:
 - Maximum 30 keyword gaps
 - Be accurate with volume estimates`;
 
-    let aiResponse = "";
-    try {
-      aiResponse = await askAI(
-        [{ role: "user", content: competitorPrompt }],
-        "search",
-        3000
-      );
-    } catch (err) {
-      console.error("Perplexity competitor research failed:", err);
-      return NextResponse.json({ success: false, error: "AI research failed — check Mammouth budget" });
-    }
+  const aiResponse = await askAI(
+    [{ role: "user", content: competitorPrompt }],
+    "search",
+    3000
+  );
 
-    // 4. Parse JSON response
-    // Strip markdown code block if present
-    const cleaned = aiResponse
-      .replace(/^```(?:json)?\s*\n?/i, "")
-      .replace(/\n?```\s*$/i, "")
-      .trim();
+  const cleaned = aiResponse
+    .replace(/^```(?:json)?\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
+    .trim();
 
-    let parsed: {
-      competitors: { domain: string; description: string }[];
-      keyword_gaps: {
-        keyword: string;
-        volume: number;
-        competitor: string;
-        competitor_position: number;
-        difficulty: string;
-        intent: string;
-      }[];
-    };
+  let parsed: {
+    competitors: { domain: string; description: string }[];
+    keyword_gaps: ResearchResult["gaps"];
+  };
 
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      console.error("Failed to parse competitor JSON:", cleaned.slice(0, 500));
-      return NextResponse.json({
-        success: false,
-        error: "AI returned invalid JSON — retry",
-        raw: cleaned.slice(0, 1000),
-      });
-    }
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    throw new Error("AI returned invalid JSON");
+  }
 
-    // 5. Filter gaps: volume >= 1000, not in our keywords
-    const filteredGaps = (parsed.keyword_gaps || [])
-      .filter((g) => g.volume >= 1000 && !ourKeywordSet.has(g.keyword.toLowerCase()))
-      .sort((a, b) => b.volume - a.volume)
-      .slice(0, 30);
+  const filteredGaps = (parsed.keyword_gaps || [])
+    .filter((g) => g.volume >= 1000 && !ourKeywordSet.has(g.keyword.toLowerCase()))
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, 30);
 
-    // 6. Store competitors in DB (create table if needed)
-    try {
+  // Persist to DB (best effort)
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS competitor_research (
+        id SERIAL PRIMARY KEY,
+        site_id INTEGER REFERENCES sites(id),
+        competitor_domain VARCHAR(500),
+        competitor_description TEXT,
+        keyword VARCHAR(500),
+        estimated_volume INTEGER,
+        competitor_position DECIMAL(6,2),
+        difficulty VARCHAR(20),
+        intent VARCHAR(30),
+        researched_at TIMESTAMP DEFAULT NOW()
+      )
+    `;
+    await sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`;
+
+    for (const gap of filteredGaps) {
       await sql`
-        CREATE TABLE IF NOT EXISTS competitor_research (
-          id SERIAL PRIMARY KEY,
-          site_id INTEGER REFERENCES sites(id),
-          competitor_domain VARCHAR(500),
-          competitor_description TEXT,
-          keyword VARCHAR(500),
-          estimated_volume INTEGER,
-          competitor_position DECIMAL(6,2),
-          difficulty VARCHAR(20),
-          intent VARCHAR(30),
-          researched_at TIMESTAMP DEFAULT NOW()
-        )
+        INSERT INTO competitor_research
+        (site_id, competitor_domain, keyword, estimated_volume, competitor_position, difficulty, intent)
+        VALUES (${site.id}, ${gap.competitor}, ${gap.keyword}, ${gap.volume},
+                ${gap.competitor_position}, ${gap.difficulty}, ${gap.intent})
       `;
-      // Clear old research for this site
-      await sql`DELETE FROM competitor_research WHERE site_id = ${site_id}`;
-
-      for (const gap of filteredGaps) {
-        await sql`
-          INSERT INTO competitor_research
-          (site_id, competitor_domain, keyword, estimated_volume, competitor_position, difficulty, intent)
-          VALUES (${site_id}, ${gap.competitor}, ${gap.keyword}, ${gap.volume},
-                  ${gap.competitor_position}, ${gap.difficulty}, ${gap.intent})
-        `;
-      }
-    } catch (err) {
-      console.error("Failed to store competitor research:", err);
     }
-
-    return NextResponse.json({
-      success: true,
-      site: site.name,
-      competitors: parsed.competitors || [],
-      gaps: filteredGaps,
-      our_keywords_count: ourKeywords.length,
-      total_gaps: filteredGaps.length,
-      min_volume: 1000,
-    });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("Failed to store competitor research:", err);
+  }
+
+  return {
+    competitors: parsed.competitors || [],
+    gaps: filteredGaps,
+    ourKeywordsCount: ourKeywords.length,
+  };
+}
+
+interface CompetitorData {
+  domain: string;
+  description: string;
+  keywords: { keyword: string; volume: number; position: number }[];
+}
+
+/**
+ * POST /api/competitors
+ * body: { site_id: number | "all" }
+ *
+ * Uses Anthropic Claude (since Mammouth budget OUT 2026-05-22) to:
+ * 1. Find 5-10 direct competitors
+ * 2. Extract their top keywords with estimated volume
+ * 3. Compare with our GSC keywords
+ * 4. Return gaps (keywords where competitor ranks but we don't, volume >= 1000)
+ *
+ * site_id === "all" → loops through all active sites and aggregates.
+ */
+export async function POST(req: NextRequest) {
+  let body: { site_id?: number | "all" };
+  try {
+    body = (await req.json()) as { site_id?: number | "all" };
+  } catch {
+    return NextResponse.json({ success: false, error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { site_id } = body;
+  if (!site_id) {
+    return NextResponse.json({ success: false, error: "site_id required" }, { status: 400 });
+  }
+
+  const sql = getSQL();
+
+  // "all" mode: run sequentially per site, aggregate results
+  if (site_id === "all") {
+    try {
+      const activeSites = (await sql`SELECT id, name, url FROM sites WHERE is_active = true ORDER BY id LIMIT 20`) as Site[];
+      if (activeSites.length === 0) {
+        return NextResponse.json({ success: false, error: "Aucun site actif" });
+      }
+
+      const perSite: { site: string; competitors: number; gaps: number; error?: string }[] = [];
+      const errors: string[] = [];
+
+      for (const s of activeSites) {
+        try {
+          const r = await runResearchForSite(s, sql);
+          perSite.push({ site: s.name, competitors: r.competitors.length, gaps: r.gaps.length });
+        } catch (err) {
+          const msg = formatAIError(err);
+          perSite.push({ site: s.name, competitors: 0, gaps: 0, error: msg });
+          errors.push(`${s.name}: ${msg}`);
+          // Stop on credit_low / no_key (no point retrying for every site)
+          if (err instanceof AIProviderError && (err.code === "credit_low" || err.code === "no_key" || err.code === "auth")) {
+            break;
+          }
+        }
+      }
+
+      return NextResponse.json({
+        success: errors.length < activeSites.length,
+        mode: "all",
+        sites_processed: perSite.length,
+        sites_total: activeSites.length,
+        per_site: perSite,
+        errors: errors.length > 0 ? errors : undefined,
+      });
+    } catch (err) {
+      return NextResponse.json({ success: false, error: formatAIError(err) }, { status: 500 });
+    }
+  }
+
+  try {
+    const sites = (await sql`SELECT * FROM sites WHERE id = ${site_id} LIMIT 1`) as Site[];
+    if (sites.length === 0) {
+      return NextResponse.json({ success: false, error: "Site not found" }, { status: 404 });
+    }
+    const site = sites[0];
+
+    try {
+      const result = await runResearchForSite(site, sql);
+      return NextResponse.json({
+        success: true,
+        site: site.name,
+        competitors: result.competitors,
+        gaps: result.gaps,
+        our_keywords_count: result.ourKeywordsCount,
+        total_gaps: result.gaps.length,
+        min_volume: 1000,
+      });
+    } catch (err) {
+      console.error("AI competitor research failed:", err);
+      return NextResponse.json({ success: false, error: formatAIError(err) });
+    }
+  } catch (err) {
     console.error("Competitor research error:", err);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json({ success: false, error: formatAIError(err) }, { status: 500 });
   }
 }
 

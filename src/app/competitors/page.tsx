@@ -147,7 +147,7 @@ export default function CompetitorsPage() {
   }
 
   async function runResearch() {
-    if (!selectedSite || selectedSite === "all") return;
+    if (!selectedSite) return;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -158,11 +158,14 @@ export default function CompetitorsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite }),
       });
-      const d = await res.json() as ResearchResult;
+      const d = await res.json() as ResearchResult & { mode?: string; sites_processed?: number; sites_total?: number };
       if (d.success) {
         setResult(d);
-        // Refresh cached data after analysis
-        await fetchCached();
+        if (selectedSite === "all") {
+          showNotification("success", `Analyse multi-sites: ${d.sites_processed ?? 0}/${d.sites_total ?? 0} sites traités`);
+        } else {
+          await fetchCached();
+        }
       } else {
         setError(d.error ?? "Erreur inconnue");
       }
@@ -488,15 +491,17 @@ export default function CompetitorsPage() {
               </div>
               <button
                 onClick={runResearch}
-                disabled={loading || !selectedSite || selectedSite === "all"}
+                disabled={loading || !selectedSite}
                 className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                {loading ? "Recherche Perplexity..." : "Lancer l’analyse concurrentielle"}
+                {loading
+                  ? (selectedSite === "all" ? "Analyse multi-sites en cours..." : "Recherche IA en cours...")
+                  : (selectedSite === "all" ? "Lancer l’analyse sur tous les sites" : "Lancer l’analyse concurrentielle")}
               </button>
             </div>
             <p className="text-xs text-gray-500">
-              Perplexity identifie 5-8 concurrents directs &rarr; extrait leurs mots-clés (vol. ≥ 1000/mois) &rarr; compare avec tes données GSC &rarr; affiche les GAPS à cibler.
+              Claude Sonnet identifie 5-8 concurrents directs &rarr; extrait leurs mots-clés (vol. ≥ 1000/mois) &rarr; compare avec tes données GSC &rarr; affiche les GAPS à cibler.
             </p>
           </div>
 

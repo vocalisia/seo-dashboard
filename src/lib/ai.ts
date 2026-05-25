@@ -1,25 +1,44 @@
 // Unified AI client — Anthropic-first (Sonnet/Haiku/Opus) with Mammouth OpenAI-compat fallback.
-// Mammouth budget exceeded 2026-05-22 → primary path is now Anthropic native API.
+// Mammouth budget exceeded 2026-05-22 → primary path is Anthropic native API.
 
 const MAMMOUTH_BASE = "https://api.mammouth.ai/v1";
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION = "2023-06-01";
 
 // Anthropic-native model IDs (used when ANTHROPIC_API_KEY is set)
-// Mammouth IDs are aliased for fallback path
+// Use latest stable snapshot IDs (no `-latest` to avoid silent drift)
 export const MODELS = {
   // SEO task assignments
   fast:        "claude-haiku-4-5",     // briefs rapides → Haiku (rapide + pas cher)
   smart:       "claude-sonnet-4-6",    // rapports hebdo → Sonnet (qualité FR)
   cluster:     "claude-haiku-4-5",     // clustering mots clés
-  search:      "claude-sonnet-4-6",    // ex-Perplexity (budget out) → Sonnet
+  search:      "claude-sonnet-4-6",    // ex-Perplexity → Sonnet (web grounding via tool)
   creative:    "claude-sonnet-4-6",    // rédaction créative
 
-  // Direct aliases
+  // Direct aliases (latest stable snapshots per Anthropic API)
   haiku:       "claude-haiku-4-5",
   sonnet:      "claude-sonnet-4-6",
-  opus:        "claude-opus-4-6",
+  opus:        "claude-opus-4-7",
 };
+
+// Structured error class so API routes can surface the real reason.
+// Keeps backwards compatibility with `instanceof Error` checks.
+export class AIProviderError extends Error {
+  public readonly provider: "anthropic" | "mammouth" | "none";
+  public readonly code: "no_key" | "credit_low" | "rate_limit" | "auth" | "model" | "network" | "unknown";
+  public readonly status?: number;
+
+  constructor(
+    message: string,
+    opts: { provider: "anthropic" | "mammouth" | "none"; code: AIProviderError["code"]; status?: number }
+  ) {
+    super(message);
+    this.name = "AIProviderError";
+    this.provider = opts.provider;
+    this.code = opts.code;
+    this.status = opts.status;
+  }
+}
 
 interface Message { role: "user" | "assistant" | "system"; content: string; }
 
@@ -33,10 +52,26 @@ export async function askAI(
 
   // Primary path: Anthropic native
   if (anthKey) {
-    return callAnthropicNative(anthKey, modelId, messages, maxTokens);
+    try {
+      return await callAnthropicNative(anthKey, modelId, messages, maxTokens);
+    } catch (err) {
+      // Only fall through to Mammouth on credit/quota issues — auth/network errors should surface.
+      if (err instanceof AIProviderError && err.code === "credit_low") {
+        const mammKey = process.env.MAMMOUTH_API_KEY;
+        if (mammKey) {
+          try {
+            return await callOpenAICompat(MAMMOUTH_BASE, mammKey, modelId, messages, maxTokens);
+          } catch (mammErr) {
+            // Surface the original Anthropic credit_low error, not the Mammouth one (Mammouth is also OUT).
+            throw err;
+          }
+        }
+      }
+      throw err;
+    }
   }
 
-  // Fallback 1: Mammouth (OpenAI-compat) — budget likely out but kept for resilience
+  // Fallback 1: Mammouth (OpenAI-compat) — budget OUT since 2026-05-22, kept only if explicitly set.
   const mammKey = process.env.MAMMOUTH_API_KEY;
   if (mammKey) {
     return callOpenAICompat(MAMMOUTH_BASE, mammKey, modelId, messages, maxTokens);
@@ -48,7 +83,10 @@ export async function askAI(
     return callAnthropicNative(localToken, modelId, messages, maxTokens, true);
   }
 
-  throw new Error("No AI API key configured (ANTHROPIC_API_KEY or MAMMOUTH_API_KEY)");
+  throw new AIProviderError(
+    "No AI API key configured. Set ANTHROPIC_API_KEY in Vercel env.",
+    { provider: "none", code: "no_key" }
+  );
 }
 
 // Generate image via DALL-E 3 (OpenAI) then persist to Vercel Blob (permanent URL)
@@ -159,7 +197,27 @@ async function callAnthropicNative(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Anthropic API error ${res.status}: ${err.slice(0, 300)}`);
+    let code: AIProviderError["code"] = "unknown";
+    let userMsg = `Anthropic API error ${res.status}`;
+
+    if (res.status === 401 || res.status === 403) {
+      code = "auth";
+      userMsg = "Anthropic auth failed — vérifie la clé ANTHROPIC_API_KEY";
+    } else if (res.status === 429) {
+      code = "rate_limit";
+      userMsg = "Anthropic rate limit — réessaie dans quelques secondes";
+    } else if (res.status === 400 && /credit balance is too low/i.test(err)) {
+      code = "credit_low";
+      userMsg = "Crédit Anthropic épuisé — recharge sur console.anthropic.com/billing";
+    } else if (res.status === 404 && /model/i.test(err)) {
+      code = "model";
+      userMsg = `Modèle Anthropic inconnu: ${model}`;
+    } else if (res.status >= 500) {
+      code = "network";
+      userMsg = `Anthropic indisponible (${res.status}) — réessaie`;
+    }
+
+    throw new AIProviderError(userMsg, { provider: "anthropic", code, status: res.status });
   }
 
   const data = await res.json() as { content: { type: string; text: string }[] };
@@ -185,7 +243,14 @@ async function callOpenAICompat(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`AI API error ${res.status}: ${err.slice(0, 200)}`);
+    let code: AIProviderError["code"] = "unknown";
+    if (res.status === 401 || res.status === 403) code = "auth";
+    else if (res.status === 429) code = "rate_limit";
+    else if (res.status === 402 || /insufficient|budget|quota|credit/i.test(err)) code = "credit_low";
+    throw new AIProviderError(
+      `Mammouth API error ${res.status}: ${err.slice(0, 200)}`,
+      { provider: "mammouth", code, status: res.status }
+    );
   }
 
   const data = await res.json() as { choices: { message: { content: string } }[] };
