@@ -172,15 +172,63 @@ interface CompetitorData {
  *
  * site_id === "all" → loops through all active sites and aggregates.
  */
+interface CachedResearch {
+  site_id: number;
+  competitor_domain: string;
+  competitor_description: string | null;
+  keyword: string;
+  estimated_volume: number;
+  competitor_position: number;
+  difficulty: string;
+  intent: string;
+  researched_at: string;
+}
+
+async function loadCachedResearch(sql: SQLClient, siteId: number, maxAgeDays = 60): Promise<ResearchResult | null> {
+  const rows = (await sql`
+    SELECT site_id, competitor_domain, competitor_description, keyword,
+           estimated_volume, competitor_position, difficulty, intent, researched_at
+    FROM competitor_research
+    WHERE site_id = ${siteId}
+      AND researched_at >= NOW() - INTERVAL '${maxAgeDays} days'
+    ORDER BY estimated_volume DESC
+  `) as CachedResearch[];
+
+  if (rows.length === 0) return null;
+
+  const competitorMap = new Map<string, { domain: string; description: string }>();
+  for (const r of rows) {
+    if (!competitorMap.has(r.competitor_domain)) {
+      competitorMap.set(r.competitor_domain, {
+        domain: r.competitor_domain,
+        description: r.competitor_description ?? "",
+      });
+    }
+  }
+
+  return {
+    competitors: Array.from(competitorMap.values()),
+    gaps: rows.map((r) => ({
+      keyword: r.keyword,
+      volume: Number(r.estimated_volume) || 0,
+      competitor: r.competitor_domain,
+      competitor_position: Number(r.competitor_position) || 0,
+      difficulty: r.difficulty ?? "",
+      intent: r.intent ?? "",
+    })),
+    ourKeywordsCount: 0,
+  };
+}
+
 export async function POST(req: NextRequest) {
-  let body: { site_id?: number | "all" };
+  let body: { site_id?: number | "all"; force_refresh?: boolean };
   try {
-    body = (await req.json()) as { site_id?: number | "all" };
+    body = (await req.json()) as { site_id?: number | "all"; force_refresh?: boolean };
   } catch {
     return NextResponse.json({ success: false, error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { site_id } = body;
+  const { site_id, force_refresh } = body;
   if (!site_id) {
     return NextResponse.json({ success: false, error: "site_id required" }, { status: 400 });
   }
@@ -199,13 +247,27 @@ export async function POST(req: NextRequest) {
       const errors: string[] = [];
 
       for (const s of activeSites) {
+        // Cache-first: skip AI call if cache exists (and not force_refresh)
+        if (!force_refresh) {
+          const cached = await loadCachedResearch(sql, s.id);
+          if (cached) {
+            perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length });
+            continue;
+          }
+        }
         try {
           const r = await runResearchForSite(s, sql);
           perSite.push({ site: s.name, competitors: r.competitors.length, gaps: r.gaps.length });
         } catch (err) {
           const msg = formatAIError(err);
-          perSite.push({ site: s.name, competitors: 0, gaps: 0, error: msg });
-          errors.push(`${s.name}: ${msg}`);
+          // Try fallback to cache even if older than 60d
+          const cached = await loadCachedResearch(sql, s.id, 365);
+          if (cached) {
+            perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length });
+          } else {
+            perSite.push({ site: s.name, competitors: 0, gaps: 0, error: msg });
+            errors.push(`${s.name}: ${msg}`);
+          }
           // Stop on credit_low / no_key (no point retrying for every site)
           if (err instanceof AIProviderError && (err.code === "credit_low" || err.code === "no_key" || err.code === "auth")) {
             break;
@@ -233,11 +295,29 @@ export async function POST(req: NextRequest) {
     }
     const site = sites[0];
 
+    // Cache-first: serve cached analysis if recent (skip AI call to avoid credit issues)
+    if (!force_refresh) {
+      const cached = await loadCachedResearch(sql, site.id);
+      if (cached) {
+        return NextResponse.json({
+          success: true,
+          site: site.name,
+          cached: true,
+          competitors: cached.competitors,
+          gaps: cached.gaps,
+          our_keywords_count: cached.ourKeywordsCount,
+          total_gaps: cached.gaps.length,
+          min_volume: 1000,
+        });
+      }
+    }
+
     try {
       const result = await runResearchForSite(site, sql);
       return NextResponse.json({
         success: true,
         site: site.name,
+        cached: false,
         competitors: result.competitors,
         gaps: result.gaps,
         our_keywords_count: result.ourKeywordsCount,
@@ -245,6 +325,21 @@ export async function POST(req: NextRequest) {
         min_volume: 1000,
       });
     } catch (err) {
+      // Fallback to older cache (up to 1y) on AI error
+      const cached = await loadCachedResearch(sql, site.id, 365);
+      if (cached) {
+        return NextResponse.json({
+          success: true,
+          site: site.name,
+          cached: true,
+          stale: true,
+          competitors: cached.competitors,
+          gaps: cached.gaps,
+          our_keywords_count: cached.ourKeywordsCount,
+          total_gaps: cached.gaps.length,
+          min_volume: 1000,
+        });
+      }
       console.error("AI competitor research failed:", err);
       return NextResponse.json({ success: false, error: formatAIError(err) });
     }
