@@ -185,12 +185,15 @@ interface CachedResearch {
 }
 
 async function loadCachedResearch(sql: SQLClient, siteId: number, maxAgeDays = 60): Promise<ResearchResult | null> {
+  // INTERVAL value must be embedded — Neon tagged template can't parametrize INTERVAL literals.
+  // maxAgeDays is internally controlled (not user input) so embedding is safe.
+  const safeDays = Math.max(1, Math.floor(maxAgeDays));
   const rows = (await sql`
     SELECT site_id, competitor_domain, competitor_description, keyword,
            estimated_volume, competitor_position, difficulty, intent, researched_at
     FROM competitor_research
     WHERE site_id = ${siteId}
-      AND researched_at >= NOW() - INTERVAL '${maxAgeDays} days'
+      AND researched_at >= NOW() - (${safeDays} || ' days')::interval
     ORDER BY estimated_volume DESC
   `) as CachedResearch[];
 
