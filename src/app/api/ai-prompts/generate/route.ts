@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -43,8 +43,14 @@ export async function POST(req: NextRequest) {
   );
 
   try {
+    const today = new Date().toISOString().slice(0, 10);
     const text = await Promise.race([
-      askAI([{ role: "user", content: systemPrompt }], "creative", 2500),
+      askAICached({
+        cacheKey: `ai-prompts:${topic}:${lang}:${today}`,
+        messages: [{ role: "user", content: systemPrompt }],
+        model: "creative",
+        maxTokens: 2500,
+      }).then((r) => r.reply),
       timeoutPromise,
     ]);
 

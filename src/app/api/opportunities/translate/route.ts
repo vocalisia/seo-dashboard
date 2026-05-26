@@ -3,7 +3,7 @@ export const maxDuration = 30;
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 
 interface TranslatableFields {
@@ -93,7 +93,12 @@ RÉPONSE en JSON strict avec EXACTEMENT les mêmes clés:
   "business_model_how_to_monetize": "..."
 }`;
 
-    const raw = await askAI([{ role: "user", content: prompt }], "fast", 1200);
+    const { reply: raw } = await askAICached({
+      cacheKey: `opp-translate:${oppId}:${target}`,
+      messages: [{ role: "user", content: prompt }],
+      model: "fast",
+      maxTokens: 1200,
+    });
     const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
     const translated = JSON.parse(cleaned) as Partial<TranslatableFields>;
 

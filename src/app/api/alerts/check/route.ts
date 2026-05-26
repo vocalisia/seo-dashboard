@@ -3,7 +3,7 @@ export const maxDuration = 60;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { resolvePublishedArticleLiveUrl } from "@/lib/autopilot-published-url";
 import { requireCronOrUser } from "@/lib/cron-auth";
 
@@ -271,14 +271,18 @@ async function generateAiSummary(alerts: AlertPayload[], sites: SiteRow[]): Prom
   ).join("\n");
 
   try {
-    return await askAI(
-      [
+    const today = new Date().toISOString().slice(0, 10);
+    const signature = `${alerts.length}:${alerts.filter((a) => a.severity === "critical").length}:${alerts.slice(0, 3).map((a) => `${a.site_id}-${a.alert_type}`).join(",")}`;
+    const { reply } = await askAICached({
+      cacheKey: `alerts-summary:${today}:${signature}`,
+      messages: [
         { role: "system", content: "Tu es un Head of SEO. Tu reçois les alertes du jour. Tu rédiges un résumé exécutif ULTRA-COURT (max 6 lignes) en français : 1) gravité globale (rouge/orange/vert), 2) priorité n°1 à régler aujourd'hui, 3) qui appeler. Marqueurs 🔴 🟡 🟢 🚀." },
         { role: "user", content: `Alertes SEO du jour (${alerts.length} au total) :\n${condensed}` },
       ],
-      "smart",
-      400
-    );
+      model: "smart",
+      maxTokens: 400,
+    });
+    return reply;
   } catch {
     return "";
   }

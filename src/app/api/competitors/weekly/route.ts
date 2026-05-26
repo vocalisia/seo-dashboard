@@ -3,7 +3,7 @@ export const maxDuration = 120;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireCronOrUser } from "@/lib/cron-auth";
 
 interface Site {
@@ -70,7 +70,14 @@ RESPOND IN STRICT JSON ONLY:
 {"competitors":[{"domain":"x.com","description":"..."}],"keyword_gaps":[{"keyword":"...","volume":2500,"competitor":"x.com","competitor_position":5,"difficulty":"medium","intent":"informational"}]}
 Rules: volume >= 1000, max 30 gaps, sort by volume DESC.`;
 
-        const raw = await askAI([{ role: "user", content: prompt }], "search", 3000);
+        const today = new Date().toISOString().slice(0, 10);
+        const weekKey = `${today.slice(0, 4)}-W${Math.floor(new Date().getTime() / (7 * 86400000))}`;
+        const { reply: raw } = await askAICached({
+          cacheKey: `competitors-weekly:${site.id}:${weekKey}`,
+          messages: [{ role: "user", content: prompt }],
+          model: "search",
+          maxTokens: 3000,
+        });
         const cleaned = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
         const parsed = JSON.parse(cleaned);
 

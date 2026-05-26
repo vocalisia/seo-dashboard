@@ -1,12 +1,12 @@
 import { getSQL, initDB } from "@/lib/db";
 import { NextResponse } from "next/server";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireCronOrUser } from "@/lib/cron-auth";
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-async function analyzeWithAI(siteName: string, siteUrl: string, data: {
+async function analyzeWithAI(siteId: number, weekStart: string, siteName: string, siteUrl: string, data: {
   topQueries: { query: string; clicks: number; impressions: number; position: number }[];
   gains: { query: string; gain: number; position_now: number }[];
   losses: { query: string; gain: number; position_now: number }[];
@@ -40,7 +40,13 @@ Génère un rapport structuré avec :
 
 Sois très concret et actionnable. Format markdown.`;
 
-  return await askAI([{ role: "user", content: prompt }], "search", 1200);
+  const { reply } = await askAICached({
+    cacheKey: `reports:${siteId}:weekly:${weekStart}`,
+    messages: [{ role: "user", content: prompt }],
+    model: "search",
+    maxTokens: 1200,
+  });
+  return reply;
 }
 
 export async function POST(request: Request) {
@@ -130,7 +136,7 @@ export async function POST(request: Request) {
           }));
 
         const aiReport = await Promise.race([
-          analyzeWithAI(site.name, site.url, {
+          analyzeWithAI(site.id, weekStartStr, site.name, site.url, {
             topQueries: topQueries.map((q: Record<string, unknown>) => ({
               query: String(q.query), clicks: Number(q.clicks), impressions: Number(q.impressions), position: Number(q.position)
             })),

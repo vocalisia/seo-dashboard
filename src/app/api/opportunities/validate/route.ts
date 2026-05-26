@@ -3,7 +3,7 @@ export const maxDuration = 60;
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 
 /**
@@ -89,7 +89,14 @@ SOIS HONNÊTE. Si la niche est trop compétitive, dis NO_GO. Je préfère une an
 
     let aiResponse = "";
     try {
-      aiResponse = await askAI([{ role: "user", content: prompt }], "search", 3000);
+      const today = new Date().toISOString().slice(0, 10);
+      const { reply } = await askAICached({
+        cacheKey: `opp-validate:${opportunity_id}:${today}`,
+        messages: [{ role: "user", content: prompt }],
+        model: "search",
+        maxTokens: 3000,
+      });
+      aiResponse = reply;
     } catch (err) {
       return NextResponse.json(
         { success: false, error: "AI analysis failed: " + (err instanceof Error ? err.message : "unknown") },

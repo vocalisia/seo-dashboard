@@ -2,8 +2,8 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL, initDB } from "@/lib/db";
-import { askAI } from "@/lib/ai";
 import { generateImage } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 import { hasValidCronSecret } from "@/lib/cron-auth";
 import { publishToGitHub, listRepoFiles } from "@/lib/github";
@@ -328,8 +328,9 @@ export async function POST(req: NextRequest) {
     // 3. SERP analysis via Perplexity (in target language)
     let serpAnalysis = "";
     try {
-      serpAnalysis = await askAI(
-        [
+      const serpResult = await askAICached({
+        cacheKey: `autopilot-serp:${site_id}:${language}:${keyword}`,
+        messages: [
           {
             role: "user",
             content: `Analyse the top Google results for the keyword "${keyword}" in ${lang.serpLang}.
@@ -337,9 +338,10 @@ Identify: 1) Main search intent 2) Topics covered by top results 3) Content gaps
 Reply in JSON with keys: intent, topics, gaps, structure, faqs`,
           },
         ],
-        "search",
-        1000
-      );
+        model: "search",
+        maxTokens: 1000,
+      });
+      serpAnalysis = serpResult.reply;
     } catch (err) {
       console.error("SERP analysis failed:", err);
       serpAnalysis = `Keyword: ${keyword}, avg position: ${position}, impressions: ${impressions}`;
@@ -407,8 +409,9 @@ Anchors must contain variations of "${keyword}" or semantically close terms, in 
 
       const langInstruction = `You are a senior SEO expert. Write complete MDX articles in ${lang.articleLang} with mandatory internal linking. Generate ONLY raw MDX content, no markdown code block wrappers.`;
 
-      articleContent = await askAI(
-        [
+      const articleResult = await askAICached({
+        cacheKey: `autopilot-article:${site_id}:${language}:${keyword}:${today}`,
+        messages: [
           {
             role: "system",
             content: langInstruction,
@@ -464,9 +467,10 @@ A: [answer 3 in ${lang.articleLang}]
 REMINDER: integrate 4-6 internal links spread throughout the article with anchors containing "${keyword}" or its variants. WRITE THE ENTIRE ARTICLE IN ${lang.articleLang.toUpperCase()}.`,
           },
         ],
-        "smart",
-        3000
-      );
+        model: "smart",
+        maxTokens: 3000,
+      });
+      articleContent = articleResult.reply;
 
       // Strip markdown code block wrapper if model added one (```mdx ... ```)
       articleContent = articleContent

@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -100,7 +100,8 @@ const LLM_LABELS: Record<LLMKey, string> = {
 async function scanWithTimeout(
   query: string,
   brand: string,
-  model: LLMKey
+  model: LLMKey,
+  siteId: number
 ): Promise<ScanResultItem> {
   const prompt = `Réponds à cette question: "${query}". Liste 5 sites/marques que tu recommandes pour ce sujet. Donne une réponse structurée avec une liste numérotée.`;
 
@@ -110,8 +111,14 @@ async function scanWithTimeout(
 
   let text = "";
   try {
+    const today = new Date().toISOString().slice(0, 10);
     text = await Promise.race([
-      askAI([{ role: "user", content: prompt }], model, 600),
+      askAICached({
+        cacheKey: `aivis:${siteId}:${model}:${query}:${today}`,
+        messages: [{ role: "user", content: prompt }],
+        model,
+        maxTokens: 600,
+      }).then((r) => r.reply),
       timeoutPromise,
     ]);
   } catch {
@@ -157,7 +164,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { brand, queries } = parsed.data;
+  const { brand, queries, siteId } = parsed.data;
 
   const models: LLMKey[] = ["search", "smart", "fast", "creative"];
 
@@ -165,7 +172,7 @@ export async function POST(req: NextRequest) {
     const tasks: Promise<ScanResultItem>[] = [];
     for (const query of queries) {
       for (const model of models) {
-        tasks.push(scanWithTimeout(query, brand, model));
+        tasks.push(scanWithTimeout(query, brand, model, siteId));
       }
     }
 

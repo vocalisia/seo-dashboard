@@ -3,7 +3,8 @@ export const maxDuration = 120;
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL, initDB } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { createHash } from "crypto";
+import { askAICached } from "@/lib/ai-cache";
 import { buildOpportunityCandidates, type OpportunityCandidate, type OpportunityKeywordRow } from "@/lib/opportunity-engine";
 import { buildExternalSignalRows, fetchGoogleSerpSnapshot } from "@/lib/opportunity-sources";
 import { requireApiSession } from "@/lib/api-auth";
@@ -311,7 +312,14 @@ FORMAT JSON STRICT, 5 à 8 niches max :
 
 Tout le contenu texte doit être en FRANÇAIS si les signaux sont francophones, sinon en ANGLAIS.`;
 
-  const aiResponse = await askAI([{ role: "user", content: prompt }], "search", 3200);
+  const today = new Date().toISOString().slice(0, 10);
+  const shortlistHash = createHash("sha256").update(JSON.stringify(shortlist.slice(0, 5))).digest("hex").slice(0, 16);
+  const { reply: aiResponse } = await askAICached({
+    cacheKey: `opp-scan:${today}:${shortlistHash}:${preferredCategories.join(",")}`,
+    messages: [{ role: "user", content: prompt }],
+    model: "search",
+    maxTokens: 3200,
+  });
   const cleaned = cleanJsonBlock(aiResponse);
   if (!cleaned) {
     throw new Error("AI returned an empty response");

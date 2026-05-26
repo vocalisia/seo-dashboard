@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { askAI } from "@/lib/ai";
+import { createHash } from "crypto";
+import { askAICached } from "@/lib/ai-cache";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -41,8 +42,14 @@ export async function POST(req: NextRequest) {
   );
 
   try {
+    const kwHash = createHash("sha256").update(keywords.slice(0, 100).join("|")).digest("hex").slice(0, 16);
     const text = await Promise.race([
-      askAI([{ role: "user", content: prompt }], "fast", 1500),
+      askAICached({
+        cacheKey: `kwpro:${kwHash}`,
+        messages: [{ role: "user", content: prompt }],
+        model: "fast",
+        maxTokens: 1500,
+      }).then((r) => r.reply),
       timeoutPromise,
     ]);
 

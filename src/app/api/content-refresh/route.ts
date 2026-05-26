@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -162,7 +162,12 @@ export async function POST(req: NextRequest) {
     // Ask AI for optimization suggestions
     const prompt = `Analyze this URL ${page_url} for site ${siteName}. It's declining in Google rankings (position went from ${posBefore} to ${posAfter}, clicks dropped from ${clicksBefore} to ${clicksAfter}). Suggest 5 specific content improvements: title tag, meta description, new sections to add, internal links to add, and keyword density improvements. Respond in JSON format.`;
 
-    const raw = await askAI([{ role: "user", content: prompt }], "smart", 2000);
+    const { reply: raw } = await askAICached({
+      cacheKey: `content-refresh:${site_id}:${page_url}`,
+      messages: [{ role: "user", content: prompt }],
+      model: "smart",
+      maxTokens: 2000,
+    });
 
     // Parse AI response — extract JSON even if wrapped in markdown
     let suggestions: unknown;

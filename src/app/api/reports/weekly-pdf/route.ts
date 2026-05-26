@@ -3,7 +3,7 @@ export const maxDuration = 300;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 
 interface SiteWeekStats {
@@ -109,14 +109,18 @@ async function generateExecSummary(stats: SiteWeekStats[]): Promise<string> {
 - Sites en déclin : ${losers.map((l) => `${l.site_name} (${l.clicks_delta_pct}%)`).join(", ") || "aucun"}`;
 
   try {
-    return await askAI(
-      [
+    const today = new Date().toISOString().slice(0, 10);
+    const portfolioSig = `${stats.length}:${Math.round(totalClicks / 100)}:${Math.round(deltaPct)}`;
+    const { reply } = await askAICached({
+      cacheKey: `reports-weekly-pdf:exec-summary:${today}:${portfolioSig}`,
+      messages: [
         { role: "system", content: "Tu es CEO d'une agence SEO. Tu rédiges l'executive summary du rapport hebdo (max 250 mots, français). Structure stricte: 1) verdict global (3 lignes), 2) 3 wins de la semaine, 3) 3 risques à surveiller, 4) priorité semaine prochaine. Ton: factuel, chiffré, actionnable. Marqueurs ✅ ⚠️ 🎯." },
         { role: "user", content: summary },
       ],
-      "smart",
-      800
-    );
+      model: "smart",
+      maxTokens: 800,
+    });
+    return reply;
   } catch (e) {
     return `Erreur IA : ${e instanceof Error ? e.message : "unknown"}`;
   }

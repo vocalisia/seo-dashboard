@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -114,11 +114,13 @@ Rules:
 - priority: high if avg_position < 20 and volume > 1000, medium if < 30, low otherwise
 - content_suggestion should be a specific article idea targeting the cluster`;
 
-    const aiResponse = await askAI(
-      [{ role: "user", content: prompt }],
-      "cluster",
-      4000
-    );
+    const today = new Date().toISOString().slice(0, 10);
+    const { reply: aiResponse } = await askAICached({
+      cacheKey: `keyword-clusters:${siteIdNum}:${today}`,
+      messages: [{ role: "user", content: prompt }],
+      model: "cluster",
+      maxTokens: 4000,
+    });
 
     // 3. Parse AI response
     const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);

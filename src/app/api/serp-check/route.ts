@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -24,7 +24,13 @@ Donne-moi :
 
 Format markdown, sois précis et basé sur les vrais résultats actuels.`;
 
-    const analysis = await askAI([{ role: "user", content: prompt }], "search", 1200);
+    const market = site_url ? new URL(site_url.startsWith("http") ? site_url : `https://${site_url}`).hostname : "global";
+    const { reply: analysis } = await askAICached({
+      cacheKey: `serp-check:${query}:${market}`,
+      messages: [{ role: "user", content: prompt }],
+      model: "search",
+      maxTokens: 1200,
+    });
     return NextResponse.json({ analysis, query });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";

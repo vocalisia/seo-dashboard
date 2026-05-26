@@ -3,7 +3,7 @@ export const maxDuration = 300;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireCronOrUser } from "@/lib/cron-auth";
 
 interface SerpEntry {
@@ -63,6 +63,8 @@ export async function POST(request: Request) {
   const sql = getSQL();
   await ensureSerpTable(sql);
 
+  const today = new Date().toISOString().slice(0, 10);
+
   // 1. Get top KW per site (max 5 KW per site, sites limit 5 to keep cost reasonable)
   const sites = (await sql`
     SELECT s.id, s.name, s.url
@@ -93,14 +95,15 @@ export async function POST(request: Request) {
     for (const kw of topKw) {
       try {
         // Use Perplexity to get current top 10 results
-        const serpText = await askAI(
-          [
+        const { reply: serpText } = await askAICached({
+          cacheKey: `serp-track:${site.id}:${kw.query}:${today}`,
+          messages: [
             { role: "system", content: "Tu es un crawler SERP. Tu retournes UNIQUEMENT les 10 premiers résultats Google pour le mot-clé donné, format strict ligne par ligne : `position. titre — https://url`. Pas de blabla, pas d'intro." },
             { role: "user", content: `Top 10 résultats Google FR actuels pour : "${kw.query}". Retourne 10 lignes au format "1. Titre — URL" — c'est tout.` },
           ],
-          "search",
-          800
-        );
+          model: "search",
+          maxTokens: 800,
+        });
         const top10 = parseSerpResults(serpText);
         if (top10.length === 0) continue;
 
@@ -132,14 +135,16 @@ export async function POST(request: Request) {
         let analysis = "";
         if (newCompetitors.length > 0) {
           try {
-            analysis = await askAI(
-              [
+            const { reply: analysisReply } = await askAICached({
+              cacheKey: `serp-track-analysis:${site.id}:${kw.query}:${today}:${newCompetitors.join(",")}`,
+              messages: [
                 { role: "system", content: "Tu es un Head of SEO. Analyse en max 80 mots français : pourquoi ce concurrent vient de monter dans le top 10 ? quel risque pour nous ? quoi faire cette semaine ?" },
                 { role: "user", content: `Mot-clé : "${kw.query}"\nNotre site : ${site.name} (${ourEntry ? `position ${ourEntry.position}` : "hors top 10"})\nNouveaux concurrents top 10 cette semaine : ${newCompetitors.join(", ")}\nTop 3 actuel : ${top10.slice(0, 3).map((e) => `${e.position}. ${e.domain}`).join(" | ")}` },
               ],
-              "smart",
-              300
-            );
+              model: "smart",
+              maxTokens: 300,
+            });
+            analysis = analysisReply;
           } catch { analysis = ""; }
         }
 

@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -149,8 +149,14 @@ export async function POST(req: NextRequest) {
 
     let aiItems: { keyword: string; title: string; rationale: string }[] = [];
     try {
+      const month = new Date().toISOString().slice(0, 7);
       const text = await Promise.race([
-        askAI([{ role: "user", content: aiPrompt }], "smart", 3000),
+        askAICached({
+          cacheKey: `content-plan:${siteId}:${month}`,
+          messages: [{ role: "user", content: aiPrompt }],
+          model: "smart",
+          maxTokens: 3000,
+        }).then((r) => r.reply),
         timeoutPromise,
       ]);
       const cleaned = text

@@ -3,7 +3,7 @@ export const maxDuration = 90;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 
 interface HealthCheck {
@@ -326,7 +326,13 @@ Réponds en JSON strict:
 {"summary": "...", "actions": ["...", "...", "..."]}`;
 
   try {
-    const raw = await askAI([{ role: "user", content: prompt }], "fast", 600);
+    const today = new Date().toISOString().slice(0, 10);
+    const { reply: raw } = await askAICached({
+      cacheKey: `control-summary:${today}:${failing.length}:${warning.length}`,
+      messages: [{ role: "user", content: prompt }],
+      model: "fast",
+      maxTokens: 600,
+    });
     const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
     const parsed = JSON.parse(cleaned) as { summary?: string; actions?: string[] };
     return {

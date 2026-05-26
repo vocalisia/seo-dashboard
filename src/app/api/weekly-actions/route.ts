@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 
 interface KwOpportunity {
@@ -133,14 +133,18 @@ Génère un PLAN D'ACTION HEBDO ULTRA-CONCRET (max 200 mots, en français) :
 Style: bullet points, marqueurs ✅ 🚀 ⚠️, pas de blabla.`;
 
       try {
-        aiSummary = await askAI(
-          [
+        const today = new Date().toISOString().slice(0, 10);
+        const topKwSignature = opportunities.slice(0, 5).map((o) => `${o.site_id}:${o.query}`).join("|");
+        const { reply } = await askAICached({
+          cacheKey: `weekly-actions:${today}:${topKwSignature}`,
+          messages: [
             { role: "system", content: "Tu es un Head of SEO d'une agence française. Tu pilotes 17 sites et tu donnes des consignes claires à ton équipe chaque lundi matin." },
             { role: "user", content: prompt },
           ],
-          "smart",
-          800
-        );
+          model: "smart",
+          maxTokens: 800,
+        });
+        aiSummary = reply;
       } catch (e) {
         aiSummary = `Erreur IA : ${e instanceof Error ? e.message : "unknown"}`;
       }
