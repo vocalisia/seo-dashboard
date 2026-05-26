@@ -2,19 +2,45 @@ import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-// ── HTTP Basic Auth (1ère couche avant NextAuth) ──────────────────────────
+// Constant-time secret comparison (Edge-runtime safe — no Node crypto module).
+function secretsMatch(expected: string, provided: string | null | undefined): boolean {
+  if (!provided) return false;
+  if (expected.length !== provided.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) {
+    diff |= expected.charCodeAt(i) ^ provided.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+// True ONLY if the request carries a valid CRON_SECRET (via Bearer or x-cron-secret header).
+// Previously this returned true for ANY Bearer token — a critical bypass.
+function hasValidCronSecret(req: NextRequest): boolean {
+  const cronSecret = process.env.CRON_SECRET?.trim();
+  if (!cronSecret) return false;
+
+  const headerSecret = req.headers.get("x-cron-secret")?.trim();
+  if (secretsMatch(cronSecret, headerSecret)) return true;
+
+  const auth = req.headers.get("authorization")?.trim();
+  if (auth?.startsWith("Bearer ")) {
+    const bearer = auth.slice(7).trim();
+    if (secretsMatch(cronSecret, bearer)) return true;
+  }
+
+  return false;
+}
+
+// HTTP Basic Auth (1st layer before NextAuth)
 function checkBasicAuth(req: NextRequest): NextResponse | null {
   const basicUser = process.env.BASIC_AUTH_USER?.trim();
   const basicPass = process.env.BASIC_AUTH_PASS?.trim();
-  if (!basicUser || !basicPass) return null; // désactivé si vars non définies
+  if (!basicUser || !basicPass) return null;
+
+  // Valid CRON_SECRET bypasses Basic Auth (legitimate cron / API access)
+  if (hasValidCronSecret(req)) return null;
 
   const authHeader = req.headers.get("authorization") ?? "";
-  const isBearerCron =
-    authHeader.startsWith("Bearer ") ||
-    req.headers.get("x-cron-secret") != null;
-
-  if (isBearerCron) return null; // cron bypass
-
   if (authHeader.startsWith("Basic ")) {
     const b64 = authHeader.slice(6);
     const decoded = Buffer.from(b64, "base64").toString("utf-8");
@@ -32,27 +58,40 @@ function checkBasicAuth(req: NextRequest): NextResponse | null {
 }
 
 export default auth((req) => {
-  // 1. Basic Auth check
+  // 1. Basic Auth check (also lets valid cron-secret through)
   const basicDenied = checkBasicAuth(req);
   if (basicDenied) return basicDenied;
 
   const { pathname } = req.nextUrl;
 
-  // Public routes — no auth needed
+  // Truly public routes — no session/cron secret needed
   const isPublic =
     pathname.startsWith("/login") ||
-    pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/auth");
+
+  // Routes that require CRON_SECRET (cron jobs, internal automation)
+  const isCronProtected =
+    pathname.startsWith("/api/cron") ||
     pathname.startsWith("/api/alerts/check") ||
     pathname.startsWith("/api/sync") ||
-    pathname.startsWith("/api/cron") ||
     pathname.startsWith("/api/autopilot/run") ||
     pathname.startsWith("/api/weekly-actions");
 
-  const hasBearerToken =
-    req.headers.get("authorization")?.startsWith("Bearer ") ||
-    req.headers.get("x-cron-secret") != null;
+  // Allow if has valid cron secret on cron-protected routes
+  if (isCronProtected && hasValidCronSecret(req)) {
+    return NextResponse.next();
+  }
 
-  if (!req.auth && !isPublic && !hasBearerToken) {
+  // Reject cron-protected routes without valid secret AND without session
+  if (isCronProtected && !req.auth) {
+    return new NextResponse(
+      JSON.stringify({ success: false, error: "Unauthorized: cron secret or user session required" }),
+      { status: 401, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  // Other routes: need session
+  if (!req.auth && !isPublic) {
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("callbackUrl", req.url);
     return NextResponse.redirect(loginUrl);
