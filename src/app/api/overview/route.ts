@@ -22,10 +22,10 @@ export async function GET(request: NextRequest) {
       // Per-site TLD country filter (FRA / CHE / BEL / CAN) + NULL fallback.
       // Build site → country map first, then aggregate per site/date.
       const siteRows = (await sql`SELECT id, url FROM sites WHERE is_active = true`) as Array<{ id: number; url: string }>;
-      const rows: Array<Record<string, unknown>> = [];
-      for (const s of siteRows) {
+      // PERF: parallelize per-site queries (was sequential N+1 = 25× slowdown)
+      const results = await Promise.all(siteRows.map((s) => {
         const cc = siteCountryCode(s.url);
-        const r = (await sql`
+        return sql`
           SELECT
             s.id as site_id, s.name, s.url,
             d.date::text,
@@ -40,9 +40,9 @@ export async function GET(request: NextRequest) {
             AND (d.country IS NULL OR d.country = '' OR d.country = ${cc})
           GROUP BY s.id, s.name, s.url, d.date
           ORDER BY d.date ASC
-        `) as Array<Record<string, unknown>>;
-        rows.push(...r);
-      }
+        `;
+      }));
+      const rows = results.flat() as Array<Record<string, unknown>>;
       return NextResponse.json(rows);
     }
 
@@ -64,10 +64,10 @@ export async function GET(request: NextRequest) {
     // type=summary - totals per site per period (all active sites, even with 0 data)
     if (type === "summary") {
       const siteRows = (await sql`SELECT id, name, url FROM sites WHERE is_active = true`) as Array<{ id: number; name: string; url: string }>;
-      const out: Array<Record<string, unknown>> = [];
-      for (const s of siteRows) {
+      // PERF: parallelize per-site queries (was sequential N+1 = 25× slowdown)
+      const results = await Promise.all(siteRows.map((s) => {
         const cc = siteCountryCode(s.url);
-        const r = (await sql`
+        return (sql`
           SELECT
             ${s.id}::int as site_id, ${s.name}::text as name, ${s.url}::text as url,
             COALESCE((SELECT SUM(clicks) FROM search_console_data
@@ -129,9 +129,9 @@ export async function GET(request: NextRequest) {
               WHERE site_id = ${s.id}
                 AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days})::date
             ), 0) as bounce_rate
-        `) as Array<Record<string, unknown>>;
-        if (r[0]) out.push(r[0]);
-      }
+        `) as Promise<Array<Record<string, unknown>>>;
+      }));
+      const out = results.map((r) => r[0]).filter((r) => r != null);
       out.sort((a, b) => Number(b.clicks ?? 0) - Number(a.clicks ?? 0));
       return NextResponse.json(out);
     }
