@@ -398,7 +398,7 @@ export default function CompetitorsPage() {
             {gapsLoading ? (
               <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-purple-400" /></div>
             ) : gapRows.length === 0 ? (
-              <div className="py-12 text-center text-gray-500 text-sm">
+              <div className="py-12 text-center text-gray-400 text-sm">
                 Aucun gap détecté. Lance d&apos;abord une analyse concurrentielle pour alimenter les données.
               </div>
             ) : (
@@ -504,7 +504,7 @@ export default function CompetitorsPage() {
                   : (selectedSite === "all" ? "Lancer l’analyse sur tous les sites" : "Lancer l’analyse concurrentielle")}
               </button>
             </div>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-gray-400">
               Claude Sonnet identifie 5-8 concurrents directs &rarr; extrait leurs mots-clés (vol. ≥ 1000/mois) &rarr; compare avec tes données GSC &rarr; affiche les GAPS à cibler.
             </p>
           </div>
@@ -518,18 +518,18 @@ export default function CompetitorsPage() {
 
           {/* Summary cards */}
           {gaps.length > 0 && (
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="text-sm text-gray-400">Keyword Gaps trouvés</div>
                 <div className="text-3xl font-bold text-purple-400 mt-1">{gaps.length}</div>
-                <div className="text-xs text-gray-500 mt-1">vol. ≥ 1000/mois chacun</div>
+                <div className="text-xs text-gray-400 mt-1">vol. ≥ 1000/mois chacun</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="text-sm text-gray-400">Volume total ciblable</div>
                 <div className={`text-3xl font-bold mt-1 ${hasVolumes ? "text-blue-400" : "text-gray-600"}`}>
                   {hasVolumes ? totalVolume.toLocaleString() : "N/A"}
                 </div>
-                <div className="text-xs text-gray-500 mt-1">
+                <div className="text-xs text-gray-400 mt-1">
                   {hasVolumes ? "recherches/mois cumulées" : "données non disponibles"}
                 </div>
               </div>
@@ -592,7 +592,7 @@ export default function CompetitorsPage() {
                         <span className="text-purple-400 font-semibold">{c.found_keywords_count}</span> keywords
                       </div>
                       {c.total_volume > 0 && (
-                        <div className="text-xs text-gray-500 mt-0.5">
+                        <div className="text-xs text-gray-400 mt-0.5">
                           {(c.total_volume / 1000).toFixed(1)}K vol/mois
                         </div>
                       )}
@@ -627,7 +627,7 @@ export default function CompetitorsPage() {
                       {c.domain} <ExternalLink className="w-3 h-3" />
                     </a>
                     {c.description && (
-                      <div className="text-xs text-gray-500 mt-1 max-w-[250px] truncate">{c.description}</div>
+                      <div className="text-xs text-gray-400 mt-1 max-w-[250px] truncate">{c.description}</div>
                     )}
                   </div>
                 ))}
@@ -643,12 +643,12 @@ export default function CompetitorsPage() {
                   <h2 className="font-medium text-gray-200 flex items-center gap-2">
                     <TrendingUp className="w-4 h-4 text-green-400" />
                     Keyword Gaps à cibler
-                    <span className="text-gray-500 text-xs">({filteredGaps.length}/{gaps.length})</span>
+                    <span className="text-gray-400 text-xs">({filteredGaps.length}/{gaps.length})</span>
                   </h2>
                 </div>
                 {/* Intent filter chips */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-500">Intent:</span>
+                  <span className="text-xs text-gray-400">Intent:</span>
                   {(["all", "commercial", "informational", "transactional"] as IntentFilter[]).map((val) => (
                     <button
                       key={val}
@@ -754,7 +754,7 @@ export default function CompetitorsPage() {
                   </tbody>
                 </table>
                 {filteredGaps.length === 0 && gaps.length > 0 && (
-                  <div className="py-8 text-center text-gray-500 text-sm">Aucun gap pour ces filtres.</div>
+                  <div className="py-8 text-center text-gray-400 text-sm">Aucun gap pour ces filtres.</div>
                 )}
               </div>
             </div>
@@ -835,7 +835,7 @@ export default function CompetitorsPage() {
           {!loading && gaps.length === 0 && !error && (
             <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center">
               <Target className="w-12 h-12 text-gray-700 mx-auto mb-4" />
-              <div className="text-gray-500 text-sm">
+              <div className="text-gray-400 text-sm">
                 Clique &quot;Lancer l&apos;analyse&quot; pour trouver les keyword gaps de tes concurrents
               </div>
             </div>

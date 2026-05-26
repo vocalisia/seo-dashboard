@@ -88,7 +88,7 @@ function volLabel(vol: number): { label: string; color: string } {
   if (vol >= 10000) return { label: `🔥 ${vol.toLocaleString()}`, color: "text-orange-400" };
   if (vol >= 1000) return { label: `⚡ ${vol.toLocaleString()}`, color: "text-yellow-400" };
   if (vol >= 100) return { label: `📈 ${vol.toLocaleString()}`, color: "text-blue-400" };
-  return { label: `${vol.toLocaleString()}`, color: "text-gray-500" };
+  return { label: `${vol.toLocaleString()}`, color: "text-gray-400" };
 }
 
 // CTR moyen Google par position (basé sur Sistrix 2024)
@@ -659,27 +659,27 @@ export default function DashboardPage() {
       )}
 
       {/* KPIs globaux */}
-      <div className="px-6 py-4 grid grid-cols-3 gap-4">
+      <div className="px-6 py-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><MousePointerClick className="w-3 h-3" /> Clics GSC ({period}j)</div>
           <div className="text-2xl font-bold text-blue-400">{totalClicks.toLocaleString()}</div>
-          <div className="text-xs text-gray-500 mt-1">~{Math.round(totalClicks / parseInt(period))}/jour</div>
+          <div className="text-xs text-gray-400 mt-1">~{Math.round(totalClicks / parseInt(period))}/jour</div>
         </div>
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Search className="w-3 h-3" /> Impressions ({period}j)</div>
           <div className="text-2xl font-bold text-purple-400">{totalImpressions.toLocaleString()}</div>
-          <div className="text-xs text-gray-500 mt-1">~{Math.round(totalImpressions / parseInt(period))}/jour</div>
+          <div className="text-xs text-gray-400 mt-1">~{Math.round(totalImpressions / parseInt(period))}/jour</div>
         </div>
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Globe className="w-3 h-3" /> Position moy. globale</div>
           <div className="text-2xl font-bold text-green-400">{avgPosition > 0 ? avgPosition.toFixed(1) : "—"}</div>
-          <div className="text-xs text-gray-500 mt-1">{activeSites.length} sites avec données</div>
+          <div className="text-xs text-gray-400 mt-1">{activeSites.length} sites avec données</div>
         </div>
       </div>
 
       {/* Sort bar sites */}
       <div className="px-6 pb-2 flex items-center gap-2 flex-wrap">
-        <span className="text-xs text-gray-500">Classer par :</span>
+        <span className="text-xs text-gray-400">Classer par :</span>
         {([
           { col: "clicks" as const, label: "Clics" },
           { col: "impressions" as const, label: "Impressions" },
@@ -777,17 +777,17 @@ export default function DashboardPage() {
                 <div className="flex items-center gap-6 text-sm">
                   <div className="text-right">
                     <div className="text-blue-400 font-bold">{(Number(site.gsc_clicks_30d)||0).toLocaleString()}</div>
-                    <div className="text-xs text-gray-500">clics/{period}j</div>
+                    <div className="text-xs text-gray-400">clics/{period}j</div>
                   </div>
                   <div className="text-right">
                     <div className="text-purple-400 font-bold">{(Number(site.gsc_impressions_30d)||0).toLocaleString()}</div>
-                    <div className="text-xs text-gray-500">impressions</div>
+                    <div className="text-xs text-gray-400">impressions</div>
                   </div>
                   <div className="text-right">
                     <div className={`font-bold ${Number(site.avg_position_30d) > 0 && Number(site.avg_position_30d) <= 10 ? "text-green-400" : Number(site.avg_position_30d) <= 20 ? "text-yellow-400" : "text-gray-400"}`}>
                       {Number(site.avg_position_30d) > 0 ? Number(site.avg_position_30d).toFixed(1) : "—"}
                     </div>
-                    <div className="text-xs text-gray-500">position moy.</div>
+                    <div className="text-xs text-gray-400">position moy.</div>
                   </div>
                 </div>
               </div>
@@ -798,19 +798,19 @@ export default function DashboardPage() {
                   {/* Tabs */}
                   <div className="flex gap-1 px-4 pt-3 pb-0">
                     <button onClick={() => switchTab(site.id, "keywords")}
-                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition ${tab === "keywords" ? "bg-gray-800 text-white" : "text-gray-500 hover:text-gray-300"}`}>
+                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition ${tab === "keywords" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       Mots clés ({period}j)
                     </button>
                     <button onClick={() => switchTab(site.id, "gains")}
-                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "gains" ? "bg-gray-800 text-white" : "text-gray-500 hover:text-gray-300"}`}>
+                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "gains" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <TrendingUp className="w-3 h-3" /> Gains / semaine
                     </button>
                     <button onClick={() => switchTab(site.id, "analytics")}
-                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "analytics" ? "bg-gray-800 text-white" : "text-gray-500 hover:text-gray-300"}`}>
+                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "analytics" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <BarChart3 className="w-3 h-3" /> Analytics GA4
                     </button>
                     <button onClick={() => switchTab(site.id, "device")}
-                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "device" ? "bg-gray-800 text-white" : "text-gray-500 hover:text-gray-300"}`}>
+                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "device" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <Smartphone className="w-3 h-3" /> Devices
                     </button>
                   </div>
@@ -829,11 +829,11 @@ export default function DashboardPage() {
                     <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                   ) : tab === "keywords" ? (
                     kws.length === 0 ? (
-                      <div className="py-6 text-center text-gray-500 text-sm">Aucune donnée GSC pour cette période</div>
+                      <div className="py-6 text-center text-gray-400 text-sm">Aucune donnée GSC pour cette période</div>
                     ) : (
                       <table className="w-full text-sm">
                         <thead>
-                          <tr className="text-gray-500 text-xs bg-gray-800/50">
+                          <tr className="text-gray-400 text-xs bg-gray-800/50">
                             <th className="text-left py-2 px-5">#</th>
                             <th className="text-left py-2 px-3">Mot clé</th>
                             {(["clicks","impressions","ctr","position"] as const).map(col => {
@@ -881,7 +881,7 @@ export default function DashboardPage() {
                                 {kw.first_seen && (Date.now() - new Date(kw.first_seen).getTime()) < 14 * 24 * 60 * 60 * 1000 && (
                                   <span className="text-[9px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded font-bold shrink-0">NEW</span>
                                 )}
-                                <ChevronDown className={`w-3 h-3 text-gray-500 transition-transform ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "rotate-180" : ""}`} />
+                                <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "rotate-180" : ""}`} />
                               </td>
                               <td className="text-right py-2 px-3 text-blue-400 font-semibold">{Number(kw.total_clicks)}</td>
                               <td className="text-right py-2 px-3 text-gray-400">{Number(kw.total_impressions).toLocaleString()}</td>
@@ -897,7 +897,7 @@ export default function DashboardPage() {
                                     const gain = Number(g.gain);
                                     if (gain > 0) return <span className="text-xs text-green-400 flex items-center gap-0.5"><TrendingUp className="w-2.5 h-2.5" />+{gain} vs sem.</span>;
                                     if (gain < 0) return <span className="text-xs text-red-400 flex items-center gap-0.5"><TrendingDown className="w-2.5 h-2.5" />{gain} vs sem.</span>;
-                                    return <span className="text-xs text-gray-500">= vs sem.</span>;
+                                    return <span className="text-xs text-gray-400">= vs sem.</span>;
                                   })()}
                                 </div>
                               </td>
@@ -916,11 +916,11 @@ export default function DashboardPage() {
                     )
                   ) : (
                     gainList.length === 0 ? (
-                      <div className="py-6 text-center text-gray-500 text-sm">Pas encore assez d&apos;historique pour calculer les gains</div>
+                      <div className="py-6 text-center text-gray-400 text-sm">Pas encore assez d&apos;historique pour calculer les gains</div>
                     ) : (
                       <table className="w-full text-sm">
                         <thead>
-                          <tr className="text-gray-500 text-xs bg-gray-800/50">
+                          <tr className="text-gray-400 text-xs bg-gray-800/50">
                             <th className="text-left py-2 px-5">Mot clé</th>
                             <th className="text-right py-2 px-2 cursor-pointer select-none"
                               onClick={() => { if (gainSortCol === "position_now") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("position_now"); setGainSortDir("asc"); } }}>
@@ -1021,7 +1021,7 @@ export default function DashboardPage() {
                                 <td className="text-right py-2 px-2">{renderCell(g.position_w3, g.position_w4)}</td>
                                 <td className="text-right py-2 px-2">{renderCell(g.position_w4, null)}</td>
                                 <td className="text-right py-2 px-3">
-                                  <span className={Number(g.clicks_gain) > 0 ? "text-green-400" : Number(g.clicks_gain) < 0 ? "text-red-400" : "text-gray-500"}>
+                                  <span className={Number(g.clicks_gain) > 0 ? "text-green-400" : Number(g.clicks_gain) < 0 ? "text-red-400" : "text-gray-400"}>
                                     {Number(g.clicks_gain) > 0 ? "+" : ""}{Number(g.clicks_gain)}
                                   </span>
                                 </td>
@@ -1105,7 +1105,7 @@ export default function DashboardPage() {
                     if (kwLoadingIds.has(site.id)) return <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>;
                     if (aData.length === 0) return (
                       <div className="py-8 text-center space-y-2">
-                        <p className="text-gray-500 text-sm">Pas de données GA4 pour ce site</p>
+                        <p className="text-gray-400 text-sm">Pas de données GA4 pour ce site</p>
                         <p className="text-gray-600 text-xs">Ajoute <span className="text-blue-400 font-mono">seo-dashboard@businessdeveloperia.iam.gserviceaccount.com</span> dans GA4 → Admin → Gestion des accès à la propriété</p>
                         <p className="text-gray-600 text-xs">Puis renseigne le Property ID numérique (ex: 123456789) dans la DB pour ce site</p>
                       </div>
@@ -1126,13 +1126,13 @@ export default function DashboardPage() {
                           ].map(k => (
                             <div key={k.label} className="bg-gray-800/60 rounded-lg p-3">
                               <div className={`text-lg font-bold ${k.color}`}>{k.value}</div>
-                              <div className="text-xs text-gray-500">{k.label}</div>
+                              <div className="text-xs text-gray-400">{k.label}</div>
                             </div>
                           ))}
                         </div>
                         {/* Sessions chart */}
                         <div>
-                          <div className="text-xs text-gray-500 mb-2">Sessions par jour</div>
+                          <div className="text-xs text-gray-400 mb-2">Sessions par jour</div>
                           <ResponsiveContainer width="100%" height={160}>
                             <LineChart data={aData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                               <XAxis dataKey="date" tick={{ fill: "#6b7280", fontSize: 10 }} tickLine={false} interval="preserveStartEnd" />
@@ -1144,14 +1144,14 @@ export default function DashboardPage() {
                               <Line type="monotone" dataKey="organic_sessions" stroke="#10b981" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="organic_sessions" />
                             </LineChart>
                           </ResponsiveContainer>
-                          <div className="flex gap-4 text-xs text-gray-500 mt-1">
+                          <div className="flex gap-4 text-xs text-gray-400 mt-1">
                             <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-blue-400 inline-block" /> Sessions totales</span>
                             <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-green-400 inline-block border-dashed border-b" /> Organique</span>
                           </div>
                         </div>
                         {/* Sources */}
                         <div>
-                          <div className="text-xs text-gray-500 mb-2">Sources de trafic ({period}j)</div>
+                          <div className="text-xs text-gray-400 mb-2">Sources de trafic ({period}j)</div>
                           <div className="flex gap-3 flex-wrap">
                             {[
                               { label: "Organique", val: totalOrganic, color: "bg-green-500" },
@@ -1175,7 +1175,7 @@ export default function DashboardPage() {
                     const devRows = deviceData[site.id] || [];
                     const totalClicks = devRows.reduce((s, r) => s + r.clicks, 0);
                     return devRows.length === 0 ? (
-                      <div className="py-6 text-center text-gray-500 text-sm">Aucune donnée device disponible</div>
+                      <div className="py-6 text-center text-gray-400 text-sm">Aucune donnée device disponible</div>
                     ) : (
                       <div className="px-5 py-4 space-y-4">
                         <div className="grid grid-cols-2 gap-3">
@@ -1184,13 +1184,13 @@ export default function DashboardPage() {
                               <div className="flex items-center gap-2 mb-3">
                                 <Smartphone className="w-4 h-4 text-gray-400" />
                                 <span className="text-sm font-semibold capitalize">{r.device.toLowerCase()}</span>
-                                <span className="ml-auto text-xs text-gray-500">{totalClicks > 0 ? Math.round(r.clicks / totalClicks * 100) : 0}%</span>
+                                <span className="ml-auto text-xs text-gray-400">{totalClicks > 0 ? Math.round(r.clicks / totalClicks * 100) : 0}%</span>
                               </div>
                               <div className="grid grid-cols-2 gap-2 text-xs">
-                                <div><div className="text-gray-500">Clics</div><div className="text-blue-400 font-bold text-sm">{r.clicks.toLocaleString()}</div></div>
-                                <div><div className="text-gray-500">Impressions</div><div className="text-purple-400 font-bold text-sm">{r.impressions.toLocaleString()}</div></div>
-                                <div><div className="text-gray-500">CTR</div><div className="text-gray-300">{(r.ctr * 100).toFixed(1)}%</div></div>
-                                <div><div className="text-gray-500">Position</div><div className={r.position <= 10 ? "text-green-400" : "text-yellow-400"}>{r.position.toFixed(1)}</div></div>
+                                <div><div className="text-gray-400">Clics</div><div className="text-blue-400 font-bold text-sm">{r.clicks.toLocaleString()}</div></div>
+                                <div><div className="text-gray-400">Impressions</div><div className="text-purple-400 font-bold text-sm">{r.impressions.toLocaleString()}</div></div>
+                                <div><div className="text-gray-400">CTR</div><div className="text-gray-300">{(r.ctr * 100).toFixed(1)}%</div></div>
+                                <div><div className="text-gray-400">Position</div><div className={r.position <= 10 ? "text-green-400" : "text-yellow-400"}>{r.position.toFixed(1)}</div></div>
                               </div>
                               <div className="mt-3 bg-gray-700 rounded-full h-1.5">
                                 <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${totalClicks > 0 ? Math.round(r.clicks / totalClicks * 100) : 0}%` }} />
@@ -1207,14 +1207,14 @@ export default function DashboardPage() {
                       <div className="flex items-center justify-between mb-3">
                         <div>
                           <span className="text-sm font-semibold text-white">&quot;{activeKw.query}&quot;</span>
-                          <span className="text-xs text-gray-500 ml-2">— évolution position 90 jours</span>
+                          <span className="text-xs text-gray-400 ml-2">— évolution position 90 jours</span>
                         </div>
-                        <button onClick={() => setActiveKw(null)} className="text-gray-500 hover:text-white"><X className="w-4 h-4" /></button>
+                        <button onClick={() => setActiveKw(null)} className="text-gray-400 hover:text-white"><X className="w-4 h-4" /></button>
                       </div>
                       {kwHistLoading ? (
                         <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                       ) : kwHistory.length === 0 ? (
-                        <div className="text-center py-6 text-gray-500 text-sm">Pas assez d&apos;historique pour ce mot clé</div>
+                        <div className="text-center py-6 text-gray-400 text-sm">Pas assez d&apos;historique pour ce mot clé</div>
                       ) : (
                         <ResponsiveContainer width="100%" height={180}>
                           <LineChart data={kwHistory} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -1233,7 +1233,7 @@ export default function DashboardPage() {
                     </div>
                   )}
                   {tab === "keywords" && kws.length > 100 && (
-                    <div className="py-2 text-center text-xs text-gray-500">{kws.length - 100} mots clés supplémentaires — affine le filtre</div>
+                    <div className="py-2 text-center text-xs text-gray-400">{kws.length - 100} mots clés supplémentaires — affine le filtre</div>
                   )}
                 </div>
               )}

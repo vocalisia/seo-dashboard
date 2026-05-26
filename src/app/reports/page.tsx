@@ -69,6 +69,12 @@ export default function ReportsPage() {
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [notification, setNotification] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  function showNotification(type: "success" | "error", text: string) {
+    setNotification({ type, text });
+    setTimeout(() => setNotification(null), 4000);
+  }
 
   const fetchReports = async () => {
     setLoading(true);
@@ -114,19 +120,29 @@ export default function ReportsPage() {
       const res = await fetch("/api/reports/generate", { method: "POST" });
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
-        alert(`Génération échouée (${res.status}) : ${txt.slice(0, 200)}`);
+        showNotification("error", `Génération échouée (${res.status}) : ${txt.slice(0, 200)}`);
       } else {
         setLastGenerated(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
+        showNotification("success", "Rapports générés avec succès");
       }
       await fetchReports();
     } catch (e) {
-      alert(`Erreur génération : ${e instanceof Error ? e.message : "réseau"}`);
+      showNotification("error", `Erreur génération : ${e instanceof Error ? e.message : "réseau"}`);
     }
     setGenerating(false);
   }
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
+      {notification && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg max-w-md text-sm ${
+          notification.type === "success"
+            ? "bg-green-900/80 border border-green-700 text-green-100"
+            : "bg-red-900/80 border border-red-700 text-red-100"
+        }`}>
+          {notification.text}
+        </div>
+      )}
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link href="/dashboard" className="text-gray-400 hover:text-white transition">
@@ -154,7 +170,7 @@ export default function ReportsPage() {
         ) : reports.length === 0 ? (
           <div className="text-center py-20">
             <FileText className="w-12 h-12 text-gray-700 mx-auto mb-4" />
-            <p className="text-gray-500 mb-2">Aucun rapport généré</p>
+            <p className="text-gray-400 mb-2">Aucun rapport généré</p>
             <p className="text-gray-600 text-sm mb-6">Les rapports sont générés automatiquement chaque lundi à 8h.<br />Clique sur &quot;Générer maintenant&quot; pour créer le premier rapport.</p>
             <button type="button" onClick={generateNow} disabled={generating}
               className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-xl text-sm font-medium flex items-center gap-2 mx-auto disabled:opacity-50">
@@ -165,7 +181,7 @@ export default function ReportsPage() {
         ) : (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-gray-400">
                 {reports.length} sites — dernière analyse le {fmtDate(reports[0]?.created_at)}
               </p>
               <div className="flex items-center gap-2">
@@ -189,7 +205,7 @@ export default function ReportsPage() {
                     {expandedIds.has(report.id) ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
                     <div>
                       <span className="font-semibold">{report.site_name}</span>
-                      <span className="text-xs text-gray-500 ml-2">{report.site_url}</span>
+                      <span className="text-xs text-gray-400 ml-2">{report.site_url}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">

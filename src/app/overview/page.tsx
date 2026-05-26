@@ -147,7 +147,7 @@ export default function OverviewPage() {
       {/* ── TOP BANNER ── */}
       <div className="bg-gray-900 border-b border-gray-800 px-6 py-3 overflow-x-auto">
         <div className="flex items-center gap-6 min-w-max">
-          <div className="flex items-center gap-2 text-xs text-gray-500 font-medium mr-2">
+          <div className="flex items-center gap-2 text-xs text-gray-400 font-medium mr-2">
             <Activity className="w-3.5 h-3.5" /> VISITES PAR SITE
           </div>
           {summary.slice(0, 12).map((s, i) => (
@@ -195,7 +195,7 @@ export default function OverviewPage() {
                 <button onClick={() => setSelectedSites(summary.map(s => s.site_id))}
                   className="w-full text-left text-xs text-blue-400 hover:text-blue-300 px-2 py-1">Tout sélectionner</button>
                 <button onClick={() => setSelectedSites([])}
-                  className="w-full text-left text-xs text-gray-500 hover:text-gray-300 px-2 py-1">Tout déselectionner</button>
+                  className="w-full text-left text-xs text-gray-400 hover:text-gray-300 px-2 py-1">Tout déselectionner</button>
                 <div className="border-t border-gray-700 pt-1">
                   {summary.map((s, i) => (
                     <label key={s.site_id} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-800 rounded cursor-pointer text-xs">
@@ -237,7 +237,7 @@ export default function OverviewPage() {
                 <div className="text-2xl font-bold" style={{ color: m.color }}>
                   {m.isAvg ? (m.total > 0 ? m.total.toFixed(1) : "—") : m.total.toLocaleString()}
                 </div>
-                <div className="text-xs text-gray-500 mt-1">~{m.isAvg ? "moy." : Math.round(m.total / parseInt(period))}/jour</div>
+                <div className="text-xs text-gray-400 mt-1">~{m.isAvg ? "moy." : Math.round(m.total / parseInt(period))}/jour</div>
               </button>
             ))}
           </div>
@@ -247,11 +247,11 @@ export default function OverviewPage() {
             <div className="flex items-center justify-between mb-4">
               <div className="text-sm font-semibold text-gray-300">
                 Évolution — {panelMeta.find(m => m.key === activePanel)?.label} · {periodLabel[period]}
-                <span className="text-xs text-gray-500 ml-2">(clic sur les KPIs pour changer)</span>
+                <span className="text-xs text-gray-400 ml-2">(clic sur les KPIs pour changer)</span>
               </div>
             </div>
             {timeSeriesData.length === 0 ? (
-              <div className="py-10 text-center text-gray-500 text-sm">Pas de données pour la période sélectionnée</div>
+              <div className="py-10 text-center text-gray-400 text-sm">Pas de données pour la période sélectionnée</div>
             ) : (
               <ResponsiveContainer width="100%" height={240}>
                 <LineChart data={timeSeriesData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
@@ -305,7 +305,7 @@ export default function OverviewPage() {
               <div className="text-sm font-semibold text-gray-300 mb-3">Tous les sites — détail</div>
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-gray-500 border-b border-gray-800">
+                  <tr className="text-gray-400 border-b border-gray-800">
                     <th className="text-left py-1.5 pr-3">Site</th>
                     {([
                       { col: "clicks" as const, label: "Clics" },
@@ -361,13 +361,13 @@ export default function OverviewPage() {
                     <span className="text-xs font-semibold truncate">{s.name}</span>
                   </div>
                   <div className="space-y-1 text-xs">
-                    <div className="flex justify-between"><span className="text-gray-500">Clics</span><span className="text-blue-400 font-bold">{Number(s.clicks||0).toLocaleString()}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-500">Impressions</span><span className="text-purple-400">{Number(s.impressions||0).toLocaleString()}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-500">Sessions</span><span className="text-green-400">{s.sessions > 0 ? Number(s.sessions).toLocaleString() : "—"}</span></div>
-                    <div className="flex justify-between"><span className="text-gray-500">Position</span>
+                    <div className="flex justify-between"><span className="text-gray-400">Clics</span><span className="text-blue-400 font-bold">{Number(s.clicks||0).toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">Impressions</span><span className="text-purple-400">{Number(s.impressions||0).toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">Sessions</span><span className="text-green-400">{s.sessions > 0 ? Number(s.sessions).toLocaleString() : "—"}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">Position</span>
                       <span className={`font-bold ${pos <= 10 ? "text-green-400" : pos <= 20 ? "text-yellow-400" : "text-red-400"}`}>{pos > 0 ? pos.toFixed(1) : "—"}</span>
                     </div>
-                    {dur > 0 && <div className="flex justify-between"><span className="text-gray-500">Durée</span><span className="text-gray-300">{Math.floor(dur/60)}m{Math.floor(dur%60)}s</span></div>}
+                    {dur > 0 && <div className="flex justify-between"><span className="text-gray-400">Durée</span><span className="text-gray-300">{Math.floor(dur/60)}m{Math.floor(dur%60)}s</span></div>}
                   </div>
                 </div>
               );
