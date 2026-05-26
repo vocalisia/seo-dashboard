@@ -19,7 +19,7 @@ export default function CTRAnomalyPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/api/sites").then(r => r.json()).then((data: unknown) => {
+    fetch("/api/sites").then(r => r.json()).catch(() => null).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
         if (data.length > 0) setSiteId((data[0] as Site).id);
@@ -34,8 +34,9 @@ export default function CTRAnomalyPage() {
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) setRows(data as Anomaly[]);
-        setLoading(false);
-      });
+      })
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
   }, [siteId]);
 
   const totalMissed = rows.reduce((s, r) => s + r.missed_clicks, 0);

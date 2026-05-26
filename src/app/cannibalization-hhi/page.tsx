@@ -32,7 +32,7 @@ export default function CannibalizationHHIPage() {
   const [groupBySite, setGroupBySite] = useState(false);
 
   useEffect(() => {
-    fetch("/api/sites").then(r => r.json()).then((data: unknown) => {
+    fetch("/api/sites").then(r => r.json()).catch(() => null).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
         if (data.length > 0) setSiteId("all");
@@ -48,8 +48,9 @@ export default function CannibalizationHHIPage() {
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) setRows(data as CannibRow[]);
-        setLoading(false);
-      });
+      })
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
   }, [siteId]);
 
   const totalLoss = rows.reduce((s, r) => s + r.estimated_loss, 0);

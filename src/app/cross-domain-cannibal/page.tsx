@@ -26,8 +26,9 @@ export default function CrossDomainCannibalPage() {
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) setRows(data as Conflict[]);
-        setLoading(false);
-      });
+      })
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
   }, []);
 
   const totalImp = rows.reduce((s, r) => s + r.total_impressions, 0);

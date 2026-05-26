@@ -23,7 +23,7 @@ export default function ContentDecayPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch("/api/sites").then(r => r.json()).then((data: unknown) => {
+    fetch("/api/sites").then(r => r.json()).catch(() => null).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
         if (data.length > 0) setSiteId("all");
@@ -39,8 +39,9 @@ export default function ContentDecayPage() {
       .then(r => r.json())
       .then((data: unknown) => {
         if (Array.isArray(data)) setRows(data as DecayRow[]);
-        setLoading(false);
-      });
+      })
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
   }, [siteId]);
 
   const crit = rows.filter(r => r.severity === "CRIT").length;

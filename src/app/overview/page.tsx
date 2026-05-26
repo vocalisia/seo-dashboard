@@ -46,14 +46,16 @@ export default function OverviewPage() {
 
   async function loadAll() {
     setLoading(true);
-    const [s, g, a] = await Promise.all([
-      fetch(`/api/overview?type=summary&days=${period}`).then(r => r.json()),
-      fetch(`/api/overview?type=gsc&days=${period}`).then(r => r.json()),
-      fetch(`/api/overview?type=ga4&days=${period}`).then(r => r.json()),
-    ]);
-    if (Array.isArray(s)) { setSummary(s); if (selectedSites.length === 0) setSelectedSites(s.map((x: SiteSummary) => x.site_id)); }
-    if (Array.isArray(g)) setGscSeries(g);
-    if (Array.isArray(a)) setGa4Series(a);
+    try {
+      const [s, g, a] = await Promise.all([
+        fetch(`/api/overview?type=summary&days=${period}`).then(r => r.json()).catch(() => null),
+        fetch(`/api/overview?type=gsc&days=${period}`).then(r => r.json()).catch(() => null),
+        fetch(`/api/overview?type=ga4&days=${period}`).then(r => r.json()).catch(() => null),
+      ]);
+      if (Array.isArray(s)) { setSummary(s); if (selectedSites.length === 0) setSelectedSites(s.map((x: SiteSummary) => x.site_id)); }
+      if (Array.isArray(g)) setGscSeries(g);
+      if (Array.isArray(a)) setGa4Series(a);
+    } catch { /* All fetches errored — keep prior data */ }
     setLoading(false);
   }
 
