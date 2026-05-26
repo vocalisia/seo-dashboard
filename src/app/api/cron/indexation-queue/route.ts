@@ -20,6 +20,7 @@ import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { JWT } from "google-auth-library";
+import { logError } from "@/lib/logger";
 
 const MAX_PER_RUN = 180; // Reserve buffer under 200/day default quota
 const RESUBMIT_DAYS = 30; // Don't resubmit same URL within this window
@@ -231,7 +232,9 @@ export async function GET(request: Request) {
       timestamp: startedAt.toISOString(),
     });
   } catch (err) {
+    logError("cron.indexationQueue", err);
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 });
   }
 }
+

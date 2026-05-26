@@ -22,6 +22,7 @@ export const maxDuration = 120;
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { logError } from "@/lib/logger";
 
 const DRIFT_THRESHOLD = 5; // positions worse to fire alert
 const COMPARE_WINDOW_DAYS = 7;
@@ -159,7 +160,7 @@ async function sendDigestEmail(alerts: DriftAlert[]): Promise<boolean> {
     });
     return res.ok;
   } catch (err) {
-    console.error("[position-drift-watch] resend failed:", err);
+    logError("cron.positionDriftWatch.resend", err, { alertCount: alerts.length });
     return false;
   }
 }

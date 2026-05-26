@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { withSentryConfig } from "@sentry/nextjs";
 
 // Si un package-lock.json existe plus haut (ex. C:\Users\cohen.000), Next 15+ peut
 // inférer une mauvaise racine → Turbopack sert des chunks incorrects (page blanche).
@@ -47,4 +48,17 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withSentryConfig(nextConfig, {
+  // Only run Sentry's webpack plugin in CI / when org+project+token are present
+  silent: !process.env.CI,
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  widenClientFileUpload: true,
+  disableLogger: true,
+  automaticVercelMonitors: false,
+  // Skip source map upload when DSN missing (local dev / preview without Sentry)
+  sourcemaps: {
+    disable: !process.env.SENTRY_DSN,
+  },
+});

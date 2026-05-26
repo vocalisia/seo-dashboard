@@ -1,3 +1,5 @@
+import { logError } from "./logger";
+
 // Unified AI client — Perplexity-first (web-grounded) → Anthropic → graceful fail.
 // Mammouth removed 2026-05-26 (budget OUT since 2026-05-22).
 //
@@ -200,7 +202,7 @@ export async function generateImage(prompt: string): Promise<string | null> {
         return permanentUrl;
       }
     } catch (err) {
-      console.error("[generateImage] Blob upload failed, using temp URL:", err);
+      logError("ai.generateImage.blobUpload", err);
     }
   }
 

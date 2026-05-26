@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAI, AIProviderError } from "@/lib/ai";
+import { logError } from "@/lib/logger";
 
 interface Site {
   id: number;
@@ -144,7 +145,7 @@ Rules:
       `;
     }
   } catch (err) {
-    console.error("Failed to store competitor research:", err);
+    logError("competitors.storeResearch", err, { siteId: site.id });
   }
 
   return {
@@ -343,11 +344,11 @@ export async function POST(req: NextRequest) {
           min_volume: 1000,
         });
       }
-      console.error("AI competitor research failed:", err);
+      logError("competitors.aiResearch", err);
       return NextResponse.json({ success: false, error: formatAIError(err) });
     }
   } catch (err) {
-    console.error("Competitor research error:", err);
+    logError("competitors.research", err);
     return NextResponse.json({ success: false, error: formatAIError(err) }, { status: 500 });
   }
 }

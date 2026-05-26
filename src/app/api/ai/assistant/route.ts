@@ -5,6 +5,7 @@ import { askAI, generateImage, MODELS, AIProviderError } from "@/lib/ai";
 import { getSQL } from "@/lib/db";
 import { z } from "zod";
 import { createHash } from "crypto";
+import { logError } from "@/lib/logger";
 
 const schema = z.object({
   action: z.enum(["write", "translate", "image", "analyze", "research", "competitor", "eeat"]),
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
       }
     } catch (cacheErr) {
       // Cache miss / table not ready — fall through to AI call
-      console.error("ai_widget_cache lookup failed:", cacheErr);
+      logError("ai.assistant.cacheLookup", cacheErr, { action: body.action });
     }
 
     let systemPrompt = "";
