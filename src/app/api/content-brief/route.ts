@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
@@ -32,8 +32,12 @@ Génère:
 8. **CTA suggéré**
 Format markdown.`;
 
-    const brief = await askAI([{ role: "user", content: prompt }], "fast", 1500);
-    return NextResponse.json({ brief });
+    const { reply: brief, cached, ai_unavailable } = await askAICached({
+      messages: [{ role: "user", content: prompt }],
+      model: "fast",
+      maxTokens: 1500,
+    });
+    return NextResponse.json({ brief, cached, ai_unavailable });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: msg }, { status: 500 });

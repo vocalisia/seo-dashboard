@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { askAI } from "@/lib/ai";
+import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 import { z } from "zod";
 
@@ -68,14 +68,15 @@ export async function POST(req: NextRequest) {
     const body = schema.parse(await req.json());
     const userPrompt = buildPrompt(body);
 
-    const response = await askAI(
-      [
+    const { reply: response } = await askAICached({
+      cacheKey: `seo-action:${body.actionType}:${body.query}`,
+      messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userPrompt },
       ],
-      "smart",
-      1200
-    );
+      model: "smart",
+      maxTokens: 1200,
+    });
 
     return NextResponse.json({
       success: true,
