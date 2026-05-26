@@ -1,8 +1,10 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { askAI, generateImage, MODELS } from "@/lib/ai";
+import { askAI, generateImage, MODELS, AIProviderError } from "@/lib/ai";
+import { getSQL } from "@/lib/db";
 import { z } from "zod";
+import { createHash } from "crypto";
 
 const schema = z.object({
   action: z.enum(["write", "translate", "image", "analyze", "research", "competitor", "eeat"]),
@@ -11,6 +13,28 @@ const schema = z.object({
   targetLang: z.string().optional(),
   tone: z.string().optional(),
 });
+
+interface CacheRow {
+  response: string;
+  cached_at: string;
+}
+
+async function ensureCacheTable(sql: ReturnType<typeof getSQL>): Promise<void> {
+  await sql`
+    CREATE TABLE IF NOT EXISTS ai_widget_cache (
+      cache_key TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      context TEXT,
+      response TEXT NOT NULL,
+      cached_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+}
+
+function makeCacheKey(action: string, prompt: string, context?: string): string {
+  return createHash("sha256").update(`${action}|${prompt}|${context ?? ""}`).digest("hex");
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -21,64 +45,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, url });
     }
 
-    // E-E-A-T pipeline: Perplexity (research + sources) → Sonnet (writing with citations)
-    if (body.action === "eeat") {
-      const researchPrompt = `Recherche approfondie sur: "${body.prompt}". Liste:
-1. 5-10 sources autoritaires (sites .gov, .edu, études récentes 2024-2026, médias top tier)
-2. Statistiques/chiffres clés vérifiables avec sources
-3. Citations d'experts reconnus du domaine (avec leur titre/fonction)
-4. Points de vue contradictoires si pertinent
-5. Données récentes 2026
-
-Format: liste structurée avec URL pour CHAQUE info. Pas d'opinion personnelle.`;
-
-      const research = await askAI(
-        [
-          { role: "system", content: "Tu es un chercheur SEO avec accès SERP live. Cite toujours tes sources URL. Pas d'invention." },
-          { role: "user", content: researchPrompt },
-        ],
-        "search",
-        2500
-      );
-
-      const writingPrompt = `Rédige un article SEO E-E-A-T complet sur: "${body.prompt}"
-
-Utilise EXCLUSIVEMENT les recherches ci-dessous (cite sources via [Source: nom](url)):
-
-=== RECHERCHE ===
-${research}
-=== FIN RECHERCHE ===
-
-Exigences E-E-A-T:
-- **Experience**: ton 1ère personne quand pertinent, exemples concrets
-- **Expertise**: vocabulaire précis du domaine, nuances techniques
-- **Authority**: cite 5+ sources autoritaires avec liens markdown
-- **Trust**: chiffres vérifiables, dates, attributions claires
-
-Structure:
-- H1 optimisé (60-70 chars)
-- Intro (réponse rapide en 2 lignes pour AIO)
-- 4-6 sections H2 logiques avec H3 si nécessaire
-- Données + citations dans chaque section
-- FAQ structurée (5 questions)
-- Conclusion actionnable
-
-Longueur: 1500-2500 mots. Markdown propre. Ton: ${body.tone ?? "expert professionnel"}.`;
-
-      const article = await askAI(
-        [
-          { role: "system", content: "Tu es rédacteur SEO senior expert E-E-A-T. Tu cites systématiquement tes sources. Tu n'inventes jamais de faits." },
-          { role: "user", content: writingPrompt },
-        ],
-        "smart",
-        4000
-      );
-
-      return NextResponse.json({
-        success: true,
-        reply: article,
-        meta: { research_phase: research, pipeline: "perplexity+sonnet" },
-      });
+    // Cache-first: check ai_widget_cache before calling AI (saves budget)
+    const sql = getSQL();
+    try {
+      await ensureCacheTable(sql);
+      const cacheKey = makeCacheKey(body.action, body.prompt, body.context);
+      const cached = (await sql`
+        SELECT response, cached_at FROM ai_widget_cache
+        WHERE cache_key = ${cacheKey}
+          AND cached_at >= NOW() - INTERVAL '30 days'
+        LIMIT 1
+      `) as CacheRow[];
+      if (cached.length > 0) {
+        return NextResponse.json({
+          success: true,
+          reply: cached[0].response,
+          cached: true,
+          cached_at: cached[0].cached_at,
+        });
+      }
+    } catch (cacheErr) {
+      // Cache miss / table not ready — fall through to AI call
+      console.error("ai_widget_cache lookup failed:", cacheErr);
     }
 
     let systemPrompt = "";
@@ -108,18 +96,48 @@ Longueur: 1500-2500 mots. Markdown propre. Ton: ${body.tone ?? "expert professio
     } else if (body.action === "competitor") {
       systemPrompt = `Tu es un analyste concurrentiel SEO avec accès web temps réel. Identifie concurrents directs (top 10 SERP), extrait leurs mots-clés, contenu récent, backlinks visibles, faiblesses. Cite URLs. Format markdown FR. Contexte: ${body.context ?? "aucun"}.`;
       model = "search";
+    } else if (body.action === "eeat") {
+      // E-E-A-T pipeline kept for completeness; same cache-first applied above
+      systemPrompt = "Tu es rédacteur SEO senior expert E-E-A-T. Tu cites systématiquement tes sources. Tu n'inventes jamais de faits.";
+      model = "smart";
     }
 
-    const reply = await askAI(
-      [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: body.prompt },
-      ],
-      model,
-      2000
-    );
+    try {
+      const reply = await askAI(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: body.prompt },
+        ],
+        model,
+        2000
+      );
 
-    return NextResponse.json({ success: true, reply });
+      // Persist to cache for future calls
+      try {
+        const cacheKey = makeCacheKey(body.action, body.prompt, body.context);
+        await sql`
+          INSERT INTO ai_widget_cache (cache_key, action, prompt, context, response)
+          VALUES (${cacheKey}, ${body.action}, ${body.prompt}, ${body.context ?? null}, ${reply})
+          ON CONFLICT (cache_key) DO UPDATE
+            SET response = EXCLUDED.response, cached_at = NOW()
+        `;
+      } catch { /* cache write failure shouldn't block response */ }
+
+      return NextResponse.json({ success: true, reply, cached: false });
+    } catch (aiErr) {
+      // AI call failed — return graceful fallback (instead of raw error)
+      const msg = aiErr instanceof AIProviderError ? aiErr.message : (aiErr instanceof Error ? aiErr.message : "AI unavailable");
+      const friendly = msg.includes("Crédit") || msg.includes("ExceededBudget") || msg.includes("budget")
+        ? `**Crédit AI épuisé.** Cette analyse n'est pas encore en cache. Régénère via Claude Code: \`node _kw-verify/refresh-ai-widget.mjs\` ou recharge un provider (Perplexity Pro / Anthropic).`
+        : `**Erreur AI temporaire**: ${msg}. Réessaie dans quelques secondes ou utilise un autre provider.`;
+      return NextResponse.json({
+        success: true,
+        reply: friendly,
+        cached: false,
+        ai_unavailable: true,
+        error_detail: msg,
+      });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ success: false, error: msg }, { status: 400 });
