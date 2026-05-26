@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Loader2, Search, Zap, TrendingUp, ExternalLink,
-  Target, GitCompare, Bot, Copy, Check, X, Filter,
+  Target, GitCompare, Bot, Copy, Check, X, Filter, RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -146,7 +146,7 @@ export default function CompetitorsPage() {
     } catch { setCached({ gaps: [], competitors: [] }); }
   }
 
-  async function runResearch() {
+  async function runResearch(forceRefresh = false) {
     if (!selectedSite) return;
     setLoading(true);
     setError(null);
@@ -156,7 +156,7 @@ export default function CompetitorsPage() {
       const res = await fetch("/api/competitors", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ site_id: selectedSite }),
+        body: JSON.stringify({ site_id: selectedSite, force_refresh: forceRefresh }),
       });
       const d = await res.json() as ResearchResult & { mode?: string; sites_processed?: number; sites_total?: number; cached?: boolean; stale?: boolean };
       if (d.success) {
@@ -494,18 +494,34 @@ export default function CompetitorsPage() {
                 </select>
               </div>
               <button
-                onClick={runResearch}
+                onClick={() => runResearch(false)}
                 disabled={loading || !selectedSite}
                 className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
+                title="Affiche les données mises en cache (rapide, économe en budget AI)"
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                 {loading
                   ? (selectedSite === "all" ? "Analyse multi-sites en cours..." : "Recherche IA en cours...")
-                  : (selectedSite === "all" ? "Lancer l’analyse sur tous les sites" : "Lancer l’analyse concurrentielle")}
+                  : (selectedSite === "all" ? "Lancer l’analyse sur tous les sites" : "Voir l’analyse (cache)")}
+              </button>
+              <button
+                onClick={() => {
+                  if (confirm("Forcer un nouveau scan IA va consommer du quota AI (Perplexity/Anthropic). Continuer ?")) {
+                    void runResearch(true);
+                  }
+                }}
+                disabled={loading || !selectedSite}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-600/80 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors border border-orange-500/40"
+                title="Force un nouvel appel AI live — ignore le cache (consomme du quota)"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+                Rescan IA (frais)
               </button>
             </div>
             <p className="text-xs text-gray-400">
-              Claude Sonnet identifie 5-8 concurrents directs &rarr; extrait leurs mots-clés (vol. ≥ 1000/mois) &rarr; compare avec tes données GSC &rarr; affiche les GAPS à cibler.
+              <strong>Voir l&apos;analyse (cache)</strong> = lit les données stockées (rapide, gratuit).
+              <strong className="ml-2">Rescan IA (frais)</strong> = nouvel appel AI live (Perplexity/Anthropic, consomme du quota).
+              Le cache expire automatiquement après 60 jours.
             </p>
           </div>
 
