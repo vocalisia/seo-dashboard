@@ -1,0 +1,170 @@
+// Daily GA4 analytics sync — pulls last 7 days for all active sites
+// Runs at 08:15 UTC every day (after GSC daily cron at 07:00)
+// ON CONFLICT DO UPDATE → idempotent re-runs
+
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+
+import { NextResponse } from "next/server";
+import { requireCronOrUser } from "@/lib/cron-auth";
+import { getSQL } from "@/lib/db";
+import { getAnalyticsClient } from "@/lib/google-auth";
+
+interface SiteRow {
+  id: number;
+  name: string;
+  ga_property_id: string;
+}
+
+function parseNum(v: string | null | undefined): number {
+  const n = Number(v ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function dateRange(days: number) {
+  const end = new Date();
+  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  return {
+    startDate: start.toISOString().split("T")[0],
+    endDate: end.toISOString().split("T")[0],
+  };
+}
+
+async function syncSite(
+  site: SiteRow,
+  analytics: ReturnType<typeof getAnalyticsClient>,
+  sql: ReturnType<typeof getSQL>,
+  days: number
+): Promise<{ inserted: number; error: string | null }> {
+  const propId = site.ga_property_id.replace(/^properties\//, "");
+  if (!propId || /^G-/.test(propId)) {
+    return { inserted: 0, error: "Measurement ID stored instead of Property ID" };
+  }
+
+  const { startDate, endDate } = dateRange(days);
+
+  try {
+    const res = await analytics.properties.runReport({
+      property: `properties/${propId}`,
+      requestBody: {
+        dateRanges: [{ startDate, endDate }],
+        dimensions: [{ name: "date" }, { name: "sessionDefaultChannelGroup" }],
+        metrics: [
+          { name: "sessions" },
+          { name: "totalUsers" },
+          { name: "newUsers" },
+          { name: "screenPageViews" },
+          { name: "bounceRate" },
+          { name: "averageSessionDuration" },
+        ],
+        limit: "100000",
+      },
+    });
+
+    const rows = res.data.rows ?? [];
+
+    const byDate: Record<string, {
+      sessions: number; users: number; new_users: number; pageviews: number;
+      bounce: number; duration: number; count: number;
+      organic: number; direct: number; referral: number; social: number;
+    }> = {};
+
+    for (const row of rows) {
+      const dateRaw = row.dimensionValues?.[0]?.value ?? "";
+      const channel = (row.dimensionValues?.[1]?.value ?? "").toLowerCase();
+      const date = `${dateRaw.slice(0, 4)}-${dateRaw.slice(4, 6)}-${dateRaw.slice(6, 8)}`;
+      const sessions = parseNum(row.metricValues?.[0]?.value);
+
+      if (!byDate[date]) {
+        byDate[date] = { sessions: 0, users: 0, new_users: 0, pageviews: 0, bounce: 0, duration: 0, count: 0, organic: 0, direct: 0, referral: 0, social: 0 };
+      }
+      const d = byDate[date];
+      d.sessions += sessions;
+      d.users += parseNum(row.metricValues?.[1]?.value);
+      d.new_users += parseNum(row.metricValues?.[2]?.value);
+      d.pageviews += parseNum(row.metricValues?.[3]?.value);
+      d.bounce += parseNum(row.metricValues?.[4]?.value);
+      d.duration += parseNum(row.metricValues?.[5]?.value);
+      d.count++;
+      if (channel.includes("organic")) d.organic += sessions;
+      else if (channel.includes("direct")) d.direct += sessions;
+      else if (channel.includes("referral")) d.referral += sessions;
+      else if (channel.includes("social")) d.social += sessions;
+    }
+
+    let inserted = 0;
+    for (const [date, d] of Object.entries(byDate)) {
+      await sql`
+        INSERT INTO analytics_daily
+          (site_id, date, sessions, users, new_users, pageviews, bounce_rate, avg_session_duration,
+           organic_sessions, direct_sessions, referral_sessions, social_sessions)
+        VALUES (
+          ${site.id}, ${date}, ${d.sessions}, ${d.users}, ${d.new_users}, ${d.pageviews},
+          ${d.count > 0 ? d.bounce / d.count : 0},
+          ${d.count > 0 ? d.duration / d.count : 0},
+          ${d.organic}, ${d.direct}, ${d.referral}, ${d.social}
+        )
+        ON CONFLICT (site_id, date) DO UPDATE SET
+          sessions = EXCLUDED.sessions,
+          users = EXCLUDED.users,
+          pageviews = EXCLUDED.pageviews,
+          organic_sessions = EXCLUDED.organic_sessions,
+          direct_sessions = EXCLUDED.direct_sessions,
+          referral_sessions = EXCLUDED.referral_sessions,
+          social_sessions = EXCLUDED.social_sessions
+      `;
+      inserted++;
+    }
+    return { inserted, error: null };
+  } catch (e) {
+    return { inserted: 0, error: e instanceof Error ? e.message : "Unknown" };
+  }
+}
+
+export async function GET(request: Request) {
+  const unauthorized = await requireCronOrUser(request);
+  if (unauthorized) return unauthorized;
+
+  const url = new URL(request.url);
+  const days = Math.max(1, Math.min(90, parseInt(url.searchParams.get("days") ?? "7", 10)));
+
+  try {
+    const sql = getSQL();
+    const analytics = getAnalyticsClient();
+
+    const siteRows = (await sql`
+      SELECT id, name, ga_property_id
+      FROM sites
+      WHERE is_active = true AND ga_property_id IS NOT NULL
+      ORDER BY name
+    `) as SiteRow[];
+
+    const results: Array<{ site: string; inserted: number; error: string | null }> = [];
+    let totalInserted = 0;
+    let errors = 0;
+
+    for (const site of siteRows) {
+      const { inserted, error } = await syncSite(site, analytics, sql, days);
+      results.push({ site: site.name, inserted, error });
+      totalInserted += inserted;
+      if (error) errors++;
+    }
+
+    return NextResponse.json({
+      success: true,
+      sites: siteRows.length,
+      total_inserted: totalInserted,
+      errors,
+      days,
+      results,
+      ran_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    return NextResponse.json(
+      { success: false, error: e instanceof Error ? e.message : "Unknown" },
+      { status: 500 }
+    );
+  }
+}
+
+export const POST = GET;
