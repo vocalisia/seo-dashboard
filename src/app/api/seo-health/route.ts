@@ -82,21 +82,24 @@ export async function GET(req: NextRequest) {
   const site_id = Number(siteId);
 
   try {
-    // 1. GSC performance (30d) — clicks, impressions, avg position
+    // 1. GSC performance (30d) — clicks, impressions, avg position (impressions-weighted)
     const gscRows = (await sql`
       SELECT
         COALESCE(SUM(clicks), 0) AS total_clicks,
         COALESCE(SUM(impressions), 0) AS total_impressions,
-        COALESCE(SUM(position * impressions)::float / NULLIF(SUM(impressions), 0), 50) AS avg_position
+        SUM(position * impressions)::float / NULLIF(SUM(impressions), 0) AS avg_position,
+        COUNT(DISTINCT page) AS distinct_pages
       FROM search_console_data
       WHERE site_id = ${site_id}
-        AND date >= NOW() - INTERVAL '30 days'
-    `) as { total_clicks: number; total_impressions: number; avg_position: number }[];
+        AND date >= (CURRENT_DATE - INTERVAL '30 days')::date
+    `) as { total_clicks: number; total_impressions: number; avg_position: number | null; distinct_pages: number }[];
 
-    const gscData = gscRows[0] ?? { total_clicks: 0, total_impressions: 0, avg_position: 50 };
+    const gscData = gscRows[0] ?? { total_clicks: 0, total_impressions: 0, avg_position: null, distinct_pages: 0 };
     const clicks = Number(gscData.total_clicks);
     const impressions = Number(gscData.total_impressions);
-    const avgPosition = Number(gscData.avg_position);
+    const avgPosition = gscData.avg_position != null ? Number(gscData.avg_position) : null;
+    const distinctPages = Number(gscData.distinct_pages);
+    const hasGSCData = clicks > 0 || impressions > 0;
 
     // 2. PageSpeed scores (latest)
     const psRows = (await sql`
@@ -110,41 +113,64 @@ export async function GET(req: NextRequest) {
     const psData = psRows[0] ?? { mobile_score: null, desktop_score: null };
     const mobileScore = psData.mobile_score != null ? Number(psData.mobile_score) : null;
     const desktopScore = psData.desktop_score != null ? Number(psData.desktop_score) : null;
+    const hasPagespeed = mobileScore != null || desktopScore != null;
 
-    // 3. Content volume (published articles)
+    // 3. Content volume — count autopilot + count distinct pages indexed via GSC (fallback)
     let articleCount = 0;
     try {
       const contentRows = (await sql`
-        SELECT COUNT(*) AS cnt
-        FROM autopilot_runs
-        WHERE site_id = ${site_id}
-          AND status = 'published'
+        SELECT COUNT(*) AS cnt FROM autopilot_runs
+        WHERE site_id = ${site_id} AND status = 'published'
       `) as { cnt: number }[];
       articleCount = Number(contentRows[0]?.cnt ?? 0);
-    } catch {
-      // table may not exist
-    }
+    } catch { /* table may not exist */ }
+    // Use distinct_pages from GSC as fallback when autopilot has 0 (most user sites publish outside autopilot)
+    const totalContentSignal = Math.max(articleCount, distinctPages);
 
     // --- Scoring ---
-    const gsc_score = Math.min(100, clicks * 0.5 + impressions / 100);
-    const pagespeed_score =
-      mobileScore != null && desktopScore != null
-        ? (mobileScore + desktopScore) / 2
-        : mobileScore ?? desktopScore ?? 0;
-    const content_score = Math.min(100, articleCount * 5);
-    const position_score = Math.max(0, 100 - avgPosition * 2);
+    // GSC: normalize by log scale (clicks 0-1000 -> 0-100, impressions 0-100000 -> 0-100)
+    // Avoids the unbounded "site explodes to 100 instantly" bug.
+    const gsc_score = hasGSCData
+      ? Math.min(100, Math.round(
+          (Math.log10(clicks + 1) / Math.log10(1001)) * 50 +
+          (Math.log10(impressions + 1) / Math.log10(100001)) * 50
+        ))
+      : 0;
 
-    const overall_score =
-      gsc_score * 0.3 +
-      pagespeed_score * 0.25 +
-      content_score * 0.2 +
-      position_score * 0.25;
+    // Pagespeed: actual average, null when no scan ever performed (excluded from overall)
+    const pagespeed_score = hasPagespeed
+      ? (mobileScore != null && desktopScore != null
+          ? Math.round((mobileScore + desktopScore) / 2)
+          : Math.round(mobileScore ?? desktopScore ?? 0))
+      : null;
+
+    // Content: includes GSC indexed pages, not just autopilot
+    const content_score = Math.min(100, Math.round(totalContentSignal * 3));
+
+    // Position: lower is better. null when no data → score = 0. avg pos 1 = 100, pos 30 = 40, pos 50+ = 0.
+    const position_score = avgPosition != null
+      ? Math.max(0, Math.round(100 - (avgPosition - 1) * 2.5))
+      : 0;
+
+    // Overall: weighted average, excluding components with null data (renormalize weights)
+    const components: { score: number; weight: number }[] = [
+      { score: gsc_score, weight: 0.35 },
+      { score: content_score, weight: 0.20 },
+      { score: position_score, weight: 0.25 },
+    ];
+    if (pagespeed_score != null) {
+      components.push({ score: pagespeed_score, weight: 0.20 });
+    }
+    const totalWeight = components.reduce((a, c) => a + c.weight, 0);
+    const overall_score = Math.round(
+      components.reduce((a, c) => a + c.score * c.weight, 0) / totalWeight
+    );
 
     const breakdown: Breakdown = {
-      gsc_score: Math.round(gsc_score * 100) / 100,
-      pagespeed_score: Math.round(pagespeed_score * 100) / 100,
-      content_score: Math.round(content_score * 100) / 100,
-      position_score: Math.round(position_score * 100) / 100,
+      gsc_score,
+      pagespeed_score: pagespeed_score ?? -1, // -1 = no data (UI should display N/A)
+      content_score,
+      position_score,
     };
 
     const grade = computeGrade(overall_score);
@@ -159,7 +185,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("SEO health error:", err);
     return NextResponse.json(
       { success: false, error: message },
       { status: 500 }

@@ -44,10 +44,22 @@ export default function TrackerPage() {
     setLoading(true);
     try {
       const res = await fetch(`/api/position-history?site_id=${selectedSite}&days=90`);
+      if (!res.ok) {
+        setData({ success: false, site_history: [], keywords: [] });
+        return;
+      }
       const d = await res.json() as TrackerData;
-      setData(d);
-    } catch { setData(null); }
-    setLoading(false);
+      // Defensive normalization: API may return malformed shape on errors
+      setData({
+        success: d?.success ?? false,
+        site_history: Array.isArray(d?.site_history) ? d.site_history : [],
+        keywords: Array.isArray(d?.keywords) ? d.keywords : [],
+      });
+    } catch {
+      setData({ success: false, site_history: [], keywords: [] });
+    } finally {
+      setLoading(false);
+    }
   };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -55,21 +67,23 @@ export default function TrackerPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (selectedSite) void fetchData(); }, [selectedSite]);
 
-  // Mini sparkline chart (pure CSS)
-  function Sparkline({ values, color = "emerald", inverted = false }: { values: number[]; color?: string; inverted?: boolean }) {
-    if (values.length < 2) return <span className="text-gray-600 text-xs">—</span>;
-    const min = Math.min(...values);
-    const max = Math.max(...values);
+  // Mini sparkline chart (pure CSS). Static class names so Tailwind doesn't purge them.
+  function Sparkline({ values, color = "emerald", inverted = false }: { values: number[]; color?: "emerald" | "red"; inverted?: boolean }) {
+    const clean = values.filter((v): v is number => Number.isFinite(v));
+    if (clean.length < 2) return <span className="text-gray-600 text-xs">—</span>;
+    const min = Math.min(...clean);
+    const max = Math.max(...clean);
     const range = max - min || 1;
+    const barClass = color === "red" ? "bg-red-500/60" : "bg-emerald-500/60";
 
     return (
       <div className="flex items-end gap-[1px] h-8">
-        {values.slice(-30).map((v, i) => {
+        {clean.slice(-30).map((v, i) => {
           const pct = inverted ? (1 - (v - min) / range) : (v - min) / range;
           return (
             <div
               key={i}
-              className={`w-1.5 rounded-sm bg-${color}-500/60`}
+              className={`w-1.5 rounded-sm ${barClass}`}
               style={{ height: `${Math.max(8, pct * 100)}%` }}
             />
           );
@@ -80,8 +94,10 @@ export default function TrackerPage() {
 
   // Simple bar chart
   function BarChart({ data: chartData, label }: { data: { date: string; value: number }[]; label: string }) {
-    if (chartData.length === 0) return null;
-    const max = Math.max(...chartData.map((d) => d.value), 1);
+    if (!Array.isArray(chartData) || chartData.length === 0) {
+      return <div className="text-xs text-gray-600 py-6 text-center">{label}: pas de données</div>;
+    }
+    const max = Math.max(...chartData.map((d) => Number(d.value) || 0), 1);
     return (
       <div>
         <div className="text-xs text-gray-400 mb-2">{label}</div>
