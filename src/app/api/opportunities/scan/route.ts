@@ -8,6 +8,17 @@ import { askAICached } from "@/lib/ai-cache";
 import { buildOpportunityCandidates, type OpportunityCandidate, type OpportunityKeywordRow } from "@/lib/opportunity-engine";
 import { buildExternalSignalRows, fetchGoogleSerpSnapshot } from "@/lib/opportunity-sources";
 import { requireApiSession } from "@/lib/api-auth";
+import {
+  buildLaunchPlan,
+  checkDomainAvailability,
+  deriveWhyNow,
+  estimateRevenueRange,
+  estimateTimeToRankMonths,
+  type DomainCheckResult,
+  type LaunchPlan,
+  type RevenueRange,
+  type WhyNowSignal,
+} from "@/lib/scanner-enrichment";
 
 interface AggregatedKeywordRow {
   query: string;
@@ -60,6 +71,11 @@ interface StoredOpportunity {
     resultTitles: string[];
     resultUrls?: string[];
   };
+  launch_plan?: LaunchPlan;
+  time_to_rank_months?: number;
+  why_now?: WhyNowSignal[];
+  revenue_range?: RevenueRange;
+  domain_available?: DomainCheckResult[];
 }
 
 type OpportunityInsertable = StoredOpportunity;
@@ -704,6 +720,43 @@ export async function POST(request: NextRequest) {
       };
     });
 
+    // v2 enrichment: deterministic, no AI cost
+    opportunities = opportunities.map((opp) => {
+      const launchPlan = buildLaunchPlan({
+        niche: opp.niche,
+        core_keywords: opp.core_keywords ?? [],
+        sample_queries: opp.sample_queries,
+        related_questions: opp.serp_evidence?.relatedQuestions ?? [],
+      });
+      const ttr = estimateTimeToRankMonths({
+        competition: opp.competition,
+        average_position: opp.average_position,
+        monthly_volume: opp.monthly_volume,
+      });
+      const whyNow = deriveWhyNow({
+        signal_source: opp.signal_source,
+        momentum_pct: opp.momentum_pct,
+        opportunity_type: opp.opportunity_type,
+        sample_queries: opp.sample_queries,
+        serp_evidence: opp.serp_evidence,
+      });
+      const revRange = estimateRevenueRange({
+        monthly_volume: opp.monthly_volume,
+        monetization: opp.monetization,
+        competition: opp.competition,
+      });
+      const domainAvail = (opp.suggested_domains ?? []).map((d) => checkDomainAvailability(d));
+
+      return {
+        ...opp,
+        launch_plan: launchPlan,
+        time_to_rank_months: ttr,
+        why_now: whyNow,
+        revenue_range: revRange,
+        domain_available: domainAvail,
+      };
+    });
+
     try {
       await sql.transaction(
         [
@@ -713,7 +766,8 @@ export async function POST(request: NextRequest) {
             (niche, reason, site_type, core_keywords, monthly_volume, competition, monetization,
              projected_traffic_6m, projected_revenue_6m, suggested_domains, seed_articles,
              target_countries, target_languages, competitors, business_model, success_rate, revenue_timeline, confidence_score,
-             signal_source, momentum_pct, average_position, opportunity_type, sample_queries, score_breakdown, serp_evidence)
+             signal_source, momentum_pct, average_position, opportunity_type, sample_queries, score_breakdown, serp_evidence,
+             launch_plan, time_to_rank_months, why_now, revenue_range, domain_available)
             VALUES (${opp.niche}, ${opp.reason}, ${opp.site_type}, ${JSON.stringify(opp.core_keywords)},
                     ${opp.monthly_volume}, ${opp.competition}, ${opp.monetization},
                     ${opp.projected_traffic_6m}, ${opp.projected_revenue_6m},
@@ -724,7 +778,10 @@ export async function POST(request: NextRequest) {
                     ${opp.confidence_score}, ${opp.signal_source ?? "gsc"},
                     ${opp.momentum_pct ?? 0}, ${opp.average_position ?? 0},
                     ${opp.opportunity_type ?? "emerging"}, ${JSON.stringify(opp.sample_queries ?? [])},
-                    ${JSON.stringify(opp.score_breakdown ?? {})}, ${JSON.stringify(opp.serp_evidence ?? {})})
+                    ${JSON.stringify(opp.score_breakdown ?? {})}, ${JSON.stringify(opp.serp_evidence ?? {})},
+                    ${JSON.stringify(opp.launch_plan ?? {})}, ${opp.time_to_rank_months ?? null},
+                    ${JSON.stringify(opp.why_now ?? [])}, ${JSON.stringify(opp.revenue_range ?? {})},
+                    ${JSON.stringify(opp.domain_available ?? [])})
           `),
         ]
       );

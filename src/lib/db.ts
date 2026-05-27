@@ -188,5 +188,42 @@ export async function ensureOpportunitySchema() {
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS sample_queries JSONB`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS score_breakdown JSONB`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS serp_evidence JSONB`;
+
+  // v2 enrichment columns (2026-05-27)
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS launch_plan JSONB`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS time_to_rank_months INTEGER`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS why_now JSONB`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS revenue_range JSONB`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS domain_available JSONB`;
+
   await sql`CREATE INDEX IF NOT EXISTS idx_market_opportunities_confidence ON market_opportunities(confidence_score DESC, created_at DESC)`;
+
+  // Deep research cache (7d TTL)
+  await sql`
+    CREATE TABLE IF NOT EXISTS scanner_deep_research (
+      id SERIAL PRIMARY KEY,
+      niche_key VARCHAR(300) NOT NULL UNIQUE,
+      keyword VARCHAR(500) NOT NULL,
+      research_json JSONB NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '7 days')
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_scanner_deep_research_expires ON scanner_deep_research(expires_at DESC)`;
+
+  // Minimal content plan table for "Launch this niche" stub
+  await sql`
+    CREATE TABLE IF NOT EXISTS content_plan (
+      id SERIAL PRIMARY KEY,
+      site_id INTEGER REFERENCES sites(id),
+      opportunity_id INTEGER REFERENCES market_opportunities(id),
+      title VARCHAR(500) NOT NULL,
+      target_keyword VARCHAR(500),
+      status VARCHAR(30) DEFAULT 'planned',
+      priority INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_content_plan_site ON content_plan(site_id, priority DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_content_plan_opp ON content_plan(opportunity_id)`;
 }

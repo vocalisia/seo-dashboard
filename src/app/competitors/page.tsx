@@ -109,6 +109,8 @@ export default function CompetitorsPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("analysis");
   const [gapRows, setGapRows] = useState<GapRow[]>([]);
   const [gapsLoading, setGapsLoading] = useState(false);
+  const [gapsTypeFilter, setGapsTypeFilter] = useState<"all" | "longtail" | "questions">("all");
+  const [gapsRefreshing, setGapsRefreshing] = useState(false);
   const [briefLoading, setBriefLoading] = useState<string | null>(null);
   const [briefResult, setBriefResult] = useState<{ keyword: string; text: string } | null>(null);
 
@@ -217,6 +219,45 @@ export default function CompetitorsPage() {
     } catch { /* ignore */ }
     setGapsLoading(false);
   }
+
+  async function refreshGapsFromAI() {
+    if (!selectedSite || selectedSite === "all" || gapsRefreshing) return;
+    if (!confirm("Relancer l'audit concurrentiel via IA (consomme du crédit AI) ?")) return;
+    setGapsRefreshing(true);
+    try {
+      const res = await fetch("/api/competitors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ site_id: selectedSite, force_refresh: true }),
+      });
+      const d = await res.json() as { success: boolean; error?: string };
+      if (d.success) {
+        showNotification("success", "Audit relancé. Rechargement des gaps...");
+        await fetchGapRows();
+      } else {
+        showNotification("error", d.error || "Échec relance audit");
+      }
+    } catch (e) {
+      showNotification("error", `Erreur réseau : ${e instanceof Error ? e.message : "inconnu"}`);
+    }
+    setGapsRefreshing(false);
+  }
+
+  function isQuestion(kw: string): boolean {
+    const QUESTION_WORDS = ["comment","pourquoi","quand","quel","quelle","quels","quelles","qu'est","qu est","how","what","why","when","which","where","who","is","are","does","do","can","best","top"];
+    const lower = kw.toLowerCase();
+    return QUESTION_WORDS.some(w => lower.startsWith(w + " ") || lower.includes(" " + w + " "));
+  }
+
+  function isLongTail(kw: string): boolean {
+    return kw.trim().split(/\s+/).length >= 4;
+  }
+
+  const filteredGapRows = gapRows.filter(g => {
+    if (gapsTypeFilter === "longtail") return isLongTail(g.keyword);
+    if (gapsTypeFilter === "questions") return isQuestion(g.keyword);
+    return true;
+  });
 
   const callAiWidget = useCallback(async (prompt: string, competitors: string[]) => {
     const ctx = `Concurrents analysés: ${competitors.join(", ")}`;
@@ -385,18 +426,38 @@ export default function CompetitorsPage() {
         {/* ===================== GAPS TAB ===================== */}
         {activeTab === "gaps" && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-gray-800 flex flex-wrap items-center justify-between gap-3">
               <h2 className="font-medium text-gray-200 flex items-center gap-2">
-                <GitCompare className="w-4 h-4 text-purple-400" /> Keyword Gaps ({gapRows.length})
+                <GitCompare className="w-4 h-4 text-purple-400" /> Keyword Gaps ({filteredGapRows.length}{filteredGapRows.length !== gapRows.length ? `/${gapRows.length}` : ""})
               </h2>
-              <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
-                className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none w-48">
-                <option value="all">Tous les sites</option>
-                {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1">
+                  {(["all","longtail","questions"] as const).map(t => (
+                    <button key={t} type="button" onClick={() => setGapsTypeFilter(t)}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition ${gapsTypeFilter === t ? "bg-purple-600 text-white" : "text-gray-400 hover:text-white"}`}>
+                      {t === "all" ? "Tous" : t === "longtail" ? "Long tail (4+ mots)" : "Questions"}
+                    </button>
+                  ))}
+                </div>
+                <button type="button" onClick={() => void refreshGapsFromAI()} disabled={gapsRefreshing || !selectedSite || selectedSite === "all"}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-600/20 border border-orange-600/40 text-orange-300 hover:bg-orange-600/40 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  title="Relancer l'audit IA pour avoir les gaps à jour">
+                  {gapsRefreshing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  {gapsRefreshing ? "Audit en cours..." : "Lancer audit IA (frais)"}
+                </button>
+                <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none w-48">
+                  <option value="all">Tous les sites</option>
+                  {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
             </div>
             {gapsLoading ? (
               <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-purple-400" /></div>
+            ) : filteredGapRows.length === 0 && gapRows.length > 0 ? (
+              <div className="py-12 text-center text-gray-400 text-sm">
+                Aucun mot-clé ne correspond au filtre <span className="text-purple-400">{gapsTypeFilter === "longtail" ? "Long tail" : "Questions"}</span>. Essaie un autre filtre.
+              </div>
             ) : gapRows.length === 0 ? (
               <div className="py-12 text-center text-gray-400 text-sm">
                 Aucun gap détecté. Lance d&apos;abord une analyse concurrentielle pour alimenter les données.
@@ -414,7 +475,7 @@ export default function CompetitorsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {gapRows.map((g, i) => (
+                    {filteredGapRows.map((g, i) => (
                       <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                         <td className="px-5 py-3 font-medium text-white">{g.keyword}</td>
                         <td className="px-5 py-3 text-right text-blue-400 font-semibold">{g.volume.toLocaleString()}</td>

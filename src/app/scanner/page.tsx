@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { ArrowLeft, Loader2, Radar, Rocket, TrendingUp, DollarSign, Globe, Zap } from "lucide-react";
+import { ArrowLeft, Loader2, Radar, Rocket, TrendingUp, DollarSign, Globe, Zap, ChevronDown, ChevronRight, Sparkles, Clock } from "lucide-react";
 import Link from "next/link";
 
 interface Opportunity {
@@ -52,6 +52,52 @@ interface Opportunity {
     relatedSearches: string[];
     resultTitles: string[];
   };
+  launch_plan?: {
+    pillar_topic: string;
+    launch_horizon_days: number;
+    articles: Array<{
+      title: string;
+      target_keyword: string;
+      intent: string;
+      word_count_target: number;
+      priority: number;
+    }>;
+  };
+  time_to_rank_months?: number;
+  why_now?: Array<{ signal: string; source: string; detail: string }>;
+  revenue_range?: {
+    m6_low: number;
+    m6_high: number;
+    m12_low: number;
+    m12_high: number;
+    currency: string;
+    assumption: string;
+  };
+  domain_available?: Array<{ domain: string; available: string; reason: string }>;
+}
+
+interface DeepResearchPayload {
+  niche: string;
+  keyword: string;
+  fetched_at: string;
+  summary: string;
+  competitors: Array<{
+    rank: number;
+    url: string;
+    host: string;
+    title: string;
+    estimated_authority: "low" | "medium" | "high";
+  }>;
+  content_angles: string[];
+  content_gaps: string[];
+  related_questions: string[];
+  related_searches: string[];
+  top_pages_extracted: Array<{
+    url: string;
+    title?: string;
+    headings: string[];
+    word_count_estimate: number;
+  }>;
 }
 
 const COUNTRY_FLAG: Record<string, string> = {
@@ -164,6 +210,72 @@ export default function ScannerPage() {
   const [translating, setTranslating] = useState<number | null>(null);
   const [loadingCompetitors, setLoadingCompetitors] = useState<number | null>(null);
   const [competitorsCache, setCompetitorsCache] = useState<Record<number, { url: string; name: string }[]>>({});
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [deepResearch, setDeepResearch] = useState<Record<number, DeepResearchPayload>>({});
+  const [loadingDeepResearch, setLoadingDeepResearch] = useState<number | null>(null);
+  const [launching, setLaunching] = useState<number | null>(null);
+  const [launchResults, setLaunchResults] = useState<Record<number, { site_url: string; planned_articles: number; seeded_keywords: number; message: string }>>({});
+
+  function toggleExpand(id: number) {
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  async function runDeepResearch(opp: Opportunity) {
+    setLoadingDeepResearch(opp.id);
+    setDeployMsg(null);
+    try {
+      const keyword = (opp.core_keywords?.[0] ?? opp.niche).trim();
+      const res = await fetch("/api/scanner/deep-research", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ niche: opp.niche, keyword }),
+      });
+      const d = await res.json() as { success: boolean; research?: DeepResearchPayload; error?: string };
+      if (d.success && d.research) {
+        setDeepResearch((prev) => ({ ...prev, [opp.id]: d.research! }));
+      } else {
+        setDeployMsg(d.error ?? "Deep research a échoué.");
+      }
+    } catch {
+      setDeployMsg("Erreur réseau pendant le deep research.");
+    } finally {
+      setLoadingDeepResearch(null);
+    }
+  }
+
+  async function launchNiche(opp: Opportunity) {
+    setLaunching(opp.id);
+    setDeployMsg(null);
+    try {
+      const res = await fetch("/api/scanner/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ opportunity_id: opp.id, domain: opp.suggested_domains?.[0] }),
+      });
+      const d = await res.json() as {
+        success: boolean; site_url?: string; planned_articles?: number;
+        seeded_keywords?: number; message?: string; error?: string;
+      };
+      if (d.success && d.site_url) {
+        setLaunchResults((prev) => ({
+          ...prev,
+          [opp.id]: {
+            site_url: d.site_url!,
+            planned_articles: d.planned_articles ?? 0,
+            seeded_keywords: d.seeded_keywords ?? 0,
+            message: d.message ?? "Stub créé",
+          },
+        }));
+        await fetchCached();
+      } else {
+        setDeployMsg(d.error ?? "Le lancement a échoué.");
+      }
+    } catch {
+      setDeployMsg("Erreur réseau pendant le lancement.");
+    } finally {
+      setLaunching(null);
+    }
+  }
 
   async function loadCompetitors(oppId: number) {
     setLoadingCompetitors(oppId);
@@ -921,8 +1033,233 @@ export default function ScannerPage() {
                   </div>
                 )}
 
+                {/* v2 enrichment quick row */}
+                {(opp.time_to_rank_months || opp.revenue_range || (opp.why_now && opp.why_now.length > 0)) && (
+                  <div className="grid grid-cols-3 gap-3 mb-4">
+                    {typeof opp.time_to_rank_months === "number" && (
+                      <div className="bg-gray-800/40 rounded-lg px-3 py-2 flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-cyan-400" />
+                        <div>
+                          <div className="text-[10px] text-gray-500">Time to rank</div>
+                          <div className="text-sm font-semibold text-cyan-300">{opp.time_to_rank_months} mois</div>
+                        </div>
+                      </div>
+                    )}
+                    {opp.revenue_range && (
+                      <div className="bg-gray-800/40 rounded-lg px-3 py-2" title={opp.revenue_range.assumption}>
+                        <div className="text-[10px] text-gray-500">Revenus 6m (range)</div>
+                        <div className="text-sm font-semibold text-green-300">
+                          {opp.revenue_range.m6_low.toLocaleString()}–{opp.revenue_range.m6_high.toLocaleString()}€/mois
+                        </div>
+                      </div>
+                    )}
+                    {opp.why_now && opp.why_now.length > 0 && (
+                      <div className="bg-gray-800/40 rounded-lg px-3 py-2">
+                        <div className="text-[10px] text-gray-500">Why now</div>
+                        <div className="text-xs font-semibold text-amber-300 truncate" title={opp.why_now.map(s => s.signal).join(" • ")}>
+                          {opp.why_now[0].signal}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Expandable detail panel */}
+                <div className="mb-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleExpand(opp.id)}
+                    className="flex items-center gap-2 text-xs text-gray-400 hover:text-cyan-300 transition"
+                  >
+                    {expanded[opp.id] ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    <span>{expanded[opp.id] ? "Replier" : "Voir détail SERP + plan de lancement"}</span>
+                  </button>
+
+                  {expanded[opp.id] && (
+                    <div className="mt-3 space-y-4 rounded-xl border border-gray-800 bg-gray-950/60 p-4">
+                      {/* Why now full list */}
+                      {opp.why_now && opp.why_now.length > 0 && (
+                        <div>
+                          <div className="text-xs font-semibold text-amber-300 mb-2 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" /> Pourquoi maintenant
+                          </div>
+                          <div className="space-y-1">
+                            {opp.why_now.map((s, i) => (
+                              <div key={i} className="text-xs text-gray-300 flex items-start gap-2">
+                                <span className="text-[10px] uppercase tracking-wider bg-amber-900/30 text-amber-300 rounded px-1.5 py-0.5 flex-shrink-0">{s.source}</span>
+                                <span>{s.signal} <span className="text-gray-500">— {s.detail}</span></span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Domain availability */}
+                      {opp.domain_available && opp.domain_available.length > 0 && (
+                        <div>
+                          <div className="text-xs font-semibold text-cyan-300 mb-2">Disponibilité domaines (heuristique)</div>
+                          <div className="space-y-1">
+                            {opp.domain_available.map((d, i) => {
+                              const color = d.available === "likely" ? "text-green-400" : d.available === "likely_taken" ? "text-red-400" : "text-gray-400";
+                              const label = d.available === "likely" ? "✓ probablement libre" : d.available === "likely_taken" ? "✗ probablement pris" : "? à vérifier";
+                              return (
+                                <div key={i} className="text-xs flex items-center gap-2">
+                                  <code className="bg-gray-800 rounded px-1.5 py-0.5">{d.domain}</code>
+                                  <span className={color}>{label}</span>
+                                  <span className="text-gray-500">— {d.reason}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Revenue range detail */}
+                      {opp.revenue_range && (
+                        <div>
+                          <div className="text-xs font-semibold text-green-300 mb-2">Fourchette revenus (heuristique)</div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="bg-gray-800/40 rounded px-2 py-1">
+                              <span className="text-gray-500">6 mois: </span>
+                              <span className="text-green-400 font-semibold">
+                                {opp.revenue_range.m6_low.toLocaleString()}–{opp.revenue_range.m6_high.toLocaleString()}€/mois
+                              </span>
+                            </div>
+                            <div className="bg-gray-800/40 rounded px-2 py-1">
+                              <span className="text-gray-500">12 mois: </span>
+                              <span className="text-green-400 font-semibold">
+                                {opp.revenue_range.m12_low.toLocaleString()}–{opp.revenue_range.m12_high.toLocaleString()}€/mois
+                              </span>
+                            </div>
+                          </div>
+                          <div className="text-[10px] text-gray-500 mt-1">{opp.revenue_range.assumption}</div>
+                        </div>
+                      )}
+
+                      {/* Launch plan */}
+                      {opp.launch_plan && opp.launch_plan.articles && opp.launch_plan.articles.length > 0 && (
+                        <div>
+                          <div className="text-xs font-semibold text-violet-300 mb-2">
+                            Plan de lancement ({opp.launch_plan.articles.length} articles sur {opp.launch_plan.launch_horizon_days}j)
+                          </div>
+                          <div className="space-y-2">
+                            {opp.launch_plan.articles.map((a, i) => (
+                              <div key={i} className="bg-gray-800/40 rounded-lg px-3 py-2 text-xs">
+                                <div className="flex items-start gap-2">
+                                  <span className="text-[10px] uppercase tracking-wider bg-violet-900/30 text-violet-300 rounded px-1.5 py-0.5 flex-shrink-0">
+                                    P{a.priority}
+                                  </span>
+                                  <div className="flex-1">
+                                    <div className="text-white font-medium">{a.title}</div>
+                                    <div className="text-gray-500 mt-0.5">
+                                      KW: <span className="text-cyan-300">{a.target_keyword}</span> ·
+                                      {" "}{a.intent} ·
+                                      {" "}{a.word_count_target.toLocaleString()} mots
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Deep research */}
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-xs font-semibold text-fuchsia-300">Deep research SERP (top 10 + extraction top 3)</div>
+                          <button
+                            type="button"
+                            onClick={() => runDeepResearch(opp)}
+                            disabled={loadingDeepResearch === opp.id}
+                            className="px-2 py-1 text-xs bg-fuchsia-600/20 hover:bg-fuchsia-600/40 border border-fuchsia-700 text-fuchsia-300 rounded flex items-center gap-1 disabled:opacity-50"
+                          >
+                            {loadingDeepResearch === opp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <span>🔬</span>}
+                            {deepResearch[opp.id] ? "↻ Re-scanner" : "Lancer deep research"}
+                          </button>
+                        </div>
+
+                        {deepResearch[opp.id] && (
+                          <div className="space-y-3">
+                            <div className="text-[11px] text-gray-400">{deepResearch[opp.id].summary}</div>
+
+                            {/* Top 10 competitors */}
+                            {deepResearch[opp.id].competitors.length > 0 && (
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Top 10 SERP</div>
+                                <div className="space-y-1">
+                                  {deepResearch[opp.id].competitors.slice(0, 10).map((c, i) => {
+                                    const authColor = c.estimated_authority === "high" ? "text-red-400" : c.estimated_authority === "medium" ? "text-yellow-400" : "text-green-400";
+                                    return (
+                                      <div key={i} className="text-xs flex items-center gap-2">
+                                        <span className="text-gray-500 w-5 text-right">#{c.rank}</span>
+                                        <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-cyan-300 hover:underline truncate flex-1">
+                                          {c.host}
+                                        </a>
+                                        <span className={`text-[10px] ${authColor}`}>{c.estimated_authority}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Content angles */}
+                            {deepResearch[opp.id].content_angles.length > 0 && (
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Angles déjà couverts</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {deepResearch[opp.id].content_angles.map((a, i) => (
+                                    <span key={i} className="text-xs bg-gray-800 text-gray-300 rounded px-2 py-0.5">{a}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Content gaps */}
+                            {deepResearch[opp.id].content_gaps.length > 0 && (
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Gaps détectés (questions PAA non couvertes)</div>
+                                <div className="space-y-0.5">
+                                  {deepResearch[opp.id].content_gaps.map((g, i) => (
+                                    <div key={i} className="text-xs text-amber-200">→ {g}</div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Launch result */}
+                      {launchResults[opp.id] && (
+                        <div className="bg-green-900/20 border border-green-700 rounded-lg p-3 text-xs text-green-200">
+                          <div className="font-semibold mb-1">✓ Lancement stub créé</div>
+                          <div>Site: <code className="bg-gray-800 rounded px-1">{launchResults[opp.id].site_url}</code></div>
+                          <div>{launchResults[opp.id].planned_articles} articles planifiés · {launchResults[opp.id].seeded_keywords} keywords trackés</div>
+                          <div className="text-gray-400 mt-1">{launchResults[opp.id].message}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Action buttons */}
-                <div className="flex gap-3">
+                <div className="flex gap-3 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => launchNiche(opp)}
+                    disabled={launching === opp.id || opp.status === "deployed"}
+                    className="px-4 py-2 bg-violet-600/20 hover:bg-violet-600/40 border border-violet-700 text-violet-300 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                    title="Crée un stub site + content_plan + tracked_keywords (pas de GitHub repo)"
+                  >
+                    {launching === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    {launching === opp.id ? "Stub en cours..." : "Launch this niche"}
+                  </button>
+                </div>
+
+                {/* Existing action buttons (deploy/validate) */}
+                <div className="flex gap-3 mt-3">
                   {/* Validate button */}
                   {!validationResults[opp.id] && (
                     <button
