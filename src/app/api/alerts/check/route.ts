@@ -316,6 +316,7 @@ async function sendAlertSlack(alerts: AlertPayload[], sites: SiteRow[], aiSummar
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ blocks, text: `${alerts.length} alertes SEO` }),
+      signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
     console.error("Slack webhook failed:", err);
@@ -373,6 +374,7 @@ ${aiBlock}
         subject: `🚨 SEO Alerts — ${alerts.length} issue(s) detected`,
         html,
       }),
+      signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
     console.error("Failed to send alert email:", err);

@@ -25,16 +25,16 @@ export async function GET(req: NextRequest) {
     const rows = await sql`
       SELECT
         query,
-        AVG(position) as position,
+        SUM(position * impressions)::float / NULLIF(SUM(impressions), 0) as position,
         SUM(clicks) as clicks,
         SUM(impressions) as impressions,
         CAST(SUM(clicks) AS FLOAT) / NULLIF(SUM(impressions), 0) as ctr
       FROM search_console_data
       WHERE site_id = ${parseInt(siteId, 10)}
         AND date >= NOW() - INTERVAL '1 day' * ${days}
-        AND impressions >= 50
       GROUP BY query
-      HAVING AVG(position) <= 10
+      HAVING SUM(impressions) >= 50
+        AND (SUM(position * impressions)::float / NULLIF(SUM(impressions), 0)) <= 10
       ORDER BY SUM(impressions) DESC
       LIMIT 50
     `;

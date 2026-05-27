@@ -16,13 +16,14 @@ export async function GET(req: NextRequest) {
         query,
         COUNT(DISTINCT page) as page_count,
         array_agg(DISTINCT page) as pages,
-        AVG(position) as avg_position,
+        SUM(position * impressions)::float / NULLIF(SUM(impressions), 0) as avg_position,
         SUM(clicks) as clicks
       FROM search_console_data
       WHERE site_id = ${parseInt(siteId, 10)}
         AND date >= NOW() - INTERVAL '30 days'
         AND page IS NOT NULL
         AND page != ''
+        AND query IS NOT NULL
       GROUP BY query
       HAVING COUNT(DISTINCT page) >= 2
       ORDER BY SUM(clicks) DESC

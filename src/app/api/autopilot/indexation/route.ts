@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { resolvePublishedArticleLiveUrl } from "@/lib/autopilot-published-url";
+import { requireApiSession } from "@/lib/api-auth";
 
 interface AutopilotRow {
   id: number;
@@ -27,6 +28,9 @@ interface ArticleIndexation {
 }
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const { searchParams } = new URL(req.url);
   const siteIdParam = searchParams.get("site_id");
 

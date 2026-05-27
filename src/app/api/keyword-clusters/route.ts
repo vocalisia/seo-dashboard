@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAICached } from "@/lib/ai-cache";
+import { logError } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
@@ -225,7 +226,7 @@ Rules:
       cached: false,
     });
   } catch (err) {
-    console.error("keyword-clusters error:", err);
+    logError("keyword-clusters", err);
     const message =
       process.env.NODE_ENV === "development" && err instanceof Error
         ? err.message

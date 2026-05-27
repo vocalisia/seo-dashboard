@@ -133,6 +133,7 @@ ${
         subject: `SEO Autopilot — ${published.length} article(s) publié(s) cette semaine`,
         html,
       }),
+      signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
     console.error("Failed to send recap email:", err);

@@ -28,15 +28,15 @@ export async function GET(request: NextRequest) {
             d.query, d.page, d.site_id, s.name AS site_name,
             SUM(d.clicks) AS clicks,
             SUM(d.impressions) AS impressions,
-            AVG(d.position) AS position,
-            AVG(d.ctr) AS ctr
+            SUM(d.position * d.impressions)::float / NULLIF(SUM(d.impressions), 0) AS position,
+            SUM(d.clicks)::float / NULLIF(SUM(d.impressions), 0) AS ctr
           FROM search_console_data d
           LEFT JOIN sites s ON s.id = d.site_id
           WHERE d.date >= NOW() - INTERVAL '1 day' * ${days}
             AND d.query IS NOT NULL
-            AND d.position BETWEEN 8 AND 20
           GROUP BY d.query, d.page, d.site_id, s.name
           HAVING SUM(d.impressions) > 100 AND SUM(d.clicks) > 0
+            AND (SUM(d.position * d.impressions)::float / NULLIF(SUM(d.impressions), 0)) BETWEEN 11 AND 20
           ORDER BY SUM(d.impressions) DESC
           LIMIT ${limit}
         `
@@ -47,15 +47,15 @@ export async function GET(request: NextRequest) {
             NULL::text AS site_name,
             SUM(clicks) AS clicks,
             SUM(impressions) AS impressions,
-            AVG(position) AS position,
-            AVG(ctr) AS ctr
+            SUM(position * impressions)::float / NULLIF(SUM(impressions), 0) AS position,
+            SUM(clicks)::float / NULLIF(SUM(impressions), 0) AS ctr
           FROM search_console_data
           WHERE site_id = ${parseInt(siteId)}
             AND date >= NOW() - INTERVAL '1 day' * ${days}
             AND query IS NOT NULL
-            AND position BETWEEN 8 AND 20
           GROUP BY query, page
           HAVING SUM(impressions) > 100 AND SUM(clicks) > 0
+            AND (SUM(position * impressions)::float / NULLIF(SUM(impressions), 0)) BETWEEN 11 AND 20
           ORDER BY SUM(impressions) DESC
           LIMIT ${limit}
         `;

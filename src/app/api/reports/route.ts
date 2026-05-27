@@ -1,9 +1,13 @@
 import { getSQL } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const siteId = request.nextUrl.searchParams.get("siteId");
   const limit = parseInt(request.nextUrl.searchParams.get("limit") || "4");
 

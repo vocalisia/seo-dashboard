@@ -53,8 +53,11 @@ export async function GET(req: NextRequest) {
   }
 
   const siteId = parseInt(siteIdParam, 10);
-  if (isNaN(siteId)) {
+  if (isNaN(siteId) || siteId <= 0) {
     return NextResponse.json({ success: false, error: "Invalid site_id" }, { status: 400 });
+  }
+  if (!Number.isFinite(days) || days <= 0 || days > 365) {
+    return NextResponse.json({ success: false, error: "Invalid days (1..365)" }, { status: 400 });
   }
 
   const sql = getSQL();
@@ -70,7 +73,7 @@ export async function GET(req: NextRequest) {
       WHERE site_id = ${siteId}
         AND country IS NOT NULL
         AND country != ''
-        AND date >= NOW() - INTERVAL '1 day' * ${days}
+        AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
       GROUP BY country
       ORDER BY SUM(clicks) DESC
       LIMIT 30
@@ -87,13 +90,13 @@ export async function GET(req: NextRequest) {
           FROM search_console_data
           WHERE site_id = ${siteId}
             AND country = ${country}
-            AND date >= NOW() - INTERVAL '1 day' * ${days}
+            AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
             AND query IN (
               SELECT query
               FROM search_console_data
               WHERE site_id = ${siteId}
                 AND country = ${country}
-                AND date >= NOW() - INTERVAL '1 day' * ${days}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
                 AND page != ''
               GROUP BY query
               HAVING COUNT(DISTINCT page) >= 2
@@ -111,12 +114,12 @@ export async function GET(req: NextRequest) {
                  AVG(position)    AS position
           FROM search_console_data
           WHERE site_id = ${siteId}
-            AND date >= NOW() - INTERVAL '1 day' * ${days}
+            AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
             AND query IN (
               SELECT query
               FROM search_console_data
               WHERE site_id = ${siteId}
-                AND date >= NOW() - INTERVAL '1 day' * ${days}
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
                 AND page != ''
               GROUP BY query
               HAVING COUNT(DISTINCT page) >= 2

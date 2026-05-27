@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { requireApiSession } from "@/lib/api-auth";
 
 interface GscAgg {
   avg_position: string | null;
@@ -43,6 +44,9 @@ function parseGsc(rows: GscAgg[]): {
 }
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const { searchParams } = new URL(req.url);
   const siteIdParam = searchParams.get("site_id");
 

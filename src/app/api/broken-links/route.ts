@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { requireApiSession } from "@/lib/api-auth";
 
 interface BrokenLink {
   url: string;
@@ -28,6 +29,9 @@ async function checkUrl(url: string, timeout: number): Promise<{ url: string; ok
 }
 
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   let body: { site_id?: number };
   try {
     body = (await req.json()) as { site_id?: number };

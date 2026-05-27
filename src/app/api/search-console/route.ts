@@ -21,12 +21,23 @@ const LANG_COUNTRIES: Record<string, string[]> = {
 export async function GET(request: NextRequest) {
   const siteId = request.nextUrl.searchParams.get("siteId");
   const type = request.nextUrl.searchParams.get("type") || "queries";
-  const days = parseInt(request.nextUrl.searchParams.get("days") || "30");
-  const limit = parseInt(request.nextUrl.searchParams.get("limit") || "200");
+  const days = parseInt(request.nextUrl.searchParams.get("days") || "30", 10);
+  const limit = parseInt(request.nextUrl.searchParams.get("limit") || "200", 10);
   const country = request.nextUrl.searchParams.get("country"); // ISO-3 or null
   const language = request.nextUrl.searchParams.get("language"); // fr/en/de/... or null
 
   if (!siteId) return NextResponse.json({ error: "siteId required" }, { status: 400 });
+
+  const id = parseInt(siteId, 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    return NextResponse.json({ error: "Invalid siteId" }, { status: 400 });
+  }
+  if (!Number.isFinite(days) || days <= 0 || days > 365) {
+    return NextResponse.json({ error: "Invalid days (1..365)" }, { status: 400 });
+  }
+  if (!Number.isFinite(limit) || limit <= 0 || limit > 5000) {
+    return NextResponse.json({ error: "Invalid limit (1..5000)" }, { status: 400 });
+  }
 
   if (isLocalDevDemoMode()) {
     return NextResponse.json([]);
@@ -34,7 +45,6 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getSQL();
-    const id = parseInt(siteId);
 
     // Resolve filter: explicit country > language mapping > site TLD > none.
     // Default (no override) = ALWAYS the site's TLD country with NULL fallback.

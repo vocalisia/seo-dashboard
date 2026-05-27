@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
       SELECT
         COALESCE(SUM(clicks), 0) AS total_clicks,
         COALESCE(SUM(impressions), 0) AS total_impressions,
-        COALESCE(AVG(position), 50) AS avg_position
+        COALESCE(SUM(position * impressions)::float / NULLIF(SUM(impressions), 0), 50) AS avg_position
       FROM search_console_data
       WHERE site_id = ${site_id}
         AND date >= NOW() - INTERVAL '30 days'

@@ -2,8 +2,12 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { requireApiSession } from "@/lib/api-auth";
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const { searchParams } = new URL(req.url);
   const siteIdParam = searchParams.get("site_id");
   const unreadOnly = searchParams.get("unread_only") === "true";

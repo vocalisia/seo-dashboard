@@ -642,6 +642,7 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
               Authorization: `Bearer ${accessToken}`,
             },
             body: JSON.stringify({ url: publishedUrl, type: "URL_UPDATED" }),
+            signal: AbortSignal.timeout(15_000),
           });
 
           if (idxRes.ok) {
@@ -659,11 +660,13 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       }
     }
 
-    // 8b. Ping Google sitemap endpoint
+    // 8b. Ping Google sitemap endpoint (timeout guards against external hang)
     if (!dry_run && githubUrl) {
       try {
         const sitemapUrl = `${site.url}/sitemap.xml`;
-        await fetch(`https://www.google.com/ping?sitemap=${encodeURIComponent(sitemapUrl)}`);
+        await fetch(`https://www.google.com/ping?sitemap=${encodeURIComponent(sitemapUrl)}`, {
+          signal: AbortSignal.timeout(10_000),
+        });
         logAutopilot("sitemap_ping", { siteUrl: site.url });
       } catch (err) {
         console.error('[autopilot] sitemap ping failed (non-blocking):', err);

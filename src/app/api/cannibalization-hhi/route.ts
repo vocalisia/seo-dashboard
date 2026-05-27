@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
             d.query, d.page, d.site_id, s.name AS site_name,
             SUM(d.impressions) AS impressions,
             SUM(d.clicks) AS clicks,
-            AVG(d.position) AS position
+            SUM(d.position * d.impressions)::float / NULLIF(SUM(d.impressions), 0) AS position
           FROM search_console_data d
           LEFT JOIN sites s ON s.id = d.site_id
           WHERE d.date >= NOW() - INTERVAL '1 day' * ${days}
@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
             NULL::text AS site_name,
             SUM(impressions) AS impressions,
             SUM(clicks) AS clicks,
-            AVG(position) AS position
+            SUM(position * impressions)::float / NULLIF(SUM(impressions), 0) AS position
           FROM search_console_data
           WHERE site_id = ${parseInt(siteId)}
             AND date >= NOW() - INTERVAL '1 day' * ${days}

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Globe, Search, MousePointerClick,
   BarChart3, RefreshCw, Loader2, ChevronDown, ChevronRight,
-  PlaySquare, TrendingUp, TrendingDown, X, Smartphone, ChevronsDownUp, ChevronsUpDown
+  PlaySquare, TrendingUp, TrendingDown, X, Smartphone, ChevronsDownUp, ChevronsUpDown, ExternalLink
 } from "lucide-react";
 import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
@@ -877,12 +877,31 @@ export default function DashboardPage() {
                             <tr key={j} className={`border-b border-gray-800/40 hover:bg-gray-800/20 cursor-pointer ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "bg-blue-900/10" : ""}`}
                               onClick={() => openKwHistory(site.id, kw.query)}>
                               <td className="py-2 px-5 text-gray-600 text-xs">{j + 1}</td>
-                              <td className="py-2 px-3 font-medium text-gray-200 flex items-center gap-1">
-                                {kw.query}
-                                {kw.first_seen && (Date.now() - new Date(kw.first_seen).getTime()) < 14 * 24 * 60 * 60 * 1000 && (
-                                  <span className="text-[9px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded font-bold shrink-0">NEW</span>
-                                )}
-                                <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "rotate-180" : ""}`} />
+                              <td className="py-2 px-3 font-medium text-gray-200">
+                                <div className="flex items-center gap-1.5">
+                                  <a
+                                    href={`https://www.google.com/search?q=${encodeURIComponent(kw.query)}&hl=fr&gl=fr&pws=0`}
+                                    target="_blank" rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    title="Vérifier le SERP Google pour ce mot-clé"
+                                    className="hover:text-blue-400 hover:underline transition"
+                                  >
+                                    {kw.query}
+                                  </a>
+                                  {kw.first_seen && (Date.now() - new Date(kw.first_seen).getTime()) < 14 * 24 * 60 * 60 * 1000 && (
+                                    <span className="text-[9px] bg-green-500/20 text-green-400 px-1 py-0.5 rounded font-bold shrink-0">NEW</span>
+                                  )}
+                                  <a
+                                    href={`https://www.google.com/search?q=${encodeURIComponent(`site:${(() => { try { return new URL(site.url).hostname.replace(/^www\./, ""); } catch { return site.url; } })()} ${kw.query}`)}&hl=fr`}
+                                    target="_blank" rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    title={`Trouver quelle page de ${site.name} ranke pour ce mot-clé (site:)`}
+                                    className="text-gray-500 hover:text-blue-400 transition shrink-0"
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                  <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "rotate-180" : ""}`} />
+                                </div>
                               </td>
                               <td className="text-right py-2 px-3 text-blue-400 font-semibold">{Number(kw.total_clicks)}</td>
                               <td className="text-right py-2 px-3 text-gray-400">{Number(kw.total_impressions).toLocaleString()}</td>

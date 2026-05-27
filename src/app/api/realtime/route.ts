@@ -2,6 +2,8 @@ import { auth } from "@/auth";
 import { getAnalyticsClient } from "@/lib/google-auth";
 import { NextRequest, NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const propertyId = request.nextUrl.searchParams.get("propertyId");
 

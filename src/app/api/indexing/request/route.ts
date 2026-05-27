@@ -58,6 +58,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<IndexingRespo
         url,
         type: "URL_UPDATED",
       }),
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (!response.ok) {

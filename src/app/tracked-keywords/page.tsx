@@ -51,6 +51,7 @@ export default function TrackedKeywordsPage() {
   const [siteId, setSiteId] = useState<string>("all");
   const [minVol, setMinVol] = useState<number>(0);
   const [onlyQuickWins, setOnlyQuickWins] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     load();
@@ -59,16 +60,23 @@ export default function TrackedKeywordsPage() {
 
   async function load(): Promise<void> {
     setLoading(true);
-    const params = new URLSearchParams({
-      siteId,
-      minVol: String(minVol),
-      quickWins: onlyQuickWins ? "1" : "0",
-    });
-    const r = await fetch(`/api/tracked-keywords?${params}`);
-    const j = await r.json();
-    setSites(j.sites || []);
-    setKeywords(j.keywords || []);
-    setLoading(false);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        siteId,
+        minVol: String(minVol),
+        quickWins: onlyQuickWins ? "1" : "0",
+      });
+      const r = await fetch(`/api/tracked-keywords?${params}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      setSites(j.sites || []);
+      setKeywords(j.keywords || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur réseau");
+    } finally {
+      setLoading(false);
+    }
   }
 
   const totals = useMemo(() => {
@@ -139,6 +147,12 @@ export default function TrackedKeywordsPage() {
             <span>Clicks total: {totals.totalClicks.toLocaleString()}</span>
           </div>
         </div>
+
+        {error && (
+          <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-300 mb-4">
+            {error}
+          </div>
+        )}
 
         {/* Table */}
         {loading ? (

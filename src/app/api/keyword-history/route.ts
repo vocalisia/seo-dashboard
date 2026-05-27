@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
   const siteId = request.nextUrl.searchParams.get("siteId");
   const query = request.nextUrl.searchParams.get("query");
-  const days = parseInt(request.nextUrl.searchParams.get("days") || "90");
+  const days = parseInt(request.nextUrl.searchParams.get("days") || "90", 10);
 
   if (!siteId || !query) return NextResponse.json({ error: "siteId + query required" }, { status: 400 });
 
@@ -17,7 +17,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getSQL();
-    const id = parseInt(siteId);
+    const id = parseInt(siteId, 10);
+    if (Number.isNaN(id) || Number.isNaN(days)) {
+      return NextResponse.json({ error: "invalid siteId or days" }, { status: 400 });
+    }
 
     const rows = await sql`
       SELECT

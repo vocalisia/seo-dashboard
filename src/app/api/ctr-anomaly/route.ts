@@ -35,15 +35,15 @@ export async function GET(request: NextRequest) {
         page,
         SUM(clicks) AS clicks,
         SUM(impressions) AS impressions,
-        AVG(position) AS position,
-        AVG(ctr) AS ctr
+        SUM(position * impressions)::float / NULLIF(SUM(impressions), 0) AS position,
+        SUM(clicks)::float / NULLIF(SUM(impressions), 0) AS ctr
       FROM search_console_data
       WHERE site_id = ${id}
         AND date >= NOW() - INTERVAL '1 day' * ${days}
         AND query IS NOT NULL
-        AND position <= 20
       GROUP BY query, page
       HAVING SUM(impressions) >= 200
+        AND (SUM(position * impressions)::float / NULLIF(SUM(impressions), 0)) <= 20
       ORDER BY SUM(impressions) DESC
       LIMIT 500
     `;

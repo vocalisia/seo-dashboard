@@ -151,11 +151,18 @@ Rules:
     `;
     await sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`;
 
+    // Lookup map: competitor_domain -> description (from parsed.competitors)
+    const descMap = new Map<string, string>();
+    for (const c of parsed.competitors || []) {
+      if (c.domain) descMap.set(c.domain.toLowerCase(), c.description || "");
+    }
+
     for (const gap of filteredGaps) {
+      const desc = descMap.get((gap.competitor || "").toLowerCase()) || null;
       await sql`
         INSERT INTO competitor_research
-        (site_id, competitor_domain, keyword, estimated_volume, competitor_position, difficulty, intent)
-        VALUES (${site.id}, ${gap.competitor}, ${gap.keyword}, ${gap.volume},
+        (site_id, competitor_domain, competitor_description, keyword, estimated_volume, competitor_position, difficulty, intent)
+        VALUES (${site.id}, ${gap.competitor}, ${desc}, ${gap.keyword}, ${gap.volume},
                 ${gap.competitor_position}, ${gap.difficulty}, ${gap.intent})
       `;
     }

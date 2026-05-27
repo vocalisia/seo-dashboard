@@ -50,6 +50,16 @@ export async function POST(request: Request) {
       ORDER BY s.id
     `) as Site[];
 
+    // Portfolio domain set (avoid self / cross-portfolio references in competitors)
+    const portfolioRows = (await sql`SELECT url FROM sites`) as { url: string }[];
+    const portfolioDomains = new Set(
+      portfolioRows.map((r) => r.url.replace(/^https?:\/\/(www\.)?/, "").toLowerCase().replace(/\/.*$/, ""))
+    );
+    const isPortfolioDomain = (d: string): boolean => {
+      const norm = (d || "").toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
+      return portfolioDomains.has(norm);
+    };
+
     const results = [];
 
     for (const site of sites) {
@@ -70,8 +80,11 @@ RESPOND IN STRICT JSON ONLY:
 {"competitors":[{"domain":"x.com","description":"..."}],"keyword_gaps":[{"keyword":"...","volume":2500,"competitor":"x.com","competitor_position":5,"difficulty":"medium","intent":"informational"}]}
 Rules: volume >= 1000, max 30 gaps, sort by volume DESC.`;
 
-        const today = new Date().toISOString().slice(0, 10);
-        const weekKey = `${today.slice(0, 4)}-W${Math.floor(new Date().getTime() / (7 * 86400000))}`;
+        // ISO week key: YYYY-Www (e.g., 2026-W22)
+        const now = new Date();
+        const yearStart = new Date(now.getFullYear(), 0, 1);
+        const weekNum = Math.ceil(((now.getTime() - yearStart.getTime()) / 86400000 + yearStart.getDay() + 1) / 7);
+        const weekKey = `${now.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
         const { reply: raw } = await askAICached({
           cacheKey: `competitors-weekly:${site.id}:${weekKey}`,
           messages: [{ role: "user", content: prompt }],
@@ -82,16 +95,29 @@ Rules: volume >= 1000, max 30 gaps, sort by volume DESC.`;
         const parsed = JSON.parse(cleaned);
 
         const gaps = (parsed.keyword_gaps || [])
-          .filter((g: { volume: number; keyword: string }) => g.volume >= 1000 && !ourSet.has(g.keyword.toLowerCase()))
+          .filter((g: { volume: number; keyword: string; competitor: string }) =>
+            g.volume >= 1000
+            && !ourSet.has(g.keyword.toLowerCase())
+            && !isPortfolioDomain(g.competitor)
+          )
           .slice(0, 30);
+
+        // Description lookup
+        const descMap = new Map<string, string>();
+        for (const c of (parsed.competitors || []) as { domain: string; description?: string }[]) {
+          if (c.domain && !isPortfolioDomain(c.domain)) {
+            descMap.set(c.domain.toLowerCase(), c.description || "");
+          }
+        }
 
         // Clear old + store new
         await sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`;
         for (const g of gaps) {
+          const desc = descMap.get((g.competitor || "").toLowerCase()) || null;
           await sql`
             INSERT INTO competitor_research
-            (site_id, competitor_domain, keyword, estimated_volume, competitor_position, difficulty, intent)
-            VALUES (${site.id}, ${g.competitor}, ${g.keyword}, ${g.volume}, ${g.competitor_position}, ${g.difficulty}, ${g.intent})
+            (site_id, competitor_domain, competitor_description, keyword, estimated_volume, competitor_position, difficulty, intent)
+            VALUES (${site.id}, ${g.competitor}, ${desc}, ${g.keyword}, ${g.volume}, ${g.competitor_position}, ${g.difficulty}, ${g.intent})
           `;
         }
 

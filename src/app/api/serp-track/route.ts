@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAICached } from "@/lib/ai-cache";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { logError } from "@/lib/logger";
 
 interface SerpEntry {
   position: number;
@@ -125,11 +126,17 @@ export async function POST(request: Request) {
         `;
         const prev: SerpEntry[] = prevRows.length > 0 ? (prevRows[0].results as SerpEntry[]) : [];
         const prevDomains = new Set(prev.map((p) => p.domain));
+        let ourDomain = "";
+        try { ourDomain = new URL(site.url).hostname.replace(/^www\./, ""); } catch { ourDomain = site.url; }
+        // Strict eTLD-style match: exact or subdomain (avoids "ai.com" matching "vocalis-ai.com")
+        const isOurs = (d: string): boolean => {
+          if (!d || !ourDomain) return false;
+          return d === ourDomain || d.endsWith(`.${ourDomain}`);
+        };
         const currDomains = top10.map((c) => c.domain);
-        const newCompetitors = currDomains.filter((d) => !prevDomains.has(d) && !site.url.includes(d));
+        const newCompetitors = currDomains.filter((d) => !prevDomains.has(d) && !isOurs(d));
 
-        const ourDomain = new URL(site.url).hostname.replace(/^www\./, "");
-        const ourEntry = top10.find((e) => e.domain.includes(ourDomain) || ourDomain.includes(e.domain));
+        const ourEntry = top10.find((e) => isOurs(e.domain));
 
         // AI analyse
         let analysis = "";
@@ -159,7 +166,7 @@ export async function POST(request: Request) {
         });
       } catch (e) {
         // Skip this KW on error
-        console.error(`SERP track failed for ${site.name}/${kw.query}:`, e);
+        logError("serp-track.kw", e, { site: site.name, query: kw.query });
       }
     }
   }
