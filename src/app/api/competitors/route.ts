@@ -113,10 +113,25 @@ Rules:
     throw new Error("AI returned invalid JSON");
   }
 
+  // Build portfolio domain set to filter out self-references and sister sites
+  const portfolioRows = (await sql`SELECT url FROM sites`) as { url: string }[];
+  const portfolioDomains = new Set(
+    portfolioRows.map((r) => r.url.replace(/^https?:\/\/(www\.)?/, "").toLowerCase().replace(/\/.*$/, ""))
+  );
+
+  function isPortfolioDomain(d: string): boolean {
+    const norm = d.toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
+    return portfolioDomains.has(norm);
+  }
+
   const filteredGaps = (parsed.keyword_gaps || [])
     .filter((g) => g.volume >= 1000 && !ourKeywordSet.has(g.keyword.toLowerCase()))
+    .filter((g) => !isPortfolioDomain(g.competitor))
     .sort((a, b) => b.volume - a.volume)
     .slice(0, 30);
+
+  // Also filter competitors list (UI shows them)
+  parsed.competitors = (parsed.competitors || []).filter((c) => !isPortfolioDomain(c.domain));
 
   // Persist to DB (best effort)
   try {

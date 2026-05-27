@@ -523,6 +523,7 @@ export default function DashboardPage() {
           >
             <option value="">🌍 Tous pays</option>
             <option value="fr">🇫🇷 France (FR)</option>
+            <option value="ch">🇨🇭 Suisse (CH uniquement)</option>
             <option value="en">🇬🇧 UK/US (EN)</option>
             <option value="de">🇩🇪 DE/AT/CH (DE)</option>
             <option value="es">🇪🇸 Espagne (ES)</option>

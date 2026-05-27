@@ -15,6 +15,7 @@ const LANG_COUNTRIES: Record<string, string[]> = {
   it: ["ITA","CHE","SMR","VAT"],
   nl: ["NLD","BEL"],
   pt: ["PRT","BRA","AGO","MOZ"],
+  ch: ["CHE"],
 };
 
 export async function GET(request: NextRequest) {
