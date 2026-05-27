@@ -36,6 +36,7 @@ export async function POST(request: Request) {
 }
 
 async function runHealthCheck() {
+  try {
   const sql = getSQL();
 
   // Garantit l'existence de la table (idempotent)
@@ -137,6 +138,7 @@ async function runHealthCheck() {
     try {
       await fetch("https://api.resend.com/emails", {
         method: "POST",
+        signal: AbortSignal.timeout(10000),
         headers: {
           Authorization: `Bearer ${resendKey}`,
           "Content-Type": "application/json",
@@ -164,4 +166,9 @@ async function runHealthCheck() {
     high: totalHigh,
     summary,
   });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    logAutopilot("health_check_error", { error: msg });
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
+  }
 }

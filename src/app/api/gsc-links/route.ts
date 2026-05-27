@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
       const encodedSiteUrl = encodeURIComponent(siteUrl);
       const res = await fetch(
         `https://www.googleapis.com/webmasters/v3/sites/${encodedSiteUrl}/links`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) }
       );
 
       if (res.ok) {

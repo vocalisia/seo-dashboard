@@ -51,9 +51,9 @@ export async function GET(req: NextRequest) {
     const baseUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodedUrl}${keyParam}`;
 
     // Séquentiel pour éviter le rate-limit (1 QPS sans clé)
-    const mobileRes = await fetch(`${baseUrl}&strategy=mobile`);
+    const mobileRes = await fetch(`${baseUrl}&strategy=mobile`, { signal: AbortSignal.timeout(60000) });
     await new Promise((r) => setTimeout(r, 1100));
-    const desktopRes = await fetch(`${baseUrl}&strategy=desktop`);
+    const desktopRes = await fetch(`${baseUrl}&strategy=desktop`, { signal: AbortSignal.timeout(60000) });
 
     if (!mobileRes.ok || !desktopRes.ok) {
       const errBody = await mobileRes.text().catch(() => "");

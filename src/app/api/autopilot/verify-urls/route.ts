@@ -46,6 +46,7 @@ export async function GET(request: Request) {
 }
 
 async function runVerification() {
+  try {
   const sql = getSQL();
   const ghToken = process.env.GITHUB_TOKEN;
 
@@ -92,7 +93,7 @@ async function runVerification() {
    */
   const probe = async (url: string): Promise<"ok" | "dead" | "skip"> => {
     try {
-      const r = await fetch(url, { redirect: "follow" });
+      const r = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(10000) });
       if (r.status === 404 || r.status === 410) return "dead";
       if (r.status >= 400) return "skip"; // 5xx / 401 / 403 : on ne juge pas
       const html = await r.text();
@@ -142,6 +143,7 @@ async function runVerification() {
       try {
         const r = await fetch("https://indexing.googleapis.com/v3/urlNotifications:publish", {
           method: "POST",
+          signal: AbortSignal.timeout(10000),
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${googleToken}` },
           body: JSON.stringify({ url: off.published_url, type: "URL_DELETED" }),
         });
@@ -160,7 +162,7 @@ async function runVerification() {
           // Récupère le sha du fichier
           const headRes = await fetch(
             `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${branch}`,
-            { headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github+json" } }
+            { headers: { Authorization: `Bearer ${ghToken}`, Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10000) }
           );
           if (headRes.ok) {
             const j = (await headRes.json()) as { sha?: string };
@@ -169,6 +171,7 @@ async function runVerification() {
                 `https://api.github.com/repos/${repo}/contents/${filePath}`,
                 {
                   method: "DELETE",
+                  signal: AbortSignal.timeout(10000),
                   headers: {
                     Authorization: `Bearer ${ghToken}`,
                     Accept: "application/vnd.github+json",
@@ -209,6 +212,7 @@ async function runVerification() {
     try {
       await fetch("https://api.resend.com/emails", {
         method: "POST",
+        signal: AbortSignal.timeout(10000),
         headers: {
           Authorization: `Bearer ${resendKey}`,
           "Content-Type": "application/json",
@@ -247,4 +251,9 @@ ${cleaned.map((c) => `<li><a href="${c.url}">${c.url}</a> — Google: ${c.deinde
     offenders: cleaned,
     blocked_urls: blockedRows.map((r) => ({ id: r.id, url: r.published_url })),
   });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    logAutopilot("verify_error", { error: msg });
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
+  }
 }

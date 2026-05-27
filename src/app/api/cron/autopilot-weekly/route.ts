@@ -35,6 +35,7 @@ async function runWeeklyAutopilot(request: Request): Promise<NextResponse> {
   try {
     const res = await fetch(`${baseUrl}/api/autopilot/weekly`, {
       method: "POST",
+      signal: AbortSignal.timeout(720000), // 12 min, slightly below maxDuration
       headers,
       body: JSON.stringify({}),
     });

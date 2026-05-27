@@ -174,18 +174,23 @@ export async function POST(request: Request) {
 }
 
 export async function GET() {
-  const sql = getSQL();
-  await ensureSerpTable(sql);
+  try {
+    const sql = getSQL();
+    await ensureSerpTable(sql);
 
-  // Recent insights from last 14 days
-  const rows = await sql`
-    SELECT h.site_id, s.name AS site_name, h.query, h.snapshot_at, h.results
-    FROM competitor_serp_history h
-    JOIN sites s ON s.id = h.site_id
-    WHERE h.snapshot_at >= CURRENT_DATE - 14
-    ORDER BY h.snapshot_at DESC
-    LIMIT 100
-  `;
+    // Recent insights from last 14 days
+    const rows = await sql`
+      SELECT h.site_id, s.name AS site_name, h.query, h.snapshot_at, h.results
+      FROM competitor_serp_history h
+      JOIN sites s ON s.id = h.site_id
+      WHERE h.snapshot_at >= CURRENT_DATE - 14
+      ORDER BY h.snapshot_at DESC
+      LIMIT 100
+    `;
 
-  return NextResponse.json({ success: true, snapshots: rows });
+    return NextResponse.json({ success: true, snapshots: rows });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ success: false, error: msg, snapshots: [] }, { status: 500 });
+  }
 }

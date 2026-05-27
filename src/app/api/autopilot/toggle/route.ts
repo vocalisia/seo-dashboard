@@ -23,26 +23,36 @@ export async function GET() {
   const auth = await requireApiSession();
   if (auth.unauthorized) return auth.unauthorized;
 
-  const sql = getSQL();
-  await ensureConfig(sql);
-  const rows = await sql`SELECT value, updated_at FROM app_config WHERE key = 'autopilot_enabled'`;
-  const enabled = rows.length > 0 ? rows[0].value === true : true;
-  return NextResponse.json({ enabled, updated_at: rows[0]?.updated_at ?? null });
+  try {
+    const sql = getSQL();
+    await ensureConfig(sql);
+    const rows = await sql`SELECT value, updated_at FROM app_config WHERE key = 'autopilot_enabled'`;
+    const enabled = rows.length > 0 ? rows[0].value === true : true;
+    return NextResponse.json({ enabled, updated_at: rows[0]?.updated_at ?? null });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ error: msg, enabled: true }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
   const auth = await requireApiSession();
   if (auth.unauthorized) return auth.unauthorized;
 
-  const sql = getSQL();
-  await ensureConfig(sql);
+  try {
+    const sql = getSQL();
+    await ensureConfig(sql);
 
-  const body = await req.json().catch(() => ({}));
-  const enabled = !!body.enabled;
-  await sql`
-    INSERT INTO app_config (key, value, updated_at)
-    VALUES ('autopilot_enabled', ${JSON.stringify(enabled)}::jsonb, NOW())
-    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
-  `;
-  return NextResponse.json({ success: true, enabled });
+    const body = await req.json().catch(() => ({}));
+    const enabled = !!body.enabled;
+    await sql`
+      INSERT INTO app_config (key, value, updated_at)
+      VALUES ('autopilot_enabled', ${JSON.stringify(enabled)}::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    `;
+    return NextResponse.json({ success: true, enabled });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
+  }
 }
