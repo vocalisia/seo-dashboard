@@ -16,6 +16,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+      : "https://seo-dashboard-one.vercel.app")
+  ),
   title: "SEO Dashboard",
   description: "Dashboard SEO multi-sites",
 };
