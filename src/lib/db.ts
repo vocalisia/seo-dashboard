@@ -141,6 +141,55 @@ export async function initDB() {
   await sql`CREATE INDEX IF NOT EXISTS idx_autopilot_lang ON autopilot_runs(site_id, language, created_at DESC)`;
 
   await ensureOpportunitySchema();
+  await ensureSchema();
+}
+
+// Idempotent migrations for new features (keyword planner import, trends, pagespeed cron).
+// Safe to call multiple times. Each statement uses IF NOT EXISTS guards.
+export async function ensureSchema(): Promise<void> {
+  const sql = getSQL();
+
+  // tracked_keywords — columns referenced by Keyword Planner import + tracker UI
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS market VARCHAR(8)`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_fr INTEGER`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_market INTEGER`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_source VARCHAR(60)`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS confidence DECIMAL(4,3)`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS competition VARCHAR(20)`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS cpc_low DECIMAL(8,2)`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS cpc_high DECIMAL(8,2)`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS current_position DECIMAL(6,2)`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS current_impressions INTEGER`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS current_clicks INTEGER`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS position_history JSONB DEFAULT '[]'::jsonb`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_updated_at TIMESTAMP`;
+
+  // Idempotent UPSERT match key: (site_id, LOWER(keyword))
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_keywords_site_kw_lower
+      ON tracked_keywords(site_id, LOWER(keyword))
+  `;
+
+  // keyword_trends — 12-month relative-interest series from Google Trends
+  await sql`
+    CREATE TABLE IF NOT EXISTS keyword_trends (
+      id SERIAL PRIMARY KEY,
+      site_id INTEGER REFERENCES sites(id),
+      keyword VARCHAR(500) NOT NULL,
+      geo VARCHAR(8) NOT NULL,
+      trend_data JSONB NOT NULL,
+      fetched_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_keyword_trends_unique
+      ON keyword_trends(COALESCE(site_id, 0), LOWER(keyword), geo)
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_keyword_trends_fetched ON keyword_trends(fetched_at DESC)`;
+
+  // pagespeed_scores — strategy column so daily cron stores per-strategy rows + indices
+  await sql`ALTER TABLE pagespeed_scores ADD COLUMN IF NOT EXISTS strategy VARCHAR(10)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pagespeed_site_checked ON pagespeed_scores(site_id, checked_at DESC)`;
 }
 
 export async function ensureOpportunitySchema() {

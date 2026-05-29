@@ -2,7 +2,8 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Filter, TrendingUp } from "lucide-react";
+import { ArrowLeft, Loader2, Filter, TrendingUp, BarChart3 } from "lucide-react";
+import { Sparkline } from "@/components/Sparkline";
 
 interface SiteRow {
   id: number;
@@ -52,6 +53,34 @@ export default function TrackedKeywordsPage() {
   const [minVol, setMinVol] = useState<number>(0);
   const [onlyQuickWins, setOnlyQuickWins] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [trendsByKw, setTrendsByKw] = useState<Record<string, number[] | "loading" | "failed">>({});
+
+  async function loadTrends(): Promise<void> {
+    const visible = keywords.slice(0, 50);
+    setTrendsByKw((prev) => {
+      const next = { ...prev };
+      for (const k of visible) {
+        const key = `${k.site_id}::${k.keyword.toLowerCase()}`;
+        if (!next[key]) next[key] = "loading";
+      }
+      return next;
+    });
+    for (const k of visible) {
+      const key = `${k.site_id}::${k.keyword.toLowerCase()}`;
+      try {
+        const geo = k.market || "";
+        const r = await fetch(
+          `/api/keyword-trends?keyword=${encodeURIComponent(k.keyword)}&geo=${geo}&site_id=${k.site_id}`
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as { points?: Array<{ value: number }> };
+        const vals = (j.points ?? []).map((p) => Number(p.value) || 0);
+        setTrendsByKw((prev) => ({ ...prev, [key]: vals.length > 1 ? vals : "failed" }));
+      } catch {
+        setTrendsByKw((prev) => ({ ...prev, [key]: "failed" }));
+      }
+    }
+  }
 
   useEffect(() => {
     load();
@@ -140,6 +169,14 @@ export default function TrackedKeywordsPage() {
             Quick-wins only (pos 4-15, vol &gt; 100)
           </label>
 
+          <button
+            onClick={() => void loadTrends()}
+            className="text-xs px-2 py-1 bg-gray-800 border border-gray-700 rounded hover:bg-gray-700 flex items-center gap-1"
+            title="Load Google Trends 12-month sparklines (top 50 rows)"
+          >
+            <BarChart3 className="w-3 h-3" /> Load trends
+          </button>
+
           <div className="ml-auto text-xs text-gray-400">
             <span className="mr-3">{keywords.length} keywords</span>
             <span className="mr-3">Vol total: {totals.totalVol.toLocaleString()}</span>
@@ -176,6 +213,7 @@ export default function TrackedKeywordsPage() {
                   <th className="px-3 py-3 text-right">Clicks</th>
                   <th className="px-3 py-3 text-right">Vol FR</th>
                   <th className="px-3 py-3 text-right">Vol Market</th>
+                  <th className="px-3 py-3 text-left">Trend 12m</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800">
@@ -198,6 +236,16 @@ export default function TrackedKeywordsPage() {
                     </td>
                     <td className="px-3 py-2 text-right text-yellow-300 font-medium">
                       {k.volume_market ? k.volume_market.toLocaleString() : "-"}
+                    </td>
+                    <td className="px-3 py-2">
+                      {(() => {
+                        const key = `${k.site_id}::${k.keyword.toLowerCase()}`;
+                        const t = trendsByKw[key];
+                        if (t === "loading") return <span className="text-xs text-gray-500">…</span>;
+                        if (t === "failed" || t === undefined)
+                          return <span className="text-xs text-gray-600">—</span>;
+                        return <Sparkline values={t} color="blue" />;
+                      })()}
                     </td>
                   </tr>
                 ))}

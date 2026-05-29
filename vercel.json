@@ -8,6 +8,8 @@
     { "path": "/api/cron/autopilot-weekly", "schedule": "0 9 * * 1" },
     { "path": "/api/cron/position-drift-watch", "schedule": "0 6 * * *" },
     { "path": "/api/cron/indexation-queue", "schedule": "0 8 * * *" },
-    { "path": "/api/cron/ga4-daily", "schedule": "15 8 * * *" }
+    { "path": "/api/cron/ga4-daily", "schedule": "15 8 * * *" },
+    { "path": "/api/cron/pagespeed-daily", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/trends-weekly", "schedule": "0 5 * * 1" }
   ]
 }
