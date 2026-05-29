@@ -14,8 +14,10 @@ import { logError, logger } from "@/lib/logger";
 
 export interface LLMScanFindings {
   llms_txt_present: boolean;
+  llms_txt_valid: boolean; // true only if real text/markdown content, not HTML 404
   llms_txt_content: string | null;
   ai_bots_allowed: string[];
+  ai_bots_allowed_explicitly: string[]; // bots with own User-agent block
   ai_bots_disallowed: string[];
   schemas_detected: string[];
   has_open_graph: boolean;
@@ -48,6 +50,7 @@ const SCHEMA_TYPES_OF_INTEREST = [
   "Article",
   "NewsArticle",
   "BlogPosting",
+  "TechArticle",
   "Organization",
   "WebSite",
   "Product",
@@ -55,6 +58,15 @@ const SCHEMA_TYPES_OF_INTEREST = [
   "BreadcrumbList",
   "VideoObject",
   "Person",
+  // Advanced LLM-friendly schemas (bonus tier)
+  "DefinedTermSet",
+  "DefinedTerm",
+  "Dataset",
+  "Course",
+  "LearningResource",
+  "ClaimReview",
+  "QAPage",
+  "Recipe",
 ];
 
 const FETCH_TIMEOUT_MS = 10_000;
@@ -133,15 +145,18 @@ async function fetchText(url: string): Promise<string | null> {
 
 /**
  * Parse robots.txt to find which AI bots are explicitly allowed/disallowed.
- * Returns names of bots EXPLICITLY allowed (i.e. NOT disallowed for "/" in their User-agent block).
  *
- * Heuristic:
- *  - A bot is "disallowed" if its User-agent block contains `Disallow: /`.
- *  - A bot is "allowed" if its block exists with `Allow: /` or `Disallow:` (empty), or no rule at all.
- *  - "*"" wildcard with `Disallow: /` is treated as disallow for all bots.
+ * Returns 3 buckets:
+ *  - ai_bots_allowed_explicitly: bots with their OWN User-agent block (allowed via Allow:/ or empty Disallow:)
+ *  - ai_bots_allowed: ANY bot not blocked (includes wildcard permissive defaults — false positive risk)
+ *  - ai_bots_disallowed: explicitly disallowed for "/"
+ *
+ * Scoring should prefer ai_bots_allowed_explicitly to avoid rewarding sites that
+ * simply have no robots.txt or a generic User-agent: * with no AI mention.
  */
 export function parseRobotsTxt(content: string): {
   ai_bots_allowed: string[];
+  ai_bots_allowed_explicitly: string[];
   ai_bots_disallowed: string[];
 } {
   const blocks: { agents: string[]; rules: { type: string; value: string }[] }[] = [];
@@ -181,6 +196,7 @@ export function parseRobotsTxt(content: string): {
     : false;
 
   const allowed: string[] = [];
+  const allowedExplicitly: string[] = [];
   const disallowed: string[] = [];
 
   for (const botName of AI_BOT_NAMES) {
@@ -188,16 +204,24 @@ export function parseRobotsTxt(content: string): {
       b.agents.some((a) => a.toLowerCase() === botName.toLowerCase()),
     );
     if (botBlock) {
-      if (isDisallowedAll(botBlock.rules)) disallowed.push(botName);
-      else allowed.push(botName);
+      if (isDisallowedAll(botBlock.rules)) {
+        disallowed.push(botName);
+      } else {
+        allowed.push(botName);
+        allowedExplicitly.push(botName);
+      }
     } else {
-      // No explicit rule for this bot — falls under "*" wildcard
+      // No explicit rule — falls under "*" wildcard (PASSIVE allow if wildcard not blocked)
       if (wildcardDisallowAll) disallowed.push(botName);
-      else allowed.push(botName);
+      else allowed.push(botName); // NOT in allowedExplicitly (passive)
     }
   }
 
-  return { ai_bots_allowed: allowed, ai_bots_disallowed: disallowed };
+  return {
+    ai_bots_allowed: allowed,
+    ai_bots_allowed_explicitly: allowedExplicitly,
+    ai_bots_disallowed: disallowed,
+  };
 }
 
 /**
@@ -263,34 +287,73 @@ function extractApplicationName(html: string): string | null {
 }
 
 /**
- * Compute the LLM-readiness score (0-100) and the list of human-readable recommendations.
+ * Heuristically detect whether the /llms.txt response is a REAL llms.txt or a
+ * WordPress-style HTML 404 served with HTTP 200 (false positive).
  *
- * Weights (per spec):
- *   - llms.txt present         +30
- *   - AI bots allowed (>=1)    +20
- *   - FAQPage schema           +15
- *   - HowTo schema             +10
- *   - Article + Person/author  +10
- *   - Organization schema      +10
- *   - Open Graph complete      +5
+ * Real llms.txt: plain text/markdown. Starts with "#" (markdown header), or "---"
+ * front-matter, or "User-agent:"/"Allow:" rules, or has many ">" lines (markdown bullets).
+ * False positive: starts with "<!DOCTYPE", "<html", or contains "<head>" etc.
+ */
+export function isValidLlmsTxt(content: string | null): boolean {
+  if (!content) return false;
+  const t = content.trim();
+  if (t.length < 20) return false;
+  const lower = t.slice(0, 200).toLowerCase();
+  if (lower.includes("<!doctype") || lower.includes("<html") || lower.includes("<head>")) return false;
+  // Must look like markdown/text: has at least one structural marker
+  const startsWithHeader = /^#\s+\w/m.test(t);
+  const hasMarkdownLinks = /\[.+\]\(https?:\/\/.+\)/.test(t);
+  const hasUserAgent = /^user-agent\s*:/im.test(t);
+  const hasAllowOrSitemap = /^(allow|disallow|sitemap)\s*:/im.test(t);
+  const hasFrontmatter = t.startsWith("---");
+  return startsWithHeader || hasMarkdownLinks || hasUserAgent || hasAllowOrSitemap || hasFrontmatter;
+}
+
+/**
+ * Compute the LLM-readiness score (0-110, capped at 100) with stricter logic
+ * that avoids the 2 false positives in the v1 scorer:
+ *   1. llms.txt: only counts if content is plain text/markdown (not HTML 404)
+ *   2. AI bots: prefers EXPLICIT mention in robots.txt over permissive default
+ *
+ * Base weights:
+ *   - llms.txt VALID                     +30  (was: any HTTP 200, now: real content)
+ *   - AI bots explicitly allowed (>=1)   +20  (named GPTBot/ClaudeBot blocks)
+ *   - AI bots passively allowed (no explicit block) +5 (partial credit only)
+ *   - FAQPage schema                     +15
+ *   - HowTo schema                       +10
+ *   - Article + Person/author            +10
+ *   - Organization schema                +10
+ *   - Open Graph complete                +5
+ *
+ * Bonus (LLM-authority schemas, common in top-cited sites):
+ *   - DefinedTermSet/DefinedTerm         +5  (glossaries: LLMs cite definitions)
+ *   - Dataset                            +5  (LLMs cite data sources)
+ *   - Course / LearningResource          +3  (education signal)
+ *   - ClaimReview                        +2  (fact-check signal)
  */
 export function scoreReadiness(
-  llmsTxtPresent: boolean,
-  aiBotsAllowed: string[],
+  llmsTxtValid: boolean,
+  aiBotsAllowedExplicitly: string[],
+  aiBotsAllowedPassively: string[],
   schemasDetected: string[],
   hasOG: boolean,
 ): { score: number; recommendations: string[] } {
   let score = 0;
   const recs: string[] = [];
 
-  if (llmsTxtPresent) {
+  if (llmsTxtValid) {
     score += 30;
   } else {
-    recs.push("Ajouter un fichier /llms.txt à la racine (+30 pts)");
+    recs.push("Créer un VRAI /llms.txt à la racine (texte markdown, pas HTML 404) (+30 pts)");
   }
 
-  if (aiBotsAllowed.length > 0) {
+  if (aiBotsAllowedExplicitly.length > 0) {
     score += 20;
+  } else if (aiBotsAllowedPassively.length > 0) {
+    score += 5;
+    recs.push(
+      "Mentionner explicitement les bots IA (User-agent: GPTBot / ClaudeBot / PerplexityBot) dans robots.txt avec Allow: / (+15 pts)",
+    );
   } else {
     recs.push(
       "Autoriser au moins un AI bot (GPTBot, ClaudeBot, PerplexityBot…) dans robots.txt (+20 pts)",
@@ -300,20 +363,20 @@ export function scoreReadiness(
   const hasSchema = (name: string) =>
     schemasDetected.some((s) => s.toLowerCase() === name.toLowerCase());
 
-  if (hasSchema("FAQPage")) {
+  if (hasSchema("FAQPage") || hasSchema("QAPage")) {
     score += 15;
   } else {
     recs.push("Ajouter un schema JSON-LD FAQPage sur pages clés (+15 pts)");
   }
 
-  if (hasSchema("HowTo")) {
+  if (hasSchema("HowTo") || hasSchema("Recipe")) {
     score += 10;
   } else {
     recs.push("Ajouter un schema HowTo sur tutoriels/guides (+10 pts)");
   }
 
   const hasArticle =
-    hasSchema("Article") || hasSchema("NewsArticle") || hasSchema("BlogPosting");
+    hasSchema("Article") || hasSchema("NewsArticle") || hasSchema("BlogPosting") || hasSchema("TechArticle");
   const hasAuthor = hasSchema("Person");
   if (hasArticle && hasAuthor) {
     score += 10;
@@ -335,6 +398,24 @@ export function scoreReadiness(
     recs.push("Compléter les balises Open Graph (og:title, og:image, og:type) (+5 pts)");
   }
 
+  // Bonus tier (LLM-citation magnets)
+  if (hasSchema("DefinedTermSet") || hasSchema("DefinedTerm")) {
+    score += 5;
+  } else {
+    recs.push("BONUS: ajouter un schema DefinedTermSet (glossaire) — les LLM citent les définitions (+5 pts)");
+  }
+  if (hasSchema("Dataset")) {
+    score += 5;
+  } else {
+    recs.push("BONUS: ajouter un schema Dataset si tu publies des données chiffrées (+5 pts)");
+  }
+  if (hasSchema("Course") || hasSchema("LearningResource")) {
+    score += 3;
+  }
+  if (hasSchema("ClaimReview")) {
+    score += 2;
+  }
+
   return { score: Math.min(100, score), recommendations: recs };
 }
 
@@ -354,6 +435,7 @@ export async function scanCompetitor(domain: string): Promise<LLMScanFindings> {
     errors.push({ resource: "/llms.txt", error: String(err) });
   }
   const llmsTxtPresent = !!llmsTxtContent && llmsTxtContent.length > 10;
+  const llmsTxtValid = isValidLlmsTxt(llmsTxtContent);
 
   // 2) /robots.txt
   let robotsContent: string | null = null;
@@ -362,9 +444,9 @@ export async function scanCompetitor(domain: string): Promise<LLMScanFindings> {
   } catch (err) {
     errors.push({ resource: "/robots.txt", error: String(err) });
   }
-  const { ai_bots_allowed, ai_bots_disallowed } = robotsContent
+  const { ai_bots_allowed, ai_bots_allowed_explicitly, ai_bots_disallowed } = robotsContent
     ? parseRobotsTxt(robotsContent)
-    : { ai_bots_allowed: AI_BOT_NAMES, ai_bots_disallowed: [] };
+    : { ai_bots_allowed: AI_BOT_NAMES, ai_bots_allowed_explicitly: [], ai_bots_disallowed: [] };
 
   // 3) HTML head
   let html: string | null = null;
@@ -381,18 +463,22 @@ export async function scanCompetitor(domain: string): Promise<LLMScanFindings> {
   const linkRel = html ? hasLlmsLinkRel(html) : false;
   const appName = html ? extractApplicationName(html) : null;
 
-  // 4) Score
+  // 4) Score (uses STRICT signals: valid llms.txt content + explicitly-named AI bots)
+  const passiveAllowed = ai_bots_allowed.filter((b) => !ai_bots_allowed_explicitly.includes(b));
   const { score, recommendations } = scoreReadiness(
-    llmsTxtPresent,
-    ai_bots_allowed,
+    llmsTxtValid,
+    ai_bots_allowed_explicitly,
+    passiveAllowed,
     schemasDetected,
     ogPresent,
   );
 
   return {
     llms_txt_present: llmsTxtPresent,
+    llms_txt_valid: llmsTxtValid,
     llms_txt_content: llmsTxtContent ? llmsTxtContent.slice(0, 8000) : null,
     ai_bots_allowed,
+    ai_bots_allowed_explicitly,
     ai_bots_disallowed,
     schemas_detected: schemasDetected,
     has_open_graph: ogPresent,
@@ -428,8 +514,10 @@ export async function scanCompetitors(
           domain: d,
           findings: {
             llms_txt_present: false,
+            llms_txt_valid: false,
             llms_txt_content: null,
             ai_bots_allowed: [],
+            ai_bots_allowed_explicitly: [],
             ai_bots_disallowed: [],
             schemas_detected: [],
             has_open_graph: false,
