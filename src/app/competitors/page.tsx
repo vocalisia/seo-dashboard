@@ -164,6 +164,7 @@ export default function CompetitorsPage() {
   const [competitorKw, setCompetitorKw] = useState<Record<string, CompetitorKeywords>>({});
   const [kwLoading, setKwLoading] = useState<string | null>(null);
   const [llmScans, setLlmScans] = useState<Record<string, LLMScanResult>>({});
+  const [ownSiteScan, setOwnSiteScan] = useState<LLMScanResult | null>(null);
   const [llmScanLoading, setLlmScanLoading] = useState(false);
   const [llmScanRunning, setLlmScanRunning] = useState(false);
 
@@ -226,11 +227,12 @@ export default function CompetitorsPage() {
     setLlmScanLoading(true);
     try {
       const res = await fetch(`/api/competitors/llm-scan?site_id=${selectedSite}`);
-      const d = await res.json() as { success: boolean; scans?: LLMScanResult[] };
+      const d = await res.json() as { success: boolean; scans?: LLMScanResult[]; own_site_scan?: LLMScanResult | null };
       if (d.success && d.scans) {
         const map: Record<string, LLMScanResult> = {};
         for (const s of d.scans) map[s.competitor_domain.toLowerCase()] = s;
         setLlmScans(map);
+        setOwnSiteScan(d.own_site_scan ?? null);
       }
     } catch { /* ignore */ }
     setLlmScanLoading(false);
@@ -243,13 +245,27 @@ export default function CompetitorsPage() {
       const res = await fetch(`/api/competitors/llm-scan?site_id=${selectedSite}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ force_refresh: forceRefresh }),
+        body: JSON.stringify({ force_refresh: forceRefresh, include_own_site: true }),
       });
       const d = await res.json() as { success: boolean; scans?: LLMScanResult[]; scanned_now?: number; from_cache?: number; error?: string };
       if (d.success && d.scans) {
+        // Identify own site scan and separate it
+        const siteObj = sites.find((s) => s.id === selectedSite);
+        const ownDomain = siteObj
+          ? siteObj.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "").toLowerCase()
+          : "";
         const map: Record<string, LLMScanResult> = {};
-        for (const s of d.scans) map[s.competitor_domain.toLowerCase()] = s;
+        let own: LLMScanResult | null = null;
+        for (const s of d.scans) {
+          const sDom = s.competitor_domain.toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
+          if (ownDomain && (sDom === ownDomain || sDom.includes(ownDomain) || ownDomain.includes(sDom))) {
+            own = s;
+          } else {
+            map[s.competitor_domain.toLowerCase()] = s;
+          }
+        }
         setLlmScans(map);
+        setOwnSiteScan(own);
         showNotification("success", `LLM scan: ${d.scanned_now ?? 0} fresh, ${d.from_cache ?? 0} from cache (7d)`);
       } else {
         showNotification("error", d.error ?? "Scan échoué");
@@ -782,6 +798,53 @@ export default function CompetitorsPage() {
                   )}
                 </div>
               </div>
+
+              {/* Own site LLM readiness — highlighted above competitors */}
+              {ownSiteScan && (
+                <div className="mb-4 rounded-lg border-2 border-blue-500/40 bg-gradient-to-br from-blue-900/20 to-purple-900/20 p-4">
+                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <Shield className="w-4 h-4 text-blue-400" />
+                      <span className="text-sm font-semibold text-blue-300">TON SITE — {sites.find((s) => s.id === selectedSite)?.name ?? ""}</span>
+                      <span className="text-xs text-gray-400">{ownSiteScan.competitor_domain}</span>
+                    </div>
+                    <div className={`text-2xl font-bold ${
+                      ownSiteScan.llm_readiness_score >= 70 ? "text-green-400"
+                        : ownSiteScan.llm_readiness_score >= 40 ? "text-orange-400"
+                          : "text-red-400"
+                    }`}>
+                      LLM {ownSiteScan.llm_readiness_score}/100
+                    </div>
+                  </div>
+                  {/* Quick stats inline */}
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className={`px-2 py-1 rounded ${ownSiteScan.llms_txt_present ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+                      llms.txt {ownSiteScan.llms_txt_present ? "✓" : "✗"}
+                    </span>
+                    <span className="px-2 py-1 rounded bg-gray-800 text-gray-300">
+                      {ownSiteScan.ai_bots_allowed.length} bots IA autorisés
+                    </span>
+                    <span className="px-2 py-1 rounded bg-gray-800 text-gray-300">
+                      {ownSiteScan.schemas_detected.length} schemas
+                    </span>
+                    {ownSiteScan.has_open_graph && (
+                      <span className="px-2 py-1 rounded bg-green-500/10 text-green-400">OG ✓</span>
+                    )}
+                  </div>
+                  {/* Top 3 recommendations */}
+                  {ownSiteScan.recommendations.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-blue-500/20">
+                      <div className="text-xs text-gray-400 mb-1.5">À AMÉLIORER POUR ÊTRE MIEUX CITÉ PAR LES LLM :</div>
+                      <ul className="text-xs text-gray-200 space-y-1">
+                        {ownSiteScan.recommendations.slice(0, 3).map((rec, i) => (
+                          <li key={i} className="flex gap-2"><span className="text-blue-400">→</span>{rec}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {competitors.map((c) => {
                   const isActive = activeCompetitorFilter === c.domain;

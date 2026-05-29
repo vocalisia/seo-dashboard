@@ -101,11 +101,29 @@ export async function GET(req: NextRequest) {
     `) as CachedScanRow[];
 
     const scans = rows.map(cacheRowToPayload);
+
+    // Identify the "own site" scan (if scanned) by matching against sites.url
+    const siteRows = (await sql`SELECT url FROM sites WHERE id = ${siteId} LIMIT 1`) as { url: string }[];
+    const ownDomain = siteRows[0]?.url
+      ? siteRows[0].url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "").toLowerCase()
+      : null;
+    let own_site_scan: ScanResultPayload | null = null;
+    const competitor_scans: ScanResultPayload[] = [];
+    for (const s of scans) {
+      const sDom = s.competitor_domain.toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
+      if (ownDomain && (sDom === ownDomain || sDom.includes(ownDomain) || ownDomain.includes(sDom))) {
+        own_site_scan = s;
+      } else {
+        competitor_scans.push(s);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       site_id: siteId,
-      scans,
-      total: scans.length,
+      own_site_scan,
+      scans: competitor_scans,
+      total: competitor_scans.length,
       cache_age_days: CACHE_DAYS,
     });
   } catch (err) {
@@ -140,13 +158,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let body: { force_refresh?: boolean; domains?: string[] } = {};
+  let body: { force_refresh?: boolean; domains?: string[]; include_own_site?: boolean } = {};
   try {
-    body = (await req.json()) as { force_refresh?: boolean; domains?: string[] };
+    body = (await req.json()) as { force_refresh?: boolean; domains?: string[]; include_own_site?: boolean };
   } catch {
     body = {};
   }
   const forceRefresh = !!body.force_refresh;
+  const includeOwnSite = body.include_own_site !== false; // default true
 
   const sql = getSQL();
 
@@ -168,6 +187,17 @@ export async function POST(req: NextRequest) {
       domains = rows
         .map((r) => r.competitor_domain)
         .filter((d): d is string => !!d && d.length > 0);
+    }
+
+    // Prepend the site's own URL when include_own_site (default true)
+    if (includeOwnSite) {
+      const siteRows = (await sql`SELECT url FROM sites WHERE id = ${siteId} LIMIT 1`) as { url: string }[];
+      const ownUrl = siteRows[0]?.url;
+      if (ownUrl) {
+        const ownDomain = ownUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "").toLowerCase();
+        const alreadyIn = domains.some((d) => d.toLowerCase().includes(ownDomain) || ownDomain.includes(d.toLowerCase()));
+        if (!alreadyIn) domains = [ownDomain, ...domains];
+      }
     }
 
     if (domains.length === 0) {
