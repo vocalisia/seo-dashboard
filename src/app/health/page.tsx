@@ -1,10 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, HeartPulse, CheckCircle, AlertTriangle, XCircle, Link2, ExternalLink } from "lucide-react";
+import { ArrowLeft, Loader2, HeartPulse, CheckCircle, AlertTriangle, XCircle, Link2, ExternalLink, Bot } from "lucide-react";
 import Link from "next/link";
 
 interface Site { id: number; name: string; url: string; }
+
+interface CrawlStats {
+  crawl_errors: number;
+  robots_blocks: number;
+  server_errors: number;
+  last_crawl: string | null;
+  sitemap_status: "ok" | "warning" | "error" | "unknown";
+  sitemaps_total: number;
+  sitemaps_pending: number;
+  property: string;
+}
 
 interface HealthData {
   success: boolean;
@@ -12,6 +23,7 @@ interface HealthData {
   overall_score: number;
   breakdown: { gsc_score: number; pagespeed_score: number; content_score: number; position_score: number };
   recommendations: string[];
+  crawl_stats?: CrawlStats | null;
 }
 
 interface BrokenLinksData {
@@ -191,6 +203,57 @@ export default function HealthPage() {
               <ScoreBar label="Contenu (articles publiés)" score={health.breakdown.content_score} />
               <ScoreBar label="Positionnement (avg position)" score={health.breakdown.position_score} />
             </div>
+
+            {/* Crawl Stats (GSC) — additional info, does not affect score */}
+            {health.crawl_stats && (
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                <h2 className="font-medium text-gray-200 mb-3 flex items-center gap-2">
+                  <Bot className="w-4 h-4 text-sky-400" />
+                  Crawl Stats (GSC)
+                </h2>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                  <div className="bg-gray-800/40 rounded-lg p-3">
+                    <div className="text-xs text-gray-400">Crawl errors</div>
+                    <div className={`text-lg font-semibold ${health.crawl_stats.crawl_errors > 0 ? "text-red-400" : "text-emerald-400"}`}>
+                      {health.crawl_stats.crawl_errors}
+                    </div>
+                  </div>
+                  <div className="bg-gray-800/40 rounded-lg p-3">
+                    <div className="text-xs text-gray-400">Robots blocks</div>
+                    <div className={`text-lg font-semibold ${health.crawl_stats.robots_blocks > 0 ? "text-yellow-400" : "text-emerald-400"}`}>
+                      {health.crawl_stats.robots_blocks}
+                    </div>
+                  </div>
+                  <div className="bg-gray-800/40 rounded-lg p-3">
+                    <div className="text-xs text-gray-400">Server errors</div>
+                    <div className={`text-lg font-semibold ${health.crawl_stats.server_errors > 0 ? "text-red-400" : "text-emerald-400"}`}>
+                      {health.crawl_stats.server_errors}
+                    </div>
+                  </div>
+                  <div className="bg-gray-800/40 rounded-lg p-3">
+                    <div className="text-xs text-gray-400">Sitemap status</div>
+                    <div className={`text-lg font-semibold ${
+                      health.crawl_stats.sitemap_status === "ok" ? "text-emerald-400"
+                      : health.crawl_stats.sitemap_status === "warning" ? "text-yellow-400"
+                      : health.crawl_stats.sitemap_status === "error" ? "text-red-400" : "text-gray-400"
+                    }`}>
+                      {health.crawl_stats.sitemap_status}
+                    </div>
+                  </div>
+                  <div className="bg-gray-800/40 rounded-lg p-3">
+                    <div className="text-xs text-gray-400">Last crawl</div>
+                    <div className="text-sm font-medium text-gray-200">
+                      {health.crawl_stats.last_crawl
+                        ? new Date(health.crawl_stats.last_crawl).toLocaleDateString()
+                        : "—"}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs text-gray-500 mt-3">
+                  {health.crawl_stats.sitemaps_total} sitemaps total · {health.crawl_stats.sitemaps_pending} pending · {health.crawl_stats.property}
+                </div>
+              </div>
+            )}
 
             {/* Recommendations */}
             {health.recommendations.length > 0 && (

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Code2, Loader2, X } from "lucide-react";
+import { ArrowLeft, Code2, Loader2, X, CheckCircle2, XCircle } from "lucide-react";
 
 interface Site {
   id: number;
@@ -17,6 +17,12 @@ interface SchemaResult {
   warnings: string[];
   rawJson: string | null;
   status: "ok" | "warn" | "error" | "no-schema";
+  google_verified?: boolean;
+  google_types?: string[];
+  google_errors?: string[];
+  google_warnings?: string[];
+  google_verdict?: string;
+  google_discrepancies?: string[];
 }
 
 interface AuditResponse {
@@ -24,6 +30,8 @@ interface AuditResponse {
   score: number;
   total: number;
   withSchema: number;
+  googleVerifiedCount?: number;
+  verifiedWithGoogle?: boolean;
 }
 
 const STATUS_ICON: Record<SchemaResult["status"], string> = {
@@ -46,6 +54,7 @@ export default function SchemaPage() {
   const [loading, setLoading] = useState(false);
   const [audit, setAudit] = useState<AuditResponse | null>(null);
   const [modal, setModal] = useState<SchemaResult | null>(null);
+  const [verifyWithGoogle, setVerifyWithGoogle] = useState(false);
 
   useEffect(() => {
     fetch("/api/sites")
@@ -66,7 +75,7 @@ export default function SchemaPage() {
       const res = await fetch("/api/schema-audit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ siteUrl: site.url }),
+        body: JSON.stringify({ siteUrl: site.url, verifyWithGoogle, maxVerify: 10 }),
       });
       const d = await res.json() as AuditResponse;
       setAudit(d);
@@ -113,12 +122,21 @@ export default function SchemaPage() {
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Code2 className="w-4 h-4" />}
             {loading ? "Analyse en cours..." : "Lancer l'audit"}
           </button>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={verifyWithGoogle}
+              onChange={(e) => setVerifyWithGoogle(e.target.checked)}
+              className="accent-indigo-500"
+            />
+            Vérifier avec Google Rich Results API (10 premières pages)
+          </label>
         </div>
 
         {audit && (
           <>
             {/* Score */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className={`grid ${audit.verifiedWithGoogle ? "grid-cols-4" : "grid-cols-3"} gap-4`}>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                 <div className={`text-3xl font-bold ${scoreColor}`}>{audit.score}%</div>
                 <div className="text-xs text-gray-400 mt-1">Pages avec schema</div>
@@ -131,6 +149,12 @@ export default function SchemaPage() {
                 <div className="text-3xl font-bold text-gray-400">{audit.total - audit.withSchema}</div>
                 <div className="text-xs text-gray-400 mt-1">Pages sans schema</div>
               </div>
+              {audit.verifiedWithGoogle && (
+                <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                  <div className="text-3xl font-bold text-emerald-400">{audit.googleVerifiedCount ?? 0}</div>
+                  <div className="text-xs text-gray-400 mt-1">Vérifié par Google</div>
+                </div>
+              )}
             </div>
 
             {/* Table */}
@@ -147,6 +171,9 @@ export default function SchemaPage() {
                       <th className="px-4 py-3 text-left">Erreurs</th>
                       <th className="px-4 py-3 text-left">Warnings</th>
                       <th className="px-4 py-3 text-center">Statut</th>
+                      {audit.verifiedWithGoogle && (
+                        <th className="px-4 py-3 text-center" title="Google Rich Results API verdict">Google</th>
+                      )}
                       <th className="px-4 py-3 text-center">JSON-LD</th>
                     </tr>
                   </thead>
@@ -160,6 +187,22 @@ export default function SchemaPage() {
                         <td className={`px-4 py-2.5 text-center text-sm ${STATUS_COLOR[r.status]}`}>
                           {STATUS_ICON[r.status]}
                         </td>
+                        {audit.verifiedWithGoogle && (
+                          <td className="px-4 py-2.5 text-center" title={r.google_verdict ?? "Non vérifié"}>
+                            {r.google_verdict === undefined ? (
+                              <span className="text-gray-600 text-xs">—</span>
+                            ) : r.google_verified ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 inline" aria-label="Google verified" />
+                            ) : (
+                              <XCircle className="w-4 h-4 text-red-400 inline" aria-label="Google rejected" />
+                            )}
+                            {r.google_discrepancies && r.google_discrepancies.length > 0 && (
+                              <div className="text-[10px] text-amber-400 mt-0.5 truncate max-w-[120px]" title={r.google_discrepancies.join("; ")}>
+                                ⚠ divergence
+                              </div>
+                            )}
+                          </td>
+                        )}
                         <td className="px-4 py-2.5 text-center">
                           {r.rawJson ? (
                             <button

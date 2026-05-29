@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Bell, AlertTriangle, XCircle, Info, CheckCircle, Loader2, ExternalLink } from "lucide-react";
+import { ArrowLeft, Bell, AlertTriangle, XCircle, Info, CheckCircle, Loader2, ExternalLink, MessageSquare } from "lucide-react";
 import Link from "next/link";
 
 interface Alert {
@@ -16,6 +16,20 @@ interface Alert {
   created_at: string;
   site_name: string | null;
   site_url: string | null;
+}
+
+interface BrandMention {
+  id: number;
+  site_id: number;
+  source: string;
+  title: string;
+  url: string | null;
+  score: number;
+  created_at_external: string | null;
+  body: string | null;
+  sentiment: string;
+  scanned_at: string;
+  site_name: string | null;
 }
 
 const SEVERITY_STYLE: Record<string, { icon: typeof AlertTriangle; color: string; bg: string }> = {
@@ -104,6 +118,28 @@ export default function AlertsPage() {
   const [filterSeverity, setFilterSeverity] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [mentions, setMentions] = useState<BrandMention[]>([]);
+  const [mentionsLoading, setMentionsLoading] = useState(false);
+  const [scanningMentions, setScanningMentions] = useState(false);
+
+  async function fetchMentions() {
+    setMentionsLoading(true);
+    try {
+      const res = await fetch("/api/brand-mentions?limit=30");
+      const d = await res.json() as { mentions?: BrandMention[] };
+      setMentions(d.mentions ?? []);
+    } catch { /* ignore */ }
+    setMentionsLoading(false);
+  }
+
+  async function scanMentions() {
+    setScanningMentions(true);
+    try {
+      await fetch("/api/brand-mentions/scan", { method: "POST" });
+      await fetchMentions();
+    } catch { /* ignore */ }
+    setScanningMentions(false);
+  }
 
   async function fetchAlerts() {
     setLoading(true);
@@ -132,7 +168,7 @@ export default function AlertsPage() {
   }
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void fetchAlerts(); }, []);
+  useEffect(() => { void fetchAlerts(); void fetchMentions(); }, []);
 
   const siteNames = Array.from(new Set(alerts.map((a) => a.site_name).filter((n): n is string => n !== null)));
 
@@ -313,6 +349,73 @@ export default function AlertsPage() {
             })}
           </div>
         )}
+
+        {/* Mentions Reddit / HackerNews */}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-800 flex items-center gap-3">
+            <MessageSquare className="w-4 h-4 text-orange-400" />
+            <h2 className="font-medium text-gray-200">Mentions Reddit / HackerNews</h2>
+            <span className="text-xs text-gray-500">{mentions.length} récentes</span>
+            <button
+              onClick={scanMentions}
+              disabled={scanningMentions}
+              className="ml-auto px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded-lg text-xs font-medium flex items-center gap-2"
+            >
+              {scanningMentions ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
+              {scanningMentions ? "Scan…" : "Scanner maintenant"}
+            </button>
+          </div>
+          <div className="p-4">
+            {mentionsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
+              </div>
+            ) : mentions.length === 0 ? (
+              <div className="text-sm text-gray-500 text-center py-6">
+                Aucune mention pour le moment. Lance un scan pour interroger Reddit + HackerNews.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {mentions.map((m) => {
+                  const sentimentColor =
+                    m.sentiment === "positive"
+                      ? "text-emerald-400"
+                      : m.sentiment === "negative"
+                      ? "text-red-400"
+                      : "text-gray-400";
+                  return (
+                    <a
+                      key={m.id}
+                      href={m.url ?? "#"}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block bg-gray-800/50 border border-gray-700 hover:border-orange-700 rounded-lg p-3 transition-colors"
+                    >
+                      <div className="flex items-center gap-2 mb-1.5 text-xs">
+                        <span className={`px-1.5 py-0.5 rounded font-medium ${m.source === "reddit" ? "bg-orange-900/40 text-orange-300" : "bg-yellow-900/40 text-yellow-300"}`}>
+                          {m.source === "reddit" ? "Reddit" : "HN"}
+                        </span>
+                        {m.site_name && (
+                          <span className="text-blue-400">{m.site_name}</span>
+                        )}
+                        <span className={sentimentColor}>{m.sentiment}</span>
+                        <span className="text-gray-500 ml-auto">score {m.score}</span>
+                      </div>
+                      <div className="text-sm text-white line-clamp-2">{m.title}</div>
+                      {m.created_at_external && (
+                        <div className="text-xs text-gray-500 mt-1.5">
+                          {new Date(m.created_at_external).toLocaleDateString("fr-FR", {
+                            day: "2-digit", month: "2-digit", year: "numeric",
+                          })}
+                        </div>
+                      )}
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

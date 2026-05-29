@@ -1,10 +1,26 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Shield, BarChart3, ExternalLink } from "lucide-react";
+import { ArrowLeft, Loader2, Shield, BarChart3, ExternalLink, GraduationCap } from "lucide-react";
 import Link from "next/link";
 
 interface Site { id: number; name: string; url: string; }
+
+interface AcademicMention {
+  id: number;
+  site_id: number;
+  source_url: string | null;
+  title: string;
+  authors: string[] | null;
+  year: number | null;
+  doi: string | null;
+  cited_by_count: number;
+  source_type: string | null;
+  source_domain: string | null;
+  scanned_at: string;
+}
+
+interface AcademicStats { total: number; edu_gov: number; total_citations: number; }
 
 interface AuthorityData {
   success: boolean;
@@ -84,6 +100,36 @@ export default function AuthorityPage() {
   const [loading, setLoading] = useState(false);
   const [loadingAll, setLoadingAll] = useState(false);
   const [allScores, setAllScores] = useState<{ site: string; overall: number; id: number }[]>([]);
+  const [academicMentions, setAcademicMentions] = useState<AcademicMention[]>([]);
+  const [academicStats, setAcademicStats] = useState<AcademicStats | null>(null);
+  const [academicLoading, setAcademicLoading] = useState(false);
+  const [academicScanning, setAcademicScanning] = useState(false);
+
+  async function fetchAcademic(siteIdParam: number | "all" | null) {
+    if (!siteIdParam || siteIdParam === "all") {
+      setAcademicMentions([]);
+      setAcademicStats(null);
+      return;
+    }
+    setAcademicLoading(true);
+    try {
+      const res = await fetch(`/api/eeat/academic-mentions?site_id=${siteIdParam}&limit=20`);
+      const d = await res.json() as { mentions?: AcademicMention[]; stats?: AcademicStats };
+      setAcademicMentions(d.mentions ?? []);
+      setAcademicStats(d.stats ?? null);
+    } catch { setAcademicMentions([]); setAcademicStats(null); }
+    setAcademicLoading(false);
+  }
+
+  async function scanAcademic() {
+    if (!selectedSite || selectedSite === "all") return;
+    setAcademicScanning(true);
+    try {
+      await fetch(`/api/eeat/academic-scan?site_id=${selectedSite}`, { method: "POST" });
+      await fetchAcademic(selectedSite);
+    } catch { /* ignore */ }
+    setAcademicScanning(false);
+  }
 
   async function fetchSites() {
     try {
@@ -137,6 +183,8 @@ export default function AuthorityPage() {
   useEffect(() => { void fetchSites(); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (selectedSite && selectedSite !== "all") void fetchAuthority(); }, [selectedSite]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void fetchAcademic(selectedSite); }, [selectedSite]);
 
   const scoreColor = (s: number) => s >= 70 ? "#22c55e" : s >= 40 ? "#eab308" : "#ef4444";
 
@@ -215,6 +263,77 @@ export default function AuthorityPage() {
                 <div className="text-xs text-gray-400">Clusters</div>
               </div>
             </div>
+
+            {/* Mentions académiques (OpenAlex) */}
+            {selectedSite && selectedSite !== "all" && (
+              <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-800 flex items-center gap-3">
+                  <GraduationCap className="w-4 h-4 text-violet-400" />
+                  <h2 className="font-medium text-gray-200">Mentions académiques</h2>
+                  {academicStats && (
+                    <span className="text-xs text-gray-500">
+                      {academicStats.total} mentions · {academicStats.edu_gov} .edu/.gov · {academicStats.total_citations} citations
+                    </span>
+                  )}
+                  <button
+                    onClick={scanAcademic}
+                    disabled={academicScanning}
+                    className="ml-auto px-3 py-1.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg text-xs font-medium flex items-center gap-2"
+                  >
+                    {academicScanning ? <Loader2 className="w-3 h-3 animate-spin" /> : <GraduationCap className="w-3 h-3" />}
+                    {academicScanning ? "Scan…" : "Scanner OpenAlex"}
+                  </button>
+                </div>
+                <div className="p-4">
+                  {academicLoading ? (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
+                    </div>
+                  ) : academicMentions.length === 0 ? (
+                    <div className="text-sm text-gray-500 text-center py-6">
+                      Aucune mention académique. Lance un scan OpenAlex (100k req/jour, gratuit).
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-gray-800">
+                      {academicMentions.map((m) => {
+                        const isEduGov = /\.(edu|gov)(\.|$)/i.test(m.source_domain ?? "");
+                        return (
+                          <a
+                            key={m.id}
+                            href={m.source_url ?? "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block py-2.5 hover:bg-gray-800/40 -mx-4 px-4 transition-colors"
+                          >
+                            <div className="flex items-center gap-2 text-xs text-gray-400 mb-1">
+                              {isEduGov && (
+                                <span className="bg-emerald-900/40 text-emerald-300 px-1.5 py-0.5 rounded font-medium">
+                                  {m.source_domain?.match(/\.(edu|gov)/i)?.[0] ?? ".edu"}
+                                </span>
+                              )}
+                              {m.year && <span>{m.year}</span>}
+                              <span className="text-violet-400">
+                                {m.cited_by_count} citation{m.cited_by_count !== 1 ? "s" : ""}
+                              </span>
+                              {m.source_type && (
+                                <span className="text-gray-500">{m.source_type}</span>
+                              )}
+                            </div>
+                            <div className="text-sm text-white line-clamp-2">{m.title}</div>
+                            {m.authors && m.authors.length > 0 && (
+                              <div className="text-xs text-gray-500 mt-1">
+                                {m.authors.slice(0, 3).join(", ")}
+                                {m.authors.length > 3 ? ` +${m.authors.length - 3}` : ""}
+                              </div>
+                            )}
+                          </a>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Ranking all sites */}
             {allScores.length > 0 && (

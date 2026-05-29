@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { getCrawlStatsSafe } from "@/lib/gsc-crawl-stats";
 
 interface Breakdown {
   gsc_score: number;
@@ -176,12 +177,28 @@ export async function GET(req: NextRequest) {
     const grade = computeGrade(overall_score);
     const recommendations = generateRecommendations(breakdown);
 
+    // ADDITIONAL: GSC crawl stats (does not affect score; pure info).
+    let crawl_stats = null;
+    try {
+      const siteRows = (await sql`
+        SELECT gsc_property, url FROM sites WHERE id = ${site_id} LIMIT 1
+      `) as { gsc_property: string | null; url: string | null }[];
+      const property = siteRows[0]?.gsc_property || siteRows[0]?.url || null;
+      if (property) {
+        crawl_stats = await getCrawlStatsSafe(property);
+      }
+    } catch {
+      // never break the health response
+      crawl_stats = null;
+    }
+
     return NextResponse.json({
       success: true,
       grade,
       overall_score: Math.round(overall_score * 100) / 100,
       breakdown,
       recommendations,
+      crawl_stats,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
+import { testRichResults } from "@/lib/rich-results";
+import { ensureSchema } from "@/lib/db";
+import { logError } from "@/lib/logger";
 
 interface SchemaResult {
   url: string;
@@ -8,6 +11,12 @@ interface SchemaResult {
   warnings: string[];
   rawJson: string | null;
   status: "ok" | "warn" | "error" | "no-schema";
+  google_verified?: boolean;
+  google_types?: string[];
+  google_errors?: string[];
+  google_warnings?: string[];
+  google_verdict?: string;
+  google_discrepancies?: string[];
 }
 
 const JSON_LD_RE = /<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
@@ -172,14 +181,29 @@ export async function POST(request: NextRequest) {
   if (authState.unauthorized) return authState.unauthorized;
 
   let siteUrl: string;
+  let verifyWithGoogle = false;
+  let maxVerify = 10;
   try {
-    const body = await request.json() as { siteUrl?: unknown };
+    const body = (await request.json()) as {
+      siteUrl?: unknown;
+      verifyWithGoogle?: unknown;
+      maxVerify?: unknown;
+    };
     if (typeof body.siteUrl !== "string") {
       return NextResponse.json({ error: "siteUrl required" }, { status: 400 });
     }
     siteUrl = body.siteUrl;
+    if (typeof body.verifyWithGoogle === "boolean") verifyWithGoogle = body.verifyWithGoogle;
+    if (typeof body.maxVerify === "number" && body.maxVerify > 0) {
+      maxVerify = Math.min(50, Math.floor(body.maxVerify));
+    }
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  // Best-effort migration so rich_results_cache exists before write.
+  if (verifyWithGoogle) {
+    try { await ensureSchema(); } catch (e) { logError("schema-audit.ensureSchema", e); }
   }
 
   const urls = await fetchSitemapUrls(siteUrl);
@@ -208,8 +232,44 @@ export async function POST(request: NextRequest) {
     results.push({ url, types, errors, warnings, rawJson: raw, status });
   }
 
+  // Optional: verify first N pages via Google Rich Results API.
+  if (verifyWithGoogle) {
+    const toVerify = results
+      .filter((r) => r.types.length > 0)
+      .slice(0, maxVerify);
+
+    // Sequential (Google API can rate-limit; service-account quota is modest)
+    for (const r of toVerify) {
+      const gr = await testRichResults(r.url);
+      r.google_verified = gr.google_verified;
+      r.google_types = gr.detected_types;
+      r.google_errors = gr.errors;
+      r.google_warnings = gr.warnings;
+      r.google_verdict = gr.verdict;
+
+      const discrepancies: string[] = [];
+      const localSet = new Set(r.types.map((t) => t.toLowerCase()));
+      const googleSet = new Set(gr.detected_types.map((t) => t.toLowerCase()));
+      for (const t of localSet) {
+        if (!googleSet.has(t)) discrepancies.push(`local-only: ${t}`);
+      }
+      for (const t of googleSet) {
+        if (!localSet.has(t)) discrepancies.push(`google-only: ${t}`);
+      }
+      r.google_discrepancies = discrepancies;
+    }
+  }
+
   const withSchema = results.filter((r) => r.types.length > 0).length;
   const score = results.length > 0 ? Math.round((withSchema / results.length) * 100) : 0;
+  const googleVerifiedCount = results.filter((r) => r.google_verified).length;
 
-  return NextResponse.json({ results, score, total: results.length, withSchema });
+  return NextResponse.json({
+    results,
+    score,
+    total: results.length,
+    withSchema,
+    googleVerifiedCount,
+    verifiedWithGoogle: verifyWithGoogle,
+  });
 }

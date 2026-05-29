@@ -211,6 +211,62 @@ export async function ensureSchema(): Promise<void> {
       ON competitor_llm_scan(site_id, LOWER(competitor_domain))
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_competitor_llm_scan_scanned ON competitor_llm_scan(scanned_at DESC)`;
+
+  // rich_results_cache — 24h cache of Google Rich Results Test API responses
+  await sql`
+    CREATE TABLE IF NOT EXISTS rich_results_cache (
+      id SERIAL PRIMARY KEY,
+      url VARCHAR(1500) NOT NULL,
+      google_response JSONB NOT NULL,
+      cached_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_rich_results_cache_url ON rich_results_cache(url, cached_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_rich_results_cache_cached ON rich_results_cache(cached_at DESC)`;
+
+  // brand_mentions — Reddit + HackerNews brand mention monitoring
+  await sql`
+    CREATE TABLE IF NOT EXISTS brand_mentions (
+      id SERIAL PRIMARY KEY,
+      site_id INTEGER REFERENCES sites(id),
+      source VARCHAR(20) NOT NULL,
+      title TEXT NOT NULL,
+      url VARCHAR(1000),
+      score INTEGER DEFAULT 0,
+      created_at_external TIMESTAMP,
+      body TEXT,
+      sentiment VARCHAR(10) DEFAULT 'neutral',
+      scanned_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_brand_mentions_unique
+      ON brand_mentions(site_id, source, COALESCE(url, ''), LEFT(title, 200))
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_brand_mentions_site ON brand_mentions(site_id, scanned_at DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_brand_mentions_external ON brand_mentions(site_id, created_at_external DESC)`;
+
+  // academic_mentions — OpenAlex academic citations
+  await sql`
+    CREATE TABLE IF NOT EXISTS academic_mentions (
+      id SERIAL PRIMARY KEY,
+      site_id INTEGER REFERENCES sites(id),
+      source_url VARCHAR(1500),
+      title TEXT NOT NULL,
+      authors JSONB DEFAULT '[]'::jsonb,
+      year INTEGER,
+      doi VARCHAR(500),
+      cited_by_count INTEGER DEFAULT 0,
+      source_type VARCHAR(50),
+      source_domain VARCHAR(255),
+      scanned_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_academic_mentions_unique
+      ON academic_mentions(site_id, COALESCE(doi, source_url, LEFT(title, 200)))
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_academic_mentions_site ON academic_mentions(site_id, cited_by_count DESC)`;
 }
 
 export async function ensureOpportunitySchema() {
