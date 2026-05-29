@@ -190,6 +190,27 @@ export async function ensureSchema(): Promise<void> {
   // pagespeed_scores — strategy column so daily cron stores per-strategy rows + indices
   await sql`ALTER TABLE pagespeed_scores ADD COLUMN IF NOT EXISTS strategy VARCHAR(10)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_pagespeed_site_checked ON pagespeed_scores(site_id, checked_at DESC)`;
+
+  // competitor_llm_scan — per-competitor LLM-bot/SEO readiness scan (cache 7d)
+  await sql`
+    CREATE TABLE IF NOT EXISTS competitor_llm_scan (
+      id SERIAL PRIMARY KEY,
+      site_id INTEGER REFERENCES sites(id),
+      competitor_domain VARCHAR(500) NOT NULL,
+      llms_txt_present BOOLEAN DEFAULT false,
+      llms_txt_content TEXT,
+      ai_bots_allowed JSONB DEFAULT '[]'::jsonb,
+      schemas_detected JSONB DEFAULT '[]'::jsonb,
+      llm_readiness_score INTEGER DEFAULT 0,
+      raw_findings JSONB DEFAULT '{}'::jsonb,
+      scanned_at TIMESTAMP DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_competitor_llm_scan_unique
+      ON competitor_llm_scan(site_id, LOWER(competitor_domain))
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_competitor_llm_scan_scanned ON competitor_llm_scan(scanned_at DESC)`;
 }
 
 export async function ensureOpportunitySchema() {

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Loader2, Search, Zap, TrendingUp, ExternalLink,
   Target, GitCompare, Bot, Copy, Check, X, Filter, RefreshCw,
+  ChevronDown, ChevronUp, Shield, FileText,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -77,6 +78,45 @@ interface AiWidget {
   copied: boolean;
 }
 
+interface KeywordRow {
+  keyword: string;
+  volume: number;
+  position: number;
+  difficulty: string;
+  intent: string;
+}
+
+interface CategoryStats {
+  count: number;
+  total_volume: number;
+  top: KeywordRow[];
+}
+
+interface CompetitorKeywords {
+  competitor_domain: string;
+  total_keywords: number;
+  categories: {
+    general: CategoryStats;
+    longtail: CategoryStats;
+    questions: CategoryStats;
+  };
+}
+
+interface LLMScanResult {
+  competitor_domain: string;
+  llm_readiness_score: number;
+  llms_txt_present: boolean;
+  llms_txt_content: string | null;
+  ai_bots_allowed: string[];
+  ai_bots_disallowed: string[];
+  schemas_detected: string[];
+  recommendations: string[];
+  has_open_graph: boolean;
+  scanned_at: string;
+}
+
+type KwTabName = "general" | "longtail" | "questions";
+
 const AI_QUICK_ACTIONS = [
   {
     label: "Compare positionnement",
@@ -118,6 +158,15 @@ export default function CompetitorsPage() {
   const [activeCompetitorFilter, setActiveCompetitorFilter] = useState<string | null>(null);
   const [intentFilter, setIntentFilter] = useState<IntentFilter>("all");
 
+  // Per-competitor expansion (keyword breakdown + LLM scan)
+  const [expandedCompetitor, setExpandedCompetitor] = useState<string | null>(null);
+  const [kwTab, setKwTab] = useState<KwTabName>("general");
+  const [competitorKw, setCompetitorKw] = useState<Record<string, CompetitorKeywords>>({});
+  const [kwLoading, setKwLoading] = useState<string | null>(null);
+  const [llmScans, setLlmScans] = useState<Record<string, LLMScanResult>>({});
+  const [llmScanLoading, setLlmScanLoading] = useState(false);
+  const [llmScanRunning, setLlmScanRunning] = useState(false);
+
   // Inline AI widget
   const [aiWidget, setAiWidget] = useState<AiWidget>({
     prompt: "",
@@ -146,6 +195,79 @@ export default function CompetitorsPage() {
       const d = await res.json() as { gaps?: KeywordGap[]; competitors?: CompetitorStat[] };
       setCached({ gaps: d.gaps ?? [], competitors: d.competitors ?? [] });
     } catch { setCached({ gaps: [], competitors: [] }); }
+  }
+
+  async function fetchCompetitorKeywords(domain: string) {
+    if (!selectedSite || selectedSite === "all") return;
+    if (competitorKw[domain]) return; // already cached locally
+    setKwLoading(domain);
+    try {
+      const res = await fetch(
+        `/api/competitors/keywords?site_id=${selectedSite}&competitor_domain=${encodeURIComponent(domain)}`,
+      );
+      const d = await res.json() as { success: boolean; categories?: CompetitorKeywords["categories"]; total_keywords?: number; competitor_domain?: string };
+      const cats = d.categories;
+      if (d.success && cats) {
+        setCompetitorKw((prev) => ({
+          ...prev,
+          [domain]: {
+            competitor_domain: domain,
+            total_keywords: d.total_keywords ?? 0,
+            categories: cats,
+          },
+        }));
+      }
+    } catch { /* ignore */ }
+    setKwLoading(null);
+  }
+
+  async function fetchLlmScans() {
+    if (!selectedSite || selectedSite === "all") return;
+    setLlmScanLoading(true);
+    try {
+      const res = await fetch(`/api/competitors/llm-scan?site_id=${selectedSite}`);
+      const d = await res.json() as { success: boolean; scans?: LLMScanResult[] };
+      if (d.success && d.scans) {
+        const map: Record<string, LLMScanResult> = {};
+        for (const s of d.scans) map[s.competitor_domain.toLowerCase()] = s;
+        setLlmScans(map);
+      }
+    } catch { /* ignore */ }
+    setLlmScanLoading(false);
+  }
+
+  async function runLlmScan(forceRefresh = false) {
+    if (!selectedSite || selectedSite === "all" || llmScanRunning) return;
+    setLlmScanRunning(true);
+    try {
+      const res = await fetch(`/api/competitors/llm-scan?site_id=${selectedSite}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force_refresh: forceRefresh }),
+      });
+      const d = await res.json() as { success: boolean; scans?: LLMScanResult[]; scanned_now?: number; from_cache?: number; error?: string };
+      if (d.success && d.scans) {
+        const map: Record<string, LLMScanResult> = {};
+        for (const s of d.scans) map[s.competitor_domain.toLowerCase()] = s;
+        setLlmScans(map);
+        showNotification("success", `LLM scan: ${d.scanned_now ?? 0} fresh, ${d.from_cache ?? 0} from cache (7d)`);
+      } else {
+        showNotification("error", d.error ?? "Scan échoué");
+      }
+    } catch (err) {
+      showNotification("error", err instanceof Error ? err.message : "Erreur réseau");
+    }
+    setLlmScanRunning(false);
+  }
+
+  function toggleExpandCompetitor(domain: string) {
+    if (expandedCompetitor === domain) {
+      setExpandedCompetitor(null);
+      return;
+    }
+    setExpandedCompetitor(domain);
+    setKwTab("general");
+    void fetchCompetitorKeywords(domain);
   }
 
   async function runResearch(forceRefresh = false) {
@@ -330,7 +452,12 @@ export default function CompetitorsPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedSite && selectedSite !== "all") void fetchCached();
+    if (selectedSite && selectedSite !== "all") {
+      void fetchCached();
+      void fetchLlmScans();
+      setExpandedCompetitor(null);
+      setCompetitorKw({});
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSite]);
 
@@ -620,31 +747,62 @@ export default function CompetitorsPage() {
           {/* Competitors list — rich grid */}
           {competitors.length > 0 && (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                 <h2 className="font-medium text-gray-200 flex items-center gap-2">
                   <Target className="w-4 h-4 text-purple-400" />
                   Concurrents identifiés
                 </h2>
-                {activeCompetitorFilter && (
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setActiveCompetitorFilter(null)}
-                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 transition-colors"
+                    onClick={() => void runLlmScan(false)}
+                    disabled={llmScanRunning}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600/20 border border-blue-600/40 text-blue-300 hover:bg-blue-600/40 disabled:opacity-40 transition"
+                    title="Scanne /llms.txt + robots.txt + JSON-LD pour chaque concurrent (cache 7j)"
                   >
-                    <X className="w-3 h-3" /> Retirer filtre
+                    {llmScanRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className="w-3 h-3" />}
+                    {llmScanRunning ? "Scan en cours..." : "Scan LLM readiness"}
                   </button>
-                )}
+                  {llmScanRunning ? null : Object.keys(llmScans).length > 0 && (
+                    <button
+                      onClick={() => void runLlmScan(true)}
+                      disabled={llmScanRunning}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-600/20 border border-orange-600/40 text-orange-300 hover:bg-orange-600/40 disabled:opacity-40 transition"
+                      title="Force un nouveau scan (ignore cache 7j)"
+                    >
+                      <RefreshCw className="w-3 h-3" /> Rescan frais
+                    </button>
+                  )}
+                  {activeCompetitorFilter && (
+                    <button
+                      onClick={() => setActiveCompetitorFilter(null)}
+                      className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 transition-colors"
+                    >
+                      <X className="w-3 h-3" /> Retirer filtre
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {competitors.map((c) => {
                   const isActive = activeCompetitorFilter === c.domain;
+                  const isExpanded = expandedCompetitor === c.domain;
+                  const scan = llmScans[c.domain.toLowerCase()];
+                  const scoreColor = !scan
+                    ? "text-gray-500 bg-gray-800"
+                    : scan.llm_readiness_score >= 70
+                      ? "text-green-400 bg-green-900/30"
+                      : scan.llm_readiness_score >= 40
+                        ? "text-orange-400 bg-orange-900/30"
+                        : "text-red-400 bg-red-900/30";
                   return (
-                    <button
+                    <div
                       key={c.domain}
-                      onClick={() => setActiveCompetitorFilter(isActive ? null : c.domain)}
                       className={`text-left p-3 rounded-lg border transition-all ${
-                        isActive
-                          ? "border-purple-500 bg-purple-900/30"
-                          : "border-gray-700 bg-gray-800 hover:border-gray-600"
+                        isExpanded
+                          ? "border-blue-500 bg-blue-900/20"
+                          : isActive
+                            ? "border-purple-500 bg-purple-900/30"
+                            : "border-gray-700 bg-gray-800 hover:border-gray-600"
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-2">
@@ -673,15 +831,52 @@ export default function CompetitorsPage() {
                           {(c.total_volume / 1000).toFixed(1)}K vol/mois
                         </div>
                       )}
-                      {isActive && (
-                        <div className="mt-2 flex items-center gap-1 text-xs text-purple-400">
-                          <Filter className="w-2.5 h-2.5" /> Filtré
+                      {/* LLM readiness badge */}
+                      {scan && (
+                        <div className={`mt-2 inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-semibold ${scoreColor}`}>
+                          <Shield className="w-2.5 h-2.5" /> LLM {scan.llm_readiness_score}/100
                         </div>
                       )}
-                    </button>
+                      <div className="mt-2 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleExpandCompetitor(c.domain)}
+                          className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                          title="Détail keywords + LLM scan"
+                        >
+                          {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                          {isExpanded ? "Replier" : "Détail"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveCompetitorFilter(isActive ? null : c.domain)}
+                          className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${
+                            isActive ? "bg-purple-700 text-white" : "bg-gray-700 hover:bg-gray-600 text-gray-200"
+                          }`}
+                          title="Filtrer le tableau des gaps par ce concurrent"
+                        >
+                          <Filter className="w-2.5 h-2.5" />
+                          {isActive ? "Filtré" : "Filtrer"}
+                        </button>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
+
+              {/* Expanded panel */}
+              {expandedCompetitor && (
+                <ExpandedCompetitorPanel
+                  domain={expandedCompetitor}
+                  kwData={competitorKw[expandedCompetitor]}
+                  kwLoading={kwLoading === expandedCompetitor}
+                  kwTab={kwTab}
+                  setKwTab={setKwTab}
+                  llmScan={llmScans[expandedCompetitor.toLowerCase()]}
+                  llmScanLoading={llmScanLoading}
+                  onClose={() => setExpandedCompetitor(null)}
+                />
+              )}
             </div>
           )}
 
@@ -918,6 +1113,263 @@ export default function CompetitorsPage() {
             </div>
           )}
         </>)}
+      </div>
+    </div>
+  );
+}
+
+interface ExpandedCompetitorPanelProps {
+  domain: string;
+  kwData: CompetitorKeywords | undefined;
+  kwLoading: boolean;
+  kwTab: KwTabName;
+  setKwTab: (t: KwTabName) => void;
+  llmScan: LLMScanResult | undefined;
+  llmScanLoading: boolean;
+  onClose: () => void;
+}
+
+function ExpandedCompetitorPanel({
+  domain,
+  kwData,
+  kwLoading,
+  kwTab,
+  setKwTab,
+  llmScan,
+  llmScanLoading,
+  onClose,
+}: ExpandedCompetitorPanelProps) {
+  const cats = kwData?.categories;
+  const tabStats =
+    kwTab === "general" ? cats?.general
+    : kwTab === "longtail" ? cats?.longtail
+    : cats?.questions;
+
+  const scoreColor = !llmScan
+    ? "text-gray-400 border-gray-700 bg-gray-800"
+    : llmScan.llm_readiness_score >= 70
+      ? "text-green-400 border-green-700 bg-green-900/20"
+      : llmScan.llm_readiness_score >= 40
+        ? "text-orange-400 border-orange-700 bg-orange-900/20"
+        : "text-red-400 border-red-700 bg-red-900/20";
+
+  return (
+    <div className="mt-5 bg-gray-950/60 border border-blue-900/50 rounded-xl p-5 space-y-5">
+      <div className="flex items-center justify-between border-b border-gray-800 pb-3">
+        <div className="flex items-center gap-2">
+          <img
+            src={`https://www.google.com/s2/favicons?domain=${domain}&sz=20`}
+            alt=""
+            width={20}
+            height={20}
+            className="rounded-sm"
+          />
+          <h3 className="font-semibold text-white">{domain}</h3>
+          <span className="text-xs text-gray-500">— détail keywords + LLM readiness</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-gray-400 hover:text-white transition-colors"
+          aria-label="Close panel"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Keyword breakdown */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <TrendingUp className="w-4 h-4 text-green-400" />
+          <span className="text-sm font-medium text-gray-200">Keywords par catégorie</span>
+          {kwData && (
+            <span className="text-xs text-gray-500">— {kwData.total_keywords} mots-clés au total</span>
+          )}
+        </div>
+        {kwLoading ? (
+          <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-400" /></div>
+        ) : !cats ? (
+          <div className="text-xs text-gray-500 py-4">Pas de données pour ce concurrent.</div>
+        ) : (
+          <>
+            <div className="flex gap-1 mb-3 bg-gray-900 rounded-lg p-1 w-fit">
+              {(["general", "longtail", "questions"] as const).map((t) => {
+                const stats = cats[t];
+                const label = t === "general" ? "General (1-3 mots)"
+                  : t === "longtail" ? "Long-tail (4+ mots)"
+                  : "Questions";
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setKwTab(t)}
+                    className={`px-3 py-1.5 rounded text-xs font-medium transition ${
+                      kwTab === t ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    {label} <span className="opacity-70">({stats.count})</span>
+                  </button>
+                );
+              })}
+            </div>
+            {tabStats && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
+                <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+                  <div className="text-[10px] uppercase text-gray-500">Nombre</div>
+                  <div className="text-xl font-bold text-blue-400">{tabStats.count}</div>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+                  <div className="text-[10px] uppercase text-gray-500">Volume cumulé</div>
+                  <div className="text-xl font-bold text-purple-400">
+                    {tabStats.total_volume.toLocaleString()}
+                  </div>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+                  <div className="text-[10px] uppercase text-gray-500">Top 5 affichés</div>
+                  <div className="text-xl font-bold text-gray-200">{tabStats.top.length}</div>
+                </div>
+              </div>
+            )}
+            {tabStats && tabStats.top.length > 0 ? (
+              <div className="overflow-x-auto bg-gray-900 border border-gray-800 rounded-lg">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-gray-400 border-b border-gray-800">
+                      <th className="px-3 py-2 text-left">Mot-clé</th>
+                      <th className="px-3 py-2 text-right">Volume</th>
+                      <th className="px-3 py-2 text-right">Pos.</th>
+                      <th className="px-3 py-2 text-center">Intent</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tabStats.top.map((k, i) => (
+                      <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                        <td className="px-3 py-2 text-white">{k.keyword}</td>
+                        <td className="px-3 py-2 text-right text-blue-400 font-semibold">{k.volume.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right text-gray-300">{k.position || "—"}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className={`text-xs px-2 py-0.5 rounded ${INTENT_COLOR[k.intent] ?? "text-gray-400 bg-gray-800"}`}>
+                            {k.intent || "—"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : tabStats ? (
+              <div className="text-xs text-gray-500 py-4">Aucun mot-clé dans cette catégorie.</div>
+            ) : null}
+          </>
+        )}
+      </div>
+
+      {/* LLM readiness */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <Shield className="w-4 h-4 text-blue-400" />
+          <span className="text-sm font-medium text-gray-200">LLM bot optimization</span>
+          {llmScan && (
+            <span className="text-[10px] text-gray-500">
+              — scanné le {new Date(llmScan.scanned_at).toLocaleDateString("fr-FR")}
+            </span>
+          )}
+        </div>
+        {llmScanLoading ? (
+          <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-400" /></div>
+        ) : !llmScan ? (
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 text-xs text-gray-400">
+            Pas encore scanné. Clique sur <strong className="text-blue-400">Scan LLM readiness</strong> en haut pour lancer un scan global.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className={`border rounded-lg p-4 ${scoreColor}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs uppercase opacity-70">LLM readiness</div>
+                  <div className="text-3xl font-bold">{llmScan.llm_readiness_score}/100</div>
+                </div>
+                <div className="text-right text-xs space-y-1">
+                  <div>llms.txt : <strong>{llmScan.llms_txt_present ? "OUI" : "NON"}</strong></div>
+                  <div>Open Graph : <strong>{llmScan.has_open_graph ? "OUI" : "NON"}</strong></div>
+                  <div>AI bots autorisés : <strong>{llmScan.ai_bots_allowed.length}</strong></div>
+                  <div>Schemas détectés : <strong>{llmScan.schemas_detected.length}</strong></div>
+                </div>
+              </div>
+              {/* Gauge bar */}
+              <div className="mt-3 h-2 bg-gray-900/60 rounded overflow-hidden">
+                <div
+                  className={`h-full ${
+                    llmScan.llm_readiness_score >= 70 ? "bg-green-500"
+                    : llmScan.llm_readiness_score >= 40 ? "bg-orange-500"
+                    : "bg-red-500"
+                  }`}
+                  style={{ width: `${llmScan.llm_readiness_score}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+                <div className="text-xs text-gray-400 mb-2 font-medium">AI bots autorisés ({llmScan.ai_bots_allowed.length})</div>
+                <div className="flex flex-wrap gap-1">
+                  {llmScan.ai_bots_allowed.length === 0 ? (
+                    <span className="text-xs text-red-400">Aucun</span>
+                  ) : (
+                    llmScan.ai_bots_allowed.map((b) => (
+                      <span key={b} className="text-[10px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-300 border border-green-800/50">{b}</span>
+                    ))
+                  )}
+                </div>
+                {llmScan.ai_bots_disallowed.length > 0 && (
+                  <>
+                    <div className="text-xs text-gray-400 mt-3 mb-1 font-medium">Bloqués ({llmScan.ai_bots_disallowed.length})</div>
+                    <div className="flex flex-wrap gap-1">
+                      {llmScan.ai_bots_disallowed.map((b) => (
+                        <span key={b} className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/30 text-red-300 border border-red-800/50">{b}</span>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+                <div className="text-xs text-gray-400 mb-2 font-medium">Schemas JSON-LD ({llmScan.schemas_detected.length})</div>
+                <div className="flex flex-wrap gap-1">
+                  {llmScan.schemas_detected.length === 0 ? (
+                    <span className="text-xs text-gray-500">Aucun schema d&apos;intérêt détecté</span>
+                  ) : (
+                    llmScan.schemas_detected.map((s) => (
+                      <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-300 border border-blue-800/50">{s}</span>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {llmScan.llms_txt_present && llmScan.llms_txt_content && (
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+                <div className="text-xs text-gray-400 mb-2 font-medium flex items-center gap-1">
+                  <FileText className="w-3 h-3" /> Aperçu /llms.txt
+                </div>
+                <pre className="text-[11px] text-gray-300 whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">
+                  {llmScan.llms_txt_content.slice(0, 1500)}
+                  {llmScan.llms_txt_content.length > 1500 ? "\n…" : ""}
+                </pre>
+              </div>
+            )}
+
+            {llmScan.recommendations.length > 0 && (
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+                <div className="text-xs text-gray-400 mb-2 font-medium">Recommandations pour {domain}</div>
+                <ul className="space-y-1">
+                  {llmScan.recommendations.map((r, i) => (
+                    <li key={i} className="text-xs text-gray-300 flex items-start gap-2">
+                      <span className="text-purple-400 flex-shrink-0">→</span> {r}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
