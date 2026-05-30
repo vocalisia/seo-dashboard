@@ -156,6 +156,10 @@ export default function DashboardPage() {
   const [kwLoadingIds, setKwLoadingIds] = useState<Set<number>>(new Set());
   const [highVolLoading, setHighVolLoading] = useState<Set<number>>(new Set());
   const [highVolResult, setHighVolResult] = useState<Record<number, {added: number; total: number}>>({});
+  const [highVolPanel, setHighVolPanel] = useState<number | null>(null); // siteId with open panel
+  const [highVolKws, setHighVolKws] = useState<{keyword: string; impressions: number; avg_position: number; volume: number; source: string; already_tracked: boolean}[]>([]);
+  const [highVolPanelLoading, setHighVolPanelLoading] = useState(false);
+  const [highVolSelected, setHighVolSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [kwTypeFilter, setKwTypeFilter] = useState<"all"|"longtail"|"questions">("all");
   const [siteSortCol, setSiteSortCol] = useState<"clicks"|"impressions"|"position">("clicks");
@@ -349,21 +353,35 @@ export default function DashboardPage() {
     for (const id of expandedIds) await loadKeywords(id, p);
   }
 
-  async function addHighVolumeKeywords(siteId: number) {
-    if (highVolLoading.has(siteId)) return;
+  async function openHighVolPanel(siteId: number) {
+    if (highVolPanel === siteId) { setHighVolPanel(null); return; }
+    setHighVolPanel(siteId);
+    setHighVolKws([]);
+    setHighVolSelected(new Set());
+    setHighVolPanelLoading(true);
+    try {
+      const res = await fetch(`/api/keywords/high-volume?site_id=${siteId}&min_imp=30`);
+      const d = await res.json() as { success: boolean; keywords?: typeof highVolKws };
+      if (d.success && d.keywords) setHighVolKws(d.keywords.filter(k => !k.already_tracked).slice(0, 40));
+    } catch { /* ignore */ }
+    setHighVolPanelLoading(false);
+  }
+
+  async function addSelectedHighVol(siteId: number) {
+    const toAdd = highVolKws.filter(k => highVolSelected.has(k.keyword));
+    if (toAdd.length === 0) return;
     setHighVolLoading(prev => new Set(prev).add(siteId));
     try {
-      const res = await fetch(`/api/keywords/high-volume?site_id=${siteId}&min_vol=1000`, {
+      const res = await fetch(`/api/keywords/high-volume?site_id=${siteId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywords: toAdd.map(k => ({ keyword: k.keyword, volume: k.volume, source: k.source })) }),
       });
-      const d = await res.json() as { success: boolean; added: number; already_tracked: number; total_high_vol: number; error?: string };
+      const d = await res.json() as { success: boolean; added: number };
       if (d.success) {
-        setHighVolResult(prev => ({ ...prev, [siteId]: { added: d.added, total: d.total_high_vol } }));
-        if (d.added > 0) {
-          // Reload keywords to show newly added
-          await loadKeywords(siteId, period);
-        }
+        setHighVolResult(prev => ({ ...prev, [siteId]: { added: d.added, total: toAdd.length } }));
+        setHighVolPanel(null);
+        if (d.added > 0) await loadKeywords(siteId, period);
       }
     } catch { /* ignore */ }
     setHighVolLoading(prev => { const n = new Set(prev); n.delete(siteId); return n; });
@@ -838,19 +856,13 @@ export default function DashboardPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); void addHighVolumeKeywords(site.id); }}
+                      onClick={(e) => { e.stopPropagation(); void openHighVolPanel(site.id); }}
                       disabled={highVolLoading.has(site.id)}
-                      title="Ajouter les mots-clés à fort volume (≥1000/mois)"
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-t text-xs font-semibold bg-yellow-500/30 border-b-2 border-yellow-400/60 text-yellow-200 hover:bg-yellow-500/60 disabled:opacity-40 transition ml-2"
+                      title="Découvrir les mots-clés à fort volume du secteur"
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-t text-xs font-semibold border-b-2 transition ml-2 ${highVolPanel === site.id ? "bg-yellow-500/60 border-yellow-400 text-yellow-100" : "bg-yellow-500/30 border-yellow-400/60 text-yellow-200 hover:bg-yellow-500/60"}`}
                     >
-                      {highVolLoading.has(site.id) ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <TrendingUp className="w-3 h-3" />
-                      )}
-                      {highVolResult[site.id]
-                        ? `+${highVolResult[site.id].added} ajoutés`
-                        : "⚡ High Vol. ≥1000"}
+                      {highVolLoading.has(site.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <TrendingUp className="w-3 h-3" />}
+                      {highVolResult[site.id] ? `✓ +${highVolResult[site.id].added} trackés` : "⚡ Découvrir mots-clés"}
                     </button>
                   </div>
 
@@ -864,6 +876,80 @@ export default function DashboardPage() {
                       ))}
                     </div>
                   )}
+                  {/* High Vol Discovery Panel */}
+                  {highVolPanel === site.id && (
+                    <div className="border-t border-yellow-500/20 bg-yellow-500/5 px-4 py-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-yellow-300">
+                          ⚡ Mots-clés du secteur — {highVolKws.length} opportunités détectées (GSC réel 90j)
+                        </span>
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => setHighVolSelected(new Set(highVolKws.map(k => k.keyword)))}
+                            className="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">
+                            Tout sélectionner
+                          </button>
+                          <button type="button" onClick={() => setHighVolSelected(new Set())}
+                            className="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">
+                            Désélectionner
+                          </button>
+                          <button type="button"
+                            onClick={() => void addSelectedHighVol(site.id)}
+                            disabled={highVolSelected.size === 0 || highVolLoading.has(site.id)}
+                            className="text-[10px] px-3 py-0.5 rounded bg-yellow-500/40 text-yellow-100 font-semibold hover:bg-yellow-500/60 disabled:opacity-40">
+                            {highVolLoading.has(site.id) ? "Ajout..." : `Ajouter (${highVolSelected.size})`}
+                          </button>
+                          <button type="button" onClick={() => setHighVolPanel(null)}
+                            className="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-gray-600">
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                      {highVolPanelLoading ? (
+                        <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-yellow-400" /></div>
+                      ) : highVolKws.length === 0 ? (
+                        <p className="text-xs text-gray-400 py-2">Aucun nouveau mot-clé découvert — tous déjà trackés ou impressions insuffisantes.</p>
+                      ) : (
+                        <div className="max-h-60 overflow-y-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="text-gray-500 text-[10px]">
+                                <th className="text-left py-1 w-5"></th>
+                                <th className="text-left py-1">Mot-clé (secteur)</th>
+                                <th className="text-right py-1">Impressions 90j</th>
+                                <th className="text-right py-1">Position moy.</th>
+                                <th className="text-right py-1">Vol. estimé</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {highVolKws.map((kw) => (
+                                <tr key={kw.keyword}
+                                  className={`border-b border-gray-800/30 cursor-pointer hover:bg-yellow-500/10 ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/10" : ""}`}
+                                  onClick={() => setHighVolSelected(prev => {
+                                    const n = new Set(prev);
+                                    n.has(kw.keyword) ? n.delete(kw.keyword) : n.add(kw.keyword);
+                                    return n;
+                                  })}>
+                                  <td className="py-1">
+                                    <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
+                                      className="accent-yellow-400 w-3 h-3" />
+                                  </td>
+                                  <td className="py-1 text-white font-medium">{kw.keyword}</td>
+                                  <td className="py-1 text-right text-blue-400">{kw.impressions.toLocaleString()}</td>
+                                  <td className="py-1 text-right">
+                                    <span className={kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}>
+                                      {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
+                                    </span>
+                                  </td>
+                                  <td className="py-1 text-right text-gray-400">{kw.volume > 0 ? kw.volume.toLocaleString() : "—"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {kwLoadingIds.has(site.id) ? (
                     <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                   ) : tab === "keywords" ? (
