@@ -796,6 +796,24 @@ export default function DashboardPage() {
                   {top10 > 0 && isOpen && (
                     <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">{top10} top10</span>
                   )}
+                  {isOpen && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); void addHighVolumeKeywords(site.id); }}
+                      disabled={highVolLoading.has(site.id)}
+                      title="Ajouter les mots-clés à fort volume (≥1000/mois)"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-500/30 border border-yellow-400/50 text-yellow-200 hover:bg-yellow-500/60 disabled:opacity-40 transition"
+                    >
+                      {highVolLoading.has(site.id) ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <TrendingUp className="w-3 h-3" />
+                      )}
+                      {highVolResult[site.id]
+                        ? `+${highVolResult[site.id].added} ajoutés`
+                        : "⚡ High Vol. ≥1000"}
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-6 text-sm">
                   <div className="text-right">
@@ -839,29 +857,13 @@ export default function DashboardPage() {
                   </div>
 
                   {tab === "keywords" && (
-                    <div className="flex items-center flex-wrap gap-2 px-4 py-2">
+                    <div className="flex items-center flex-wrap gap-1 px-4 py-2">
                       {(["all","longtail","questions"] as const).map(f => (
                         <button key={f} type="button" onClick={() => setKwTypeFilter(f)}
                           className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
                           {f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
                         </button>
                       ))}
-                      <button
-                        type="button"
-                        onClick={() => void addHighVolumeKeywords(site.id)}
-                        disabled={highVolLoading.has(site.id)}
-                        title="Ajouter les mots-clés à fort volume (≥1000/mois) détectés chez les concurrents"
-                        className="flex items-center gap-1 px-3 py-1 rounded text-xs font-semibold bg-yellow-500/30 border border-yellow-400/50 text-yellow-200 hover:bg-yellow-500/60 disabled:opacity-40 transition ml-1"
-                      >
-                        {highVolLoading.has(site.id) ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <TrendingUp className="w-3 h-3" />
-                        )}
-                        {highVolResult[site.id]
-                          ? `✓ +${highVolResult[site.id].added} high vol. ajoutés`
-                          : "⚡ High Vol. ≥1000"}
-                      </button>
                     </div>
                   )}
                   {kwLoadingIds.has(site.id) ? (
