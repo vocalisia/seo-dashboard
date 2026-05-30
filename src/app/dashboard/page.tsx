@@ -1087,8 +1087,8 @@ export default function DashboardPage() {
                               <td className="text-right py-2 px-3 text-gray-400">{(Number(kw.avg_ctr) * 100).toFixed(1)}%</td>
                               <td className="text-right py-2 px-3">
                                 <div className="inline-flex flex-col items-end gap-0.5">
-                                  <span className={`font-semibold ${Number(kw.avg_position) <= 10 ? "text-green-400" : Number(kw.avg_position) <= 20 ? "text-yellow-400" : "text-red-400"}`}>
-                                    {Number(kw.avg_position).toFixed(1)}
+                                  <span className={`font-semibold ${!kw.avg_position || Number(kw.avg_position) === 0 ? "text-gray-600" : Number(kw.avg_position) <= 10 ? "text-green-400" : Number(kw.avg_position) <= 20 ? "text-yellow-400" : "text-red-400"}`}>
+                                    {(!kw.avg_position || Number(kw.avg_position) === 0) ? "—" : Number(kw.avg_position).toFixed(1)}
                                   </span>
                                   {(() => {
                                     const g = gainList.find(x => x.query === kw.query);
