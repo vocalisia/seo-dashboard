@@ -878,46 +878,54 @@ export default function DashboardPage() {
                   )}
                   {/* High Vol Discovery Panel */}
                   {highVolPanel === site.id && (
-                    <div className="border-t border-yellow-500/20 bg-yellow-500/5 px-4 py-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-semibold text-yellow-300">
-                          ⚡ Mots-clés du secteur — {highVolKws.length} opportunités détectées (GSC réel 90j)
+                    <div className="border-t border-yellow-500/20 bg-gray-900">
+                      {/* Header + actions */}
+                      <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-gray-800">
+                        <span className="text-xs font-semibold text-yellow-300 flex-1 min-w-0">
+                          ⚡ {highVolKws.length} mots-clés du secteur (GSC réel 90j)
                         </span>
-                        <div className="flex gap-2">
-                          <button type="button" onClick={() => setHighVolSelected(new Set(highVolKws.map(k => k.keyword)))}
-                            className="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">
-                            Tout sélectionner
-                          </button>
-                          <button type="button" onClick={() => setHighVolSelected(new Set())}
-                            className="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">
-                            Désélectionner
-                          </button>
-                          <button type="button"
-                            onClick={() => void addSelectedHighVol(site.id)}
-                            disabled={highVolSelected.size === 0 || highVolLoading.has(site.id)}
-                            className="text-[10px] px-3 py-0.5 rounded bg-yellow-500/40 text-yellow-100 font-semibold hover:bg-yellow-500/60 disabled:opacity-40">
-                            {highVolLoading.has(site.id) ? "Ajout..." : `Ajouter (${highVolSelected.size})`}
-                          </button>
-                          <button type="button" onClick={() => setHighVolPanel(null)}
-                            className="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-gray-600">
-                            ✕
-                          </button>
-                        </div>
+                        <button type="button"
+                          onClick={() => void addSelectedHighVol(site.id)}
+                          disabled={highVolSelected.size === 0 || highVolLoading.has(site.id)}
+                          className="text-xs px-3 py-1 rounded bg-yellow-500/40 border border-yellow-500/60 text-yellow-100 font-semibold hover:bg-yellow-500/60 disabled:opacity-40">
+                          {highVolLoading.has(site.id) ? <Loader2 className="w-3 h-3 animate-spin inline" /> : null}
+                          {` Ajouter (${highVolSelected.size})`}
+                        </button>
+                        <button type="button" onClick={() => setHighVolSelected(new Set(highVolKws.map(k => k.keyword)))}
+                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">Tout</button>
+                        <button type="button" onClick={() => setHighVolSelected(new Set())}
+                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">Aucun</button>
+                        <button type="button" onClick={() => setHighVolKws(prev => [...prev].sort((a,b) => a.avg_position - b.avg_position))}
+                          title="Trier par position (meilleures d'abord)"
+                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-green-300 hover:bg-gray-600">Pos. ↑</button>
+                        <button type="button" onClick={() => setHighVolKws(prev => [...prev].sort((a,b) => b.impressions - a.impressions))}
+                          title="Trier par impressions (les plus vus)"
+                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-blue-300 hover:bg-gray-600">Imp. ↓</button>
+                        <button type="button" onClick={() => setHighVolPanel(null)}
+                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600">✕</button>
                       </div>
+                      {/* Table */}
                       {highVolPanelLoading ? (
                         <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-yellow-400" /></div>
                       ) : highVolKws.length === 0 ? (
-                        <p className="text-xs text-gray-400 py-2">Aucun nouveau mot-clé découvert — tous déjà trackés ou impressions insuffisantes.</p>
+                        <p className="text-xs text-gray-400 px-4 py-3">Aucun nouveau mot-clé — tous déjà trackés ou trop peu d&apos;impressions.</p>
                       ) : (
-                        <div className="max-h-60 overflow-y-auto">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="text-gray-500 text-[10px]">
-                                <th className="text-left py-1 w-5"></th>
-                                <th className="text-left py-1">Mot-clé (secteur)</th>
-                                <th className="text-right py-1">Impressions 90j</th>
-                                <th className="text-right py-1">Position moy.</th>
-                                <th className="text-right py-1">Vol. estimé</th>
+                        <div className="max-h-72 overflow-y-auto overflow-x-hidden">
+                          <table className="w-full text-xs table-fixed">
+                            <colgroup>
+                              <col className="w-5" />
+                              <col /> {/* keyword — flex */}
+                              <col className="w-20" />
+                              <col className="w-16" />
+                              <col className="w-16" />
+                            </colgroup>
+                            <thead className="sticky top-0 bg-gray-900 z-10">
+                              <tr className="text-gray-500 text-[10px] border-b border-gray-800">
+                                <th className="py-1.5 pl-3"></th>
+                                <th className="text-left py-1.5">Mot-clé secteur</th>
+                                <th className="text-right py-1.5 pr-2">Imp. 90j</th>
+                                <th className="text-right py-1.5 pr-2">Pos.</th>
+                                <th className="text-right py-1.5 pr-3">Vol.</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -929,13 +937,13 @@ export default function DashboardPage() {
                                     n.has(kw.keyword) ? n.delete(kw.keyword) : n.add(kw.keyword);
                                     return n;
                                   })}>
-                                  <td className="py-1">
+                                  <td className="py-1.5 pl-3">
                                     <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
                                       className="accent-yellow-400 w-3 h-3" />
                                   </td>
-                                  <td className="py-1 text-white font-medium">{kw.keyword}</td>
-                                  <td className="py-1 text-right text-blue-400">{kw.impressions.toLocaleString()}</td>
-                                  <td className="py-1 text-right">
+                                  <td className="py-1.5 text-white font-medium truncate pr-2">{kw.keyword}</td>
+                                  <td className="py-1.5 text-right text-blue-400 pr-2">{kw.impressions.toLocaleString()}</td>
+                                  <td className="py-1.5 text-right pr-2">
                                     <span className={kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}>
                                       {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
                                     </span>
