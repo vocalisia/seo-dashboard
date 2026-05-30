@@ -46,17 +46,17 @@ export async function GET(request: NextRequest) {
   try {
     const sql = getSQL();
 
-    // Resolve filter: explicit country > language mapping > site TLD > none.
-    // Default (no override) = ALWAYS the site's TLD country with NULL fallback.
+    // Resolve filter: explicit country > language mapping > null (all countries).
+    // Default (no override) = ALL countries. TLD-based default was removed because
+    // it cut international traffic for .pro/.com/.org sites (e.g. vocalis.pro showed
+    // only FRA, missing RUS+BEL+MAR+CHE etc. = -40% of real clicks).
     let countryFilter: string[] | null;
     if (country) {
       countryFilter = [country];
-    } else if (language && LANG_COUNTRIES[language]) {
+    } else if (language && language !== "all" && LANG_COUNTRIES[language]) {
       countryFilter = LANG_COUNTRIES[language];
     } else {
-      const siteRow = (await sql`SELECT url FROM sites WHERE id = ${id}`) as Array<{ url: string }>;
-      const url = siteRow[0]?.url ?? "";
-      countryFilter = [siteCountryCode(url)];
+      countryFilter = null; // "Tous pays" = no filter = show all countries
     }
 
     if (type === "queries") {
