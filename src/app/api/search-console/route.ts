@@ -115,8 +115,30 @@ export async function GET(request: NextRequest) {
                AND LOWER(tk.keyword) = LOWER(q.query)
                AND tk.is_active = TRUE
             ),
+            -- Recent 30d GSC data: keywords active last 30d but not in current period
+            -- This prevents keywords disappearing when switching to short periods (7j/3j)
+            gsc_30d AS (
+              SELECT query,
+                SUM(clicks) as total_clicks,
+                SUM(impressions) as total_impressions,
+                AVG(ctr) as avg_ctr,
+                AVG(position) as avg_position,
+                AVG(position) AS page_weighted_position,
+                NULL AS first_seen,
+                NULL::int AS volume_market, NULL::int AS volume_fr, NULL::varchar AS market
+              FROM search_console_data d
+              WHERE site_id = ${id}
+                AND date >= (CURRENT_DATE - 30)::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND query IS NOT NULL
+                AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
+                AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(d.query))
+              GROUP BY query
+              HAVING SUM(impressions) >= 5
+            ),
             tracked_only AS (
-              -- Tracked keywords NOT in GSC for this period (show with 0 data so they never disappear)
+              -- Tracked keywords NOT in GSC for this period OR last 30d (show with 0 data)
               SELECT tk.keyword AS query,
                 0 AS total_clicks, 0 AS total_impressions,
                 0 AS avg_ctr, 0 AS avg_position, 0 AS page_weighted_position,
@@ -125,8 +147,11 @@ export async function GET(request: NextRequest) {
               FROM tracked_keywords tk
               WHERE tk.site_id = ${id} AND tk.is_active = TRUE
                 AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(tk.keyword))
+                AND NOT EXISTS (SELECT 1 FROM gsc_30d WHERE LOWER(gsc_30d.query) = LOWER(tk.keyword))
             )
             SELECT * FROM gsc
+            UNION ALL
+            SELECT * FROM gsc_30d
             UNION ALL
             SELECT * FROM tracked_only
             ORDER BY total_clicks DESC, total_impressions DESC
@@ -176,7 +201,40 @@ export async function GET(request: NextRequest) {
               ON tk.site_id = ${id}
              AND LOWER(tk.keyword) = LOWER(q.query)
              AND tk.is_active = TRUE
-          `;
+          `
+          // Add 30d keywords + tracked keywords not in current period window
+          .then(async (baseRows: Record<string, unknown>[]) => {
+            const seen = new Set(baseRows.map(r => String(r.query ?? "").toLowerCase()));
+            const gsc30 = (await sql`
+              SELECT query, SUM(clicks) AS total_clicks, SUM(impressions) AS total_impressions,
+                AVG(ctr) AS avg_ctr, AVG(position) AS avg_position, AVG(position) AS page_weighted_position,
+                NULL AS first_seen, NULL::int AS volume_market, NULL::int AS volume_fr, NULL::varchar AS market
+              FROM search_console_data
+              WHERE site_id=${id} AND date >= (CURRENT_DATE-30)::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND query IS NOT NULL AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '')
+              GROUP BY query HAVING SUM(impressions) >= 5
+            `) as Record<string, unknown>[];
+            const trackedOnly = (await sql`
+              SELECT keyword AS query, 0 AS total_clicks, 0 AS total_impressions,
+                0 AS avg_ctr, 0 AS avg_position, 0 AS page_weighted_position,
+                NULL AS first_seen, volume_market, volume_fr, market
+              FROM tracked_keywords WHERE site_id=${id} AND is_active=true
+            `) as Record<string, unknown>[];
+            const extra = [...gsc30, ...trackedOnly]
+              .filter(r => !seen.has(String(r.query ?? "").toLowerCase()));
+            const deduped: Record<string, unknown>[] = [...baseRows];
+            const dedupSeen = new Set(seen);
+            for (const r of extra) {
+              const k = String(r.query ?? "").toLowerCase();
+              if (!dedupSeen.has(k)) { deduped.push(r); dedupSeen.add(k); }
+            }
+            return deduped.sort((a, b) =>
+              (Number(b.total_clicks) || 0) - (Number(a.total_clicks) || 0) ||
+              (Number(b.total_impressions) || 0) - (Number(a.total_impressions) || 0)
+            );
+          });
       return NextResponse.json(rows);
     }
 

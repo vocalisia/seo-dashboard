@@ -907,6 +907,32 @@ export default function DashboardPage() {
                           {highVolLoading.has(site.id) ? <Loader2 className="w-3 h-3 animate-spin inline" /> : null}
                           {` Ajouter (${highVolSelected.size})`}
                         </button>
+                        <button type="button"
+                          onClick={async () => {
+                            const all = new Set(highVolKws.map(k => k.keyword));
+                            setHighVolSelected(all);
+                            // Direct add without waiting for state update
+                            if (highVolKws.length === 0 || highVolLoading.has(site.id)) return;
+                            setHighVolLoading(prev => new Set(prev).add(site.id));
+                            try {
+                              const res = await fetch(`/api/keywords/high-volume?site_id=${site.id}`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ keywords: highVolKws.map(k => ({ keyword: k.keyword, volume: k.volume, source: k.source })) }),
+                              });
+                              const d = await res.json() as { success: boolean; added: number };
+                              if (d.success) {
+                                setHighVolResult(prev => ({ ...prev, [site.id]: { added: d.added, total: highVolKws.length } }));
+                                setHighVolPanel(null);
+                                await loadKeywords(site.id, period);
+                              }
+                            } catch { /* ignore */ }
+                            setHighVolLoading(prev => { const n = new Set(prev); n.delete(site.id); return n; });
+                          }}
+                          className="text-[10px] px-2 py-1 rounded bg-yellow-600/40 text-yellow-100 font-semibold hover:bg-yellow-600/60 border border-yellow-500/50 transition"
+                          title="Ajouter tous les 40 keywords en un clic">
+                          ⚡ Tout ajouter
+                        </button>
                         <button type="button" onClick={() => setHighVolSelected(new Set(highVolKws.map(k => k.keyword)))}
                           className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">Tout</button>
                         <button type="button" onClick={() => setHighVolSelected(new Set())}
