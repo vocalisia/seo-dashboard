@@ -64,52 +64,72 @@ export async function GET(request: NextRequest) {
       // matches what GSC UI displays). search_console_data is page-level → SUM(imp×pos)/
       // SUM(imp) is impressions-weighted across pages and gets dragged down by deep pages.
       // Fall back to page-level aggregation if query-level row not yet synced.
+      // ALWAYS include tracked_keywords even if 0 impressions in the period.
+      // This prevents tracked keywords disappearing when switching to shorter periods.
+      // Strategy: UNION of (GSC data for period) + (tracked_keywords with 0 data fallback)
       const rows = countryFilter
         ? await sql`
-            SELECT q.query,
-              COALESCE(ql.clicks_q, q.total_clicks)                AS total_clicks,
-              COALESCE(ql.impressions_q, q.total_impressions)      AS total_impressions,
-              COALESCE(ql.ctr_q, q.avg_ctr)                        AS avg_ctr,
-              COALESCE(ql.position_q, q.avg_position)              AS avg_position,
-              q.avg_position                                       AS page_weighted_position,
-              q.first_seen,
-              tk.volume_market,
-              tk.volume_fr,
-              tk.market
-            FROM (
-              SELECT query,
-                SUM(clicks) as total_clicks,
-                SUM(impressions) as total_impressions,
-                AVG(ctr) as avg_ctr,
-                AVG(position) as avg_position,
-                (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
-              FROM search_console_data d
-              WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                AND query IS NOT NULL
-                AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
-              GROUP BY query
-              ORDER BY total_clicks DESC
-              LIMIT ${limit}
-            ) q
-            LEFT JOIN LATERAL (
-              SELECT SUM(clicks)                                                     AS clicks_q,
-                     SUM(impressions)                                                AS impressions_q,
-                     SUM(impressions * ctr)::float / NULLIF(SUM(impressions), 0)     AS ctr_q,
-                     SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS position_q
-              FROM search_console_query_data
-              WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                AND query = q.query
-                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
-            ) ql ON TRUE
-            LEFT JOIN tracked_keywords tk
-              ON tk.site_id = ${id}
-             AND LOWER(tk.keyword) = LOWER(q.query)
-             AND tk.is_active = TRUE
+            WITH gsc AS (
+              SELECT q.query,
+                COALESCE(ql.clicks_q, q.total_clicks)                AS total_clicks,
+                COALESCE(ql.impressions_q, q.total_impressions)      AS total_impressions,
+                COALESCE(ql.ctr_q, q.avg_ctr)                        AS avg_ctr,
+                COALESCE(ql.position_q, q.avg_position)              AS avg_position,
+                q.avg_position                                       AS page_weighted_position,
+                q.first_seen,
+                tk.volume_market,
+                tk.volume_fr,
+                tk.market
+              FROM (
+                SELECT query,
+                  SUM(clicks) as total_clicks,
+                  SUM(impressions) as total_impressions,
+                  AVG(ctr) as avg_ctr,
+                  AVG(position) as avg_position,
+                  (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
+                FROM search_console_data d
+                WHERE site_id = ${id}
+                  AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                  AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                  AND query IS NOT NULL
+                  AND position BETWEEN 1 AND 200
+                  AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
+                GROUP BY query
+                ORDER BY total_clicks DESC
+                LIMIT ${limit}
+              ) q
+              LEFT JOIN LATERAL (
+                SELECT SUM(clicks)                                                     AS clicks_q,
+                       SUM(impressions)                                                AS impressions_q,
+                       SUM(impressions * ctr)::float / NULLIF(SUM(impressions), 0)     AS ctr_q,
+                       SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS position_q
+                FROM search_console_query_data
+                WHERE site_id = ${id}
+                  AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+                  AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                  AND query = q.query
+                  AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
+              ) ql ON TRUE
+              LEFT JOIN tracked_keywords tk
+                ON tk.site_id = ${id}
+               AND LOWER(tk.keyword) = LOWER(q.query)
+               AND tk.is_active = TRUE
+            ),
+            tracked_only AS (
+              -- Tracked keywords NOT in GSC for this period (show with 0 data so they never disappear)
+              SELECT tk.keyword AS query,
+                0 AS total_clicks, 0 AS total_impressions,
+                0 AS avg_ctr, 0 AS avg_position, 0 AS page_weighted_position,
+                NULL AS first_seen,
+                tk.volume_market, tk.volume_fr, tk.market
+              FROM tracked_keywords tk
+              WHERE tk.site_id = ${id} AND tk.is_active = TRUE
+                AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(tk.keyword))
+            )
+            SELECT * FROM gsc
+            UNION ALL
+            SELECT * FROM tracked_only
+            ORDER BY total_clicks DESC, total_impressions DESC
           `
         : await sql`
             SELECT q.query,

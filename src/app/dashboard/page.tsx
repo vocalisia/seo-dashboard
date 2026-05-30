@@ -149,7 +149,7 @@ export default function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [activeTab, setActiveTab] = useState<Record<number, TabType>>({});
-  const [period, setPeriod] = useState<Period>("3");
+  const [period, setPeriod] = useState<Period>("7"); // 7j default: 3j lag=2j = often just 1 real day
   const [keywords, setKeywords] = useState<Record<string, QueryData[]>>({});
   const [gains, setGains] = useState<Record<number, GainData[]>>({});
   const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
@@ -904,55 +904,41 @@ export default function DashboardPage() {
                         <button type="button" onClick={() => setHighVolPanel(null)}
                           className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600">✕</button>
                       </div>
-                      {/* Table */}
+                      {/* Keyword list — flex rows to avoid table overflow conflicts */}
                       {highVolPanelLoading ? (
                         <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-yellow-400" /></div>
                       ) : highVolKws.length === 0 ? (
                         <p className="text-xs text-gray-400 px-4 py-3">Aucun nouveau mot-clé — tous déjà trackés ou trop peu d&apos;impressions.</p>
                       ) : (
-                        <div className="max-h-72 overflow-y-auto overflow-x-hidden">
-                          <table className="w-full text-xs table-fixed">
-                            <colgroup>
-                              <col className="w-5" />
-                              <col /> {/* keyword — flex */}
-                              <col className="w-20" />
-                              <col className="w-16" />
-                              <col className="w-16" />
-                            </colgroup>
-                            <thead className="sticky top-0 bg-gray-900 z-10">
-                              <tr className="text-gray-500 text-[10px] border-b border-gray-800">
-                                <th className="py-1.5 pl-3"></th>
-                                <th className="text-left py-1.5">Mot-clé secteur</th>
-                                <th className="text-right py-1.5 pr-2">Imp. 90j</th>
-                                <th className="text-right py-1.5 pr-2">Pos.</th>
-                                <th className="text-right py-1.5 pr-3">Vol.</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {highVolKws.map((kw) => (
-                                <tr key={kw.keyword}
-                                  className={`border-b border-gray-800/30 cursor-pointer hover:bg-yellow-500/10 ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/10" : ""}`}
-                                  onClick={() => setHighVolSelected(prev => {
-                                    const n = new Set(prev);
-                                    n.has(kw.keyword) ? n.delete(kw.keyword) : n.add(kw.keyword);
-                                    return n;
-                                  })}>
-                                  <td className="py-1.5 pl-3">
-                                    <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
-                                      className="accent-yellow-400 w-3 h-3" />
-                                  </td>
-                                  <td className="py-1.5 text-white font-medium truncate pr-2">{kw.keyword}</td>
-                                  <td className="py-1.5 text-right text-blue-400 pr-2">{kw.impressions.toLocaleString()}</td>
-                                  <td className="py-1.5 text-right pr-2">
-                                    <span className={kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}>
-                                      {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
-                                    </span>
-                                  </td>
-                                  <td className="py-1 text-right text-gray-400">{kw.volume > 0 ? kw.volume.toLocaleString() : "—"}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                        <div className="max-h-72 overflow-y-auto">
+                          {/* Header row */}
+                          <div className="flex items-center px-3 py-1 text-[10px] text-gray-500 border-b border-gray-800 bg-gray-900 sticky top-0 z-10">
+                            <span className="w-5 shrink-0"></span>
+                            <span className="flex-1 min-w-0">Mot-clé secteur</span>
+                            <span className="w-16 text-right shrink-0">Imp. 90j</span>
+                            <span className="w-12 text-right shrink-0">Pos.</span>
+                            <span className="w-14 text-right shrink-0 pr-1">Vol.</span>
+                          </div>
+                          {highVolKws.map((kw) => (
+                            <div key={kw.keyword}
+                              className={`flex items-center px-3 py-1.5 border-b border-gray-800/30 cursor-pointer hover:bg-yellow-500/10 ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/15" : ""}`}
+                              onClick={() => setHighVolSelected(prev => {
+                                const n = new Set(prev);
+                                n.has(kw.keyword) ? n.delete(kw.keyword) : n.add(kw.keyword);
+                                return n;
+                              })}>
+                              <span className="w-5 shrink-0">
+                                <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
+                                  className="accent-yellow-400 w-3 h-3" />
+                              </span>
+                              <span className="flex-1 min-w-0 text-xs text-white font-medium truncate pr-2">{kw.keyword}</span>
+                              <span className="w-16 text-right text-xs text-blue-400 shrink-0">{kw.impressions.toLocaleString()}</span>
+                              <span className={`w-12 text-right text-xs shrink-0 ${kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}`}>
+                                {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
+                              </span>
+                              <span className="w-14 text-right text-xs text-gray-400 shrink-0 pr-1">{kw.volume > 0 ? kw.volume.toLocaleString() : "—"}</span>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
