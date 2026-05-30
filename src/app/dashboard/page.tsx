@@ -85,6 +85,7 @@ function resolveVolume(
 }
 
 function volLabel(vol: number): { label: string; color: string } {
+  if (!vol || vol <= 1) return { label: "—", color: "text-gray-600" }; // 1 = niche_skip marker
   if (vol >= 10000) return { label: `🔥 ${vol.toLocaleString()}`, color: "text-orange-400" };
   if (vol >= 1000) return { label: `⚡ ${vol.toLocaleString()}`, color: "text-yellow-400" };
   if (vol >= 100) return { label: `📈 ${vol.toLocaleString()}`, color: "text-blue-400" };
@@ -136,6 +137,7 @@ function recommendedAction(position: number, monthlyVolume: number): { label: st
 }
 
 function solution(pos: number): string {
+  if (!pos || pos === 0) return ""; // No position data = no advice
   if (pos <= 3) return "🏆 Top 3 — maintenir";
   if (pos <= 10) return "✅ Page 1 — optimise CTR (meta title/description)";
   if (pos <= 15) return "⚡ Quasi page 1 — améliore le contenu + maillage interne";
