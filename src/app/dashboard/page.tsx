@@ -378,7 +378,12 @@ export default function DashboardPage() {
     try {
       const res = await fetch(`/api/keywords/high-volume?site_id=${siteId}&min_imp=30`);
       const d = await res.json() as { success: boolean; keywords?: typeof highVolKws };
-      if (d.success && d.keywords) setHighVolKws(d.keywords.filter(k => !k.already_tracked).slice(0, 40));
+      if (d.success && d.keywords) {
+        const untracked = d.keywords.filter(k => !k.already_tracked).slice(0, 40);
+        setHighVolKws(untracked);
+        // Auto-select all by default so user can see what will be added
+        setHighVolSelected(new Set(untracked.map(k => k.keyword)));
+      }
     } catch { /* ignore */ }
     setHighVolPanelLoading(false);
   }
