@@ -926,7 +926,6 @@ export default function DashboardPage() {
                       ) : highVolKws.length === 0 ? (
                         <p className="text-xs text-gray-400 px-4 py-3">Aucun nouveau mot-clé — tous déjà trackés ou trop peu d&apos;impressions.</p>
                       ) : (
-                        {/* Panel uses its own overflow-x scroll, independent of keyword table */}
                         <div className="overflow-x-auto">
                           <div style={{minWidth: "520px"}}>
                             {/* Column headers */}
