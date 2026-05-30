@@ -141,12 +141,12 @@ export async function GET(request: NextRequest) {
               -- Tracked keywords NOT in GSC for this period OR last 30d
               -- Use current_position from tracked_keywords if set, else NULL (not 0)
               SELECT tk.keyword AS query,
-                0 AS total_clicks, 0 AS total_impressions,
-                0 AS avg_ctr,
-                NULLIF(tk.current_position, 0) AS avg_position,
-                NULLIF(tk.current_position, 0) AS page_weighted_position,
-                NULL AS first_seen,
-                tk.volume_market, tk.volume_fr, tk.market
+                0::bigint AS total_clicks, 0::bigint AS total_impressions,
+                0::float8 AS avg_ctr,
+                NULLIF(tk.current_position::float8, 0) AS avg_position,
+                NULLIF(tk.current_position::float8, 0) AS page_weighted_position,
+                NULL::date AS first_seen,
+                tk.volume_market::int, tk.volume_fr::int, tk.market::varchar
               FROM tracked_keywords tk
               WHERE tk.site_id = ${id} AND tk.is_active = TRUE
                 AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(tk.keyword))
@@ -221,10 +221,10 @@ export async function GET(request: NextRequest) {
             `) as Record<string, unknown>[];
             const trackedOnly = (await sql`
               SELECT keyword AS query, 0 AS total_clicks, 0 AS total_impressions,
-                0 AS avg_ctr,
-                NULLIF(current_position, 0) AS avg_position,
-                NULLIF(current_position, 0) AS page_weighted_position,
-                NULL AS first_seen, volume_market, volume_fr, market
+                0::float8 AS avg_ctr,
+                NULLIF(current_position::float8, 0) AS avg_position,
+                NULLIF(current_position::float8, 0) AS page_weighted_position,
+                NULL::date AS first_seen, volume_market::int, volume_fr::int, market::varchar
               FROM tracked_keywords WHERE site_id=${id} AND is_active=true
             `) as Record<string, unknown>[];
             const extra = [...gsc30, ...trackedOnly]
