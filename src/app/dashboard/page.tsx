@@ -796,24 +796,6 @@ export default function DashboardPage() {
                   {top10 > 0 && isOpen && (
                     <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">{top10} top10</span>
                   )}
-                  {isOpen && (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); void addHighVolumeKeywords(site.id); }}
-                      disabled={highVolLoading.has(site.id)}
-                      title="Ajouter les mots-clés à fort volume (≥1000/mois)"
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-yellow-500/30 border border-yellow-400/50 text-yellow-200 hover:bg-yellow-500/60 disabled:opacity-40 transition"
-                    >
-                      {highVolLoading.has(site.id) ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <TrendingUp className="w-3 h-3" />
-                      )}
-                      {highVolResult[site.id]
-                        ? `+${highVolResult[site.id].added} ajoutés`
-                        : "⚡ High Vol. ≥1000"}
-                    </button>
-                  )}
                 </div>
                 <div className="flex items-center gap-6 text-sm">
                   <div className="text-right">
@@ -853,6 +835,22 @@ export default function DashboardPage() {
                     <button onClick={() => switchTab(site.id, "device")}
                       className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "device" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <Smartphone className="w-3 h-3" /> Devices
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); void addHighVolumeKeywords(site.id); }}
+                      disabled={highVolLoading.has(site.id)}
+                      title="Ajouter les mots-clés à fort volume (≥1000/mois)"
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-t text-xs font-semibold bg-yellow-500/30 border-b-2 border-yellow-400/60 text-yellow-200 hover:bg-yellow-500/60 disabled:opacity-40 transition ml-2"
+                    >
+                      {highVolLoading.has(site.id) ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <TrendingUp className="w-3 h-3" />
+                      )}
+                      {highVolResult[site.id]
+                        ? `+${highVolResult[site.id].added} ajoutés`
+                        : "⚡ High Vol. ≥1000"}
                     </button>
                   </div>
 
