@@ -138,10 +138,13 @@ export async function GET(request: NextRequest) {
               HAVING SUM(impressions) >= 5
             ),
             tracked_only AS (
-              -- Tracked keywords NOT in GSC for this period OR last 30d (show with 0 data)
+              -- Tracked keywords NOT in GSC for this period OR last 30d
+              -- Use current_position from tracked_keywords if set, else NULL (not 0)
               SELECT tk.keyword AS query,
                 0 AS total_clicks, 0 AS total_impressions,
-                0 AS avg_ctr, 0 AS avg_position, 0 AS page_weighted_position,
+                0 AS avg_ctr,
+                NULLIF(tk.current_position, 0) AS avg_position,
+                NULLIF(tk.current_position, 0) AS page_weighted_position,
                 NULL AS first_seen,
                 tk.volume_market, tk.volume_fr, tk.market
               FROM tracked_keywords tk
@@ -218,7 +221,9 @@ export async function GET(request: NextRequest) {
             `) as Record<string, unknown>[];
             const trackedOnly = (await sql`
               SELECT keyword AS query, 0 AS total_clicks, 0 AS total_impressions,
-                0 AS avg_ctr, 0 AS avg_position, 0 AS page_weighted_position,
+                0 AS avg_ctr,
+                NULLIF(current_position, 0) AS avg_position,
+                NULLIF(current_position, 0) AS page_weighted_position,
                 NULL AS first_seen, volume_market, volume_fr, market
               FROM tracked_keywords WHERE site_id=${id} AND is_active=true
             `) as Record<string, unknown>[];
