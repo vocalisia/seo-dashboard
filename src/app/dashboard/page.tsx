@@ -154,6 +154,8 @@ export default function DashboardPage() {
   const [gains, setGains] = useState<Record<number, GainData[]>>({});
   const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
   const [kwLoadingIds, setKwLoadingIds] = useState<Set<number>>(new Set());
+  const [highVolLoading, setHighVolLoading] = useState<Set<number>>(new Set());
+  const [highVolResult, setHighVolResult] = useState<Record<number, {added: number; total: number}>>({});
   const [search, setSearch] = useState("");
   const [kwTypeFilter, setKwTypeFilter] = useState<"all"|"longtail"|"questions">("all");
   const [siteSortCol, setSiteSortCol] = useState<"clicks"|"impressions"|"position">("clicks");
@@ -345,6 +347,26 @@ export default function DashboardPage() {
     setPeriod(p);
     await fetchSites(undefined, p);
     for (const id of expandedIds) await loadKeywords(id, p);
+  }
+
+  async function addHighVolumeKeywords(siteId: number) {
+    if (highVolLoading.has(siteId)) return;
+    setHighVolLoading(prev => new Set(prev).add(siteId));
+    try {
+      const res = await fetch(`/api/keywords/high-volume?site_id=${siteId}&min_vol=1000`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const d = await res.json() as { success: boolean; added: number; already_tracked: number; total_high_vol: number; error?: string };
+      if (d.success) {
+        setHighVolResult(prev => ({ ...prev, [siteId]: { added: d.added, total: d.total_high_vol } }));
+        if (d.added > 0) {
+          // Reload keywords to show newly added
+          await loadKeywords(siteId, period);
+        }
+      }
+    } catch { /* ignore */ }
+    setHighVolLoading(prev => { const n = new Set(prev); n.delete(siteId); return n; });
   }
 
   async function openKwHistory(siteId: number, query: string) {
@@ -817,13 +839,31 @@ export default function DashboardPage() {
                   </div>
 
                   {tab === "keywords" && (
-                    <div className="flex gap-1 px-4 py-2">
-                      {(["all","longtail","questions"] as const).map(f => (
-                        <button key={f} type="button" onClick={() => setKwTypeFilter(f)}
-                          className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
-                          {f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
-                        </button>
-                      ))}
+                    <div className="flex items-center justify-between px-4 py-2 gap-2 flex-wrap">
+                      <div className="flex gap-1">
+                        {(["all","longtail","questions"] as const).map(f => (
+                          <button key={f} type="button" onClick={() => setKwTypeFilter(f)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
+                            {f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void addHighVolumeKeywords(site.id)}
+                        disabled={highVolLoading.has(site.id)}
+                        title="Ajouter les mots-clés avec volume ≥1000/mois détectés chez les concurrents"
+                        className="flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium bg-yellow-500/20 border border-yellow-500/30 text-yellow-300 hover:bg-yellow-500/40 disabled:opacity-40 transition"
+                      >
+                        {highVolLoading.has(site.id) ? (
+                          <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                        ) : (
+                          <TrendingUp className="w-2.5 h-2.5" />
+                        )}
+                        {highVolResult[site.id]
+                          ? `High Vol. (+${highVolResult[site.id].added} ajoutés)`
+                          : "High Vol. ≥1000"}
+                      </button>
                     </div>
                   )}
                   {kwLoadingIds.has(site.id) ? (
