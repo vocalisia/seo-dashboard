@@ -910,33 +910,27 @@ export default function DashboardPage() {
                       ) : highVolKws.length === 0 ? (
                         <p className="text-xs text-gray-400 px-4 py-3">Aucun nouveau mot-clé — tous déjà trackés ou trop peu d&apos;impressions.</p>
                       ) : (
-                        <div className="max-h-72 overflow-y-auto">
-                          {/* Header row */}
-                          <div className="flex items-center px-3 py-1 text-[10px] text-gray-500 border-b border-gray-800 bg-gray-900 sticky top-0 z-10">
-                            <span className="w-5 shrink-0"></span>
-                            <span className="flex-1 min-w-0">Mot-clé secteur</span>
-                            <span className="w-16 text-right shrink-0">Imp. 90j</span>
-                            <span className="w-12 text-right shrink-0">Pos.</span>
-                            <span className="w-14 text-right shrink-0 pr-1">Vol.</span>
-                          </div>
+                        <div className="max-h-80 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-0.5 p-2">
                           {highVolKws.map((kw) => (
                             <div key={kw.keyword}
-                              className={`flex items-center px-3 py-1.5 border-b border-gray-800/30 cursor-pointer hover:bg-yellow-500/10 ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/15" : ""}`}
+                              className={`flex items-start gap-2 px-3 py-2 rounded-lg cursor-pointer border transition ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/15 border-yellow-500/40" : "bg-gray-800/50 border-gray-700/30 hover:border-yellow-500/30 hover:bg-yellow-500/5"}`}
                               onClick={() => setHighVolSelected(prev => {
                                 const n = new Set(prev);
                                 n.has(kw.keyword) ? n.delete(kw.keyword) : n.add(kw.keyword);
                                 return n;
                               })}>
-                              <span className="w-5 shrink-0">
-                                <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
-                                  className="accent-yellow-400 w-3 h-3" />
-                              </span>
-                              <span className="flex-1 min-w-0 text-xs text-white font-medium truncate pr-2">{kw.keyword}</span>
-                              <span className="w-16 text-right text-xs text-blue-400 shrink-0">{kw.impressions.toLocaleString()}</span>
-                              <span className={`w-12 text-right text-xs shrink-0 ${kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}`}>
-                                {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
-                              </span>
-                              <span className="w-14 text-right text-xs text-gray-400 shrink-0 pr-1">{kw.volume > 0 ? kw.volume.toLocaleString() : "—"}</span>
+                              <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
+                                className="accent-yellow-400 w-3.5 h-3.5 mt-0.5 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs text-white font-medium leading-tight mb-1">{kw.keyword}</div>
+                                <div className="flex items-center gap-3 text-[10px]">
+                                  <span className="text-blue-400">{kw.impressions.toLocaleString()} imp.</span>
+                                  <span className={kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}>
+                                    pos. {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
+                                  </span>
+                                  {kw.volume > 0 && <span className="text-gray-500">{kw.volume.toLocaleString()}/mois</span>}
+                                </div>
+                              </div>
                             </div>
                           ))}
                         </div>
