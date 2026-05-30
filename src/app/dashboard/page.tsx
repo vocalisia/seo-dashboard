@@ -926,46 +926,49 @@ export default function DashboardPage() {
                       ) : highVolKws.length === 0 ? (
                         <p className="text-xs text-gray-400 px-4 py-3">Aucun nouveau mot-clé — tous déjà trackés ou trop peu d&apos;impressions.</p>
                       ) : (
-                        <div className="w-full">
-                          {/* Column headers — clickable sort */}
-                          <div className="grid px-3 py-1.5 bg-gray-950 border-b border-gray-800 sticky top-0 z-10 text-[10px] text-gray-400 select-none"
-                            style={{gridTemplateColumns: "20px 1fr 70px 55px 70px"}}>
-                            <span></span>
-                            <span>Mot-clé du secteur</span>
-                            {(["impressions","avg_position","volume"] as HVSort[]).map((col, i) => (
-                              <button key={col} type="button" onClick={() => hvSort(col)}
-                                className={`text-right flex items-center justify-end gap-0.5 hover:text-white transition ${hvSortCol === col ? "text-yellow-300" : ""}`}>
-                                {["Imp. 90j","Pos.","Vol."][i]}
-                                <span className="flex flex-col leading-none text-[7px] ml-0.5">
-                                  <span className={hvSortCol === col && hvSortDir === "asc" ? "text-yellow-400" : "opacity-30"}>▲</span>
-                                  <span className={hvSortCol === col && hvSortDir === "desc" ? "text-yellow-400" : "opacity-30"}>▼</span>
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                          {/* Rows */}
-                          <div className="max-h-72 overflow-y-auto">
-                            {highVolKws.map((kw) => (
-                              <div key={kw.keyword}
-                                className={`grid items-center px-3 py-2 border-b border-gray-800/30 cursor-pointer hover:bg-yellow-500/8 transition ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/12" : ""}`}
-                                style={{gridTemplateColumns: "20px 1fr 70px 55px 70px"}}
-                                onClick={() => setHighVolSelected(prev => {
-                                  const n = new Set(prev);
-                                  n.has(kw.keyword) ? n.delete(kw.keyword) : n.add(kw.keyword);
-                                  return n;
-                                })}>
-                                <span className="flex items-center">
-                                  <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
-                                    className="accent-yellow-400 w-3 h-3" />
-                                </span>
-                                <span className="text-xs text-white font-medium truncate pr-2 min-w-0">{kw.keyword}</span>
-                                <span className="text-right text-xs text-blue-400">{kw.impressions.toLocaleString()}</span>
-                                <span className={`text-right text-xs ${kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}`}>
-                                  {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
-                                </span>
-                                <span className="text-right text-xs text-gray-400">{kw.volume > 0 ? kw.volume.toLocaleString() : "—"}</span>
-                              </div>
-                            ))}
+                        {/* Panel uses its own overflow-x scroll, independent of keyword table */}
+                        <div className="overflow-x-auto">
+                          <div style={{minWidth: "520px"}}>
+                            {/* Column headers */}
+                            <div className="flex items-center px-3 py-1.5 bg-gray-950 border-b border-gray-800 sticky top-0 z-10 text-[10px] text-gray-400 select-none">
+                              <span className="w-5 shrink-0"></span>
+                              <span className="flex-1 min-w-[160px]">Mot-clé du secteur</span>
+                              {(["impressions","avg_position","volume"] as HVSort[]).map((col, i) => (
+                                <button key={col} type="button" onClick={() => hvSort(col)}
+                                  className={`w-20 text-right flex items-center justify-end gap-0.5 shrink-0 hover:text-white transition ${hvSortCol === col ? "text-yellow-300" : ""}`}>
+                                  {["Imp. 90j","Pos.","Vol."][i]}
+                                  <span className="flex flex-col leading-none text-[7px] ml-0.5">
+                                    <span className={hvSortCol === col && hvSortDir === "asc" ? "text-yellow-400" : "opacity-30"}>▲</span>
+                                    <span className={hvSortCol === col && hvSortDir === "desc" ? "text-yellow-400" : "opacity-30"}>▼</span>
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                            {/* Rows */}
+                            <div className="max-h-72 overflow-y-auto">
+                              {highVolKws.map((kw) => (
+                                <div key={kw.keyword}
+                                  className={`flex items-center px-3 py-2 border-b border-gray-800/30 cursor-pointer transition ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/12 hover:bg-yellow-500/20" : "hover:bg-yellow-500/5"}`}
+                                  onClick={() => setHighVolSelected(prev => {
+                                    const n = new Set(prev);
+                                    n.has(kw.keyword) ? n.delete(kw.keyword) : n.add(kw.keyword);
+                                    return n;
+                                  })}>
+                                  <span className="w-5 shrink-0 flex items-center">
+                                    <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
+                                      title={`Sélectionner ${kw.keyword}`}
+                                      aria-label={`Sélectionner ${kw.keyword}`}
+                                      className="accent-yellow-400 w-3 h-3" />
+                                  </span>
+                                  <span className="flex-1 min-w-[160px] text-xs text-white font-medium truncate pr-2">{kw.keyword}</span>
+                                  <span className="w-20 text-right text-xs text-blue-400 shrink-0">{kw.impressions.toLocaleString()}</span>
+                                  <span className={`w-20 text-right text-xs shrink-0 ${kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}`}>
+                                    {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
+                                  </span>
+                                  <span className="w-20 text-right text-xs text-gray-400 shrink-0">{kw.volume > 0 ? kw.volume.toLocaleString() : "—"}</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         </div>
                       )}
