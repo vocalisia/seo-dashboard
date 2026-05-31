@@ -159,10 +159,10 @@ export default function DashboardPage() {
   const [highVolLoading, setHighVolLoading] = useState<Set<number>>(new Set());
   const [highVolResult, setHighVolResult] = useState<Record<number, {added: number; total: number}>>({});
   const [highVolPanel, setHighVolPanel] = useState<number | null>(null); // siteId with open panel
-  const [highVolKws, setHighVolKws] = useState<{keyword: string; impressions: number; avg_position: number; volume: number; source: string; already_tracked: boolean}[]>([]);
+  const [highVolKws, setHighVolKws] = useState<{keyword: string; impressions: number; avg_position: number; clicks: number; source: string; already_tracked: boolean}[]>([]);
   const [highVolPanelLoading, setHighVolPanelLoading] = useState(false);
   const [highVolSelected, setHighVolSelected] = useState<Set<string>>(new Set());
-  type HVSort = "impressions" | "avg_position" | "volume";
+  type HVSort = "impressions" | "avg_position" | "clicks";
   type HVDir = "asc" | "desc";
   const [hvSortCol, setHvSortCol] = useState<HVSort>("impressions");
   const [hvSortDir, setHvSortDir] = useState<HVDir>("desc");
@@ -398,7 +398,7 @@ export default function DashboardPage() {
       const res = await fetch(`/api/keywords/high-volume?site_id=${siteId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keywords: toAdd.map(k => ({ keyword: k.keyword, volume: k.volume, source: k.source })) }),
+        body: JSON.stringify({ keywords: toAdd.map(k => ({ keyword: k.keyword, source: k.source })) }),
       });
       const d = await res.json() as { success: boolean; added: number };
       if (d.success) {
@@ -925,7 +925,7 @@ export default function DashboardPage() {
                               const res = await fetch(`/api/keywords/high-volume?site_id=${site.id}`, {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ keywords: highVolKws.map(k => ({ keyword: k.keyword, volume: k.volume, source: k.source })) }),
+                                body: JSON.stringify({ keywords: highVolKws.map(k => ({ keyword: k.keyword, source: k.source })) }),
                               });
                               const d = await res.json() as { success: boolean; added: number };
                               if (d.success) {
@@ -965,10 +965,10 @@ export default function DashboardPage() {
                             <div className="flex items-center px-3 py-1.5 bg-gray-950 border-b border-gray-800 sticky top-0 z-10 text-[10px] text-gray-400 select-none">
                               <span className="w-5 shrink-0"></span>
                               <span className="flex-1 min-w-[160px]">Mot-clé du secteur</span>
-                              {(["impressions","avg_position","volume"] as HVSort[]).map((col, i) => (
+                              {(["impressions","avg_position","clicks"] as HVSort[]).map((col, i) => (
                                 <button key={col} type="button" onClick={() => hvSort(col)}
                                   className={`w-20 text-right flex items-center justify-end gap-0.5 shrink-0 hover:text-white transition ${hvSortCol === col ? "text-yellow-300" : ""}`}>
-                                  {["Imp. 90j","Pos.","Vol."][i]}
+                                  {["Imp. 90j","Pos.","Clics 90j"][i]}
                                   <span className="flex flex-col leading-none text-[7px] ml-0.5">
                                     <span className={hvSortCol === col && hvSortDir === "asc" ? "text-yellow-400" : "opacity-30"}>▲</span>
                                     <span className={hvSortCol === col && hvSortDir === "desc" ? "text-yellow-400" : "opacity-30"}>▼</span>
@@ -997,7 +997,7 @@ export default function DashboardPage() {
                                   <span className={`w-20 text-right text-xs shrink-0 ${kw.avg_position <= 10 ? "text-green-400" : kw.avg_position <= 20 ? "text-yellow-400" : "text-red-400"}`}>
                                     {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
                                   </span>
-                                  <span className="w-20 text-right text-xs text-gray-400 shrink-0">{kw.volume > 0 ? kw.volume.toLocaleString() : "—"}</span>
+                                  <span className="w-20 text-right text-xs text-gray-400 shrink-0">{kw.clicks > 0 ? kw.clicks.toLocaleString() : "0"}</span>
                                 </div>
                               ))}
                             </div>
