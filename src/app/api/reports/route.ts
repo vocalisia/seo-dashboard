@@ -9,7 +9,8 @@ export async function GET(request: NextRequest) {
   if (authState.unauthorized) return authState.unauthorized;
 
   const siteId = request.nextUrl.searchParams.get("siteId");
-  const limit = parseInt(request.nextUrl.searchParams.get("limit") || "4");
+  const requestedLimit = parseInt(request.nextUrl.searchParams.get("limit") || "4", 10);
+  const limit = Math.min(12, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 4));
 
   try {
     const sql = getSQL();

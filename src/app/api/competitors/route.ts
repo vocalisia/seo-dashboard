@@ -26,6 +26,17 @@ interface ResearchResult {
   ourKeywordsCount: number;
 }
 
+function isQuestionLike(keyword: string): boolean {
+  const lower = keyword.toLowerCase().trim();
+  if (!lower) return false;
+  if (lower.includes("?")) return true;
+  return /^(comment|pourquoi|combien|quand|quel|quelle|quels|quelles|où|ou|qui|que|quoi|est-ce|qu'est|qu est|how|what|why|when|which|where|who|is|are|does|do|can|should|best|top|meilleur|meilleure|comparatif)\b/i.test(lower);
+}
+
+function wordCount(keyword: string): number {
+  return keyword.trim().split(/\s+/).filter(Boolean).length;
+}
+
 function formatAIError(err: unknown): string {
   if (err instanceof AIProviderError) {
     // Human-readable, provider-aware
@@ -60,7 +71,8 @@ async function runResearchForSite(site: Site, sql: SQLClient): Promise<ResearchR
 TASK 1: Find the 5-8 direct competitors of this website. These are sites targeting the same audience and topics.
 
 TASK 2: For each competitor, list their top 10-15 keywords that:
-- Have estimated monthly search volume >= 1000
+- Have estimated monthly search volume >= 1000 for head/commercial terms
+- Also include useful question/long-tail gaps even if estimated volume is lower (>= 100), because they feed FAQ, AIO and content briefs
 - Are commercially relevant
 - The competitor ranks in top 20 for
 
@@ -85,7 +97,10 @@ RESPOND IN STRICT JSON FORMAT ONLY (no markdown, no explanation):
 }
 
 Rules:
-- volume MUST be >= 1000 monthly searches (estimate based on your knowledge)
+- volume is an estimate, not a Google truth. Be conservative.
+- head/commercial gaps should be >= 1000 estimated searches/month.
+- question/long-tail gaps may be >= 100 estimated searches/month if they are strongly relevant.
+- include at least 5 question-style gaps when the market has real informational searches (comment/how/what/best/comparatif).
 - Only include keywords genuinely relevant to ${site.name}
 - Sort keyword_gaps by volume DESC
 - Maximum 30 keyword gaps
@@ -125,7 +140,11 @@ Rules:
   }
 
   const filteredGaps = (parsed.keyword_gaps || [])
-    .filter((g) => g.volume >= 1000 && !ourKeywordSet.has(g.keyword.toLowerCase()))
+    .filter((g) => {
+      const isQuestionOrLongtail = isQuestionLike(g.keyword) || wordCount(g.keyword) >= 4 || /informational/i.test(g.intent ?? "");
+      const minVolume = isQuestionOrLongtail ? 100 : 1000;
+      return g.volume >= minVolume && !ourKeywordSet.has(g.keyword.toLowerCase());
+    })
     .filter((g) => !isPortfolioDomain(g.competitor))
     .sort((a, b) => b.volume - a.volume)
     .slice(0, 30);
@@ -187,7 +206,7 @@ interface CompetitorData {
  * POST /api/competitors
  * body: { site_id: number | "all" }
  *
- * Uses Anthropic Claude (since Mammouth budget OUT 2026-05-22) to:
+ * Uses the unified Gemini/Perplexity router to:
  * 1. Find 5-10 direct competitors
  * 2. Extract their top keywords with estimated volume
  * 3. Compare with our GSC keywords

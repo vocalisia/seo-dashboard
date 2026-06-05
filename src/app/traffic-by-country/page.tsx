@@ -275,15 +275,25 @@ export default function TrafficByCountryPage() {
   const [windowKey, setWindowKey] = useState<Window>("28d");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ApiResponse | null>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
 
   async function fetchData() {
     setLoading(true);
     try {
-      const res = await fetch(`/api/ga4-traffic?window=${windowKey}`, { cache: "no-store" });
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 65000);
+      const res = await fetch(`/api/ga4-traffic?window=${windowKey}`, { cache: "no-store", signal: controller.signal });
+      window.clearTimeout(timeout);
       const json: ApiResponse = await res.json();
       setData(json);
+      if (json.success) setLastLoadedAt(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
     } catch (err) {
-      setData({ success: false, error: err instanceof Error ? err.message : "Network error" });
+      setData({
+        success: false,
+        error: err instanceof Error && err.name === "AbortError"
+          ? "GA4 trop long: limite 65s atteinte. Essaie 7d ou recharge."
+          : err instanceof Error ? err.message : "Network error",
+      });
     } finally {
       setLoading(false);
     }
@@ -350,6 +360,9 @@ export default function TrafficByCountryPage() {
             </button>
           </div>
         </div>
+        {lastLoadedAt && (
+          <div className="mb-3 text-xs text-zinc-500">Dernière mise à jour locale: {lastLoadedAt}</div>
+        )}
 
         {loading && !data && (
           <div className="flex h-64 items-center justify-center text-zinc-500">
@@ -412,6 +425,11 @@ export default function TrafficByCountryPage() {
             <SiteCard key={s.site_id} site={s} />
           ))}
         </div>
+        {data?.success && sites.length === 0 && !loading && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-8 text-center text-sm text-zinc-400">
+            Aucun site GA4 exploitable pour cette fenêtre.
+          </div>
+        )}
       </div>
     </main>
   );

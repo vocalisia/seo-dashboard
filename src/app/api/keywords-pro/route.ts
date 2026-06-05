@@ -17,8 +17,8 @@ function classifyIntent(keyword: string): string {
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const siteId = sp.get("siteId");
-  const minClicks = parseInt(sp.get("minClicks") ?? "2000", 10);
-  const minWords = parseInt(sp.get("minWords") ?? "3", 10);
+  const minClicks = parseInt(sp.get("minClicks") ?? "1", 10);
+  const minWords = parseInt(sp.get("minWords") ?? "1", 10);
   const posMin = parseFloat(sp.get("posMin") ?? "1");
   const posMax = parseFloat(sp.get("posMax") ?? "100");
 
@@ -41,9 +41,16 @@ export async function GET(req: NextRequest) {
         scq.query AS keyword,
         SUM(scq.clicks)::int AS clicks,
         SUM(scq.impressions)::int AS impressions,
-        (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) AS position
+        (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) AS position,
+        MAX(tk.volume_market)::int AS volume_market,
+        MAX(tk.volume_fr)::int AS volume_fr,
+        MAX(tk.volume_source)::varchar AS volume_source
       FROM search_console_query_data scq
       JOIN sites s ON s.id = scq.site_id
+      LEFT JOIN tracked_keywords tk
+        ON tk.site_id = scq.site_id
+       AND LOWER(tk.keyword) = LOWER(scq.query)
+       AND tk.is_active = TRUE
       WHERE scq.date >= NOW() - INTERVAL '30 days'
         AND scq.query IS NOT NULL
       GROUP BY s.name, scq.query
@@ -58,30 +65,35 @@ export async function GET(req: NextRequest) {
         query AS keyword,
         SUM(clicks)::int AS clicks,
         SUM(impressions)::int AS impressions,
-        (SUM(impressions * position)::float / NULLIF(SUM(impressions), 0)) AS position
-      FROM search_console_query_data
-      WHERE site_id = ${parseInt(siteId, 10)}
-        AND date >= NOW() - INTERVAL '30 days'
-        AND query IS NOT NULL
-      GROUP BY query
+        (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) AS position,
+        MAX(tk.volume_market)::int AS volume_market,
+        MAX(tk.volume_fr)::int AS volume_fr,
+        MAX(tk.volume_source)::varchar AS volume_source
+      FROM search_console_query_data scq
+      LEFT JOIN tracked_keywords tk
+        ON tk.site_id = scq.site_id
+       AND LOWER(tk.keyword) = LOWER(scq.query)
+       AND tk.is_active = TRUE
+      WHERE scq.site_id = ${parseInt(siteId, 10)}
+        AND scq.date >= NOW() - INTERVAL '30 days'
+        AND scq.query IS NOT NULL
+      GROUP BY scq.query
       HAVING
-        SUM(clicks) >= ${minClicks}
-        AND array_length(string_to_array(query, ' '), 1) >= ${minWords}
-        AND (SUM(impressions * position)::float / NULLIF(SUM(impressions), 0)) BETWEEN ${posMin} AND ${posMax}
-      ORDER BY SUM(clicks) DESC
+        SUM(scq.clicks) >= ${minClicks}
+        AND array_length(string_to_array(scq.query, ' '), 1) >= ${minWords}
+        AND (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) BETWEEN ${posMin} AND ${posMax}
+      ORDER BY SUM(scq.clicks) DESC
       LIMIT 500
-    `) as { keyword: string; clicks: number; impressions: number; position: number; site_name?: string }[];
+    `) as { keyword: string; clicks: number; impressions: number; position: number; site_name?: string; volume_market?: number | null; volume_fr?: number | null; volume_source?: string | null }[];
 
     const enriched = rows.map((r) => {
-      const pos = Number(r.position);
-      const imp = Number(r.impressions);
-      const share =
-        pos <= 1 ? 0.9 : pos <= 3 ? 0.65 : pos <= 5 ? 0.48 : pos <= 10 ? 0.25 : pos <= 20 ? 0.08 : 0.02;
-      const volume = Math.round(imp / share);
+      const rawVolume = Number(r.volume_market ?? r.volume_fr ?? 0);
+      const source = r.volume_source ?? null;
+      const volume = source?.includes("niche_skip") || rawVolume <= 1 ? 0 : rawVolume;
       const difficulty =
-        volume > 10000 ? "hard" : volume > 3000 ? "medium" : "easy";
+        volume === 0 ? "unknown" : volume > 10000 ? "hard" : volume > 3000 ? "medium" : "easy";
       const intent = classifyIntent(r.keyword);
-      return { ...r, volume, difficulty, intent, site_name: r.site_name };
+      return { ...r, volume, volume_source: source, difficulty, intent, site_name: r.site_name };
     });
 
     return NextResponse.json({ success: true, keywords: enriched });

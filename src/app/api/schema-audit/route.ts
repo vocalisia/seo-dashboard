@@ -4,6 +4,9 @@ import { testRichResults } from "@/lib/rich-results";
 import { ensureSchema } from "@/lib/db";
 import { logError } from "@/lib/logger";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
 interface SchemaResult {
   url: string;
   types: string[];
@@ -150,10 +153,10 @@ function parseJsonLd(html: string): { types: string[]; errors: string[]; warning
   return { types, errors, warnings, raw: rawJson };
 }
 
-async function fetchWithTimeout(url: string): Promise<string | null> {
+async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<string | null> {
   try {
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: { "User-Agent": "SEO-Dashboard-Auditor/1.0" },
     });
     if (!res.ok) return null;
@@ -163,7 +166,7 @@ async function fetchWithTimeout(url: string): Promise<string | null> {
   }
 }
 
-async function fetchSitemapUrls(siteUrl: string): Promise<string[]> {
+async function fetchSitemapUrls(siteUrl: string, limit: number): Promise<string[]> {
   const sitemapUrl = siteUrl.replace(/\/$/, "") + "/sitemap.xml";
   const html = await fetchWithTimeout(sitemapUrl);
   if (!html) return [];
@@ -171,9 +174,22 @@ async function fetchSitemapUrls(siteUrl: string): Promise<string[]> {
   const urls: string[] = [];
   for (const m of matches) {
     urls.push(m[1].trim());
-    if (urls.length >= 50) break;
+    if (urls.length >= limit) break;
   }
   return urls;
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const current = index++;
+      results[current] = await mapper(items[current]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export async function POST(request: NextRequest) {
@@ -183,11 +199,14 @@ export async function POST(request: NextRequest) {
   let siteUrl: string;
   let verifyWithGoogle = false;
   let maxVerify = 10;
+  let maxUrls = 30;
+  const startedAt = Date.now();
   try {
     const body = (await request.json()) as {
       siteUrl?: unknown;
       verifyWithGoogle?: unknown;
       maxVerify?: unknown;
+      maxUrls?: unknown;
     };
     if (typeof body.siteUrl !== "string") {
       return NextResponse.json({ error: "siteUrl required" }, { status: 400 });
@@ -195,7 +214,10 @@ export async function POST(request: NextRequest) {
     siteUrl = body.siteUrl;
     if (typeof body.verifyWithGoogle === "boolean") verifyWithGoogle = body.verifyWithGoogle;
     if (typeof body.maxVerify === "number" && body.maxVerify > 0) {
-      maxVerify = Math.min(50, Math.floor(body.maxVerify));
+      maxVerify = Math.min(10, Math.floor(body.maxVerify));
+    }
+    if (typeof body.maxUrls === "number" && body.maxUrls > 0) {
+      maxUrls = Math.min(50, Math.floor(body.maxUrls));
     }
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
@@ -206,18 +228,15 @@ export async function POST(request: NextRequest) {
     try { await ensureSchema(); } catch (e) { logError("schema-audit.ensureSchema", e); }
   }
 
-  const urls = await fetchSitemapUrls(siteUrl);
+  const urls = await fetchSitemapUrls(siteUrl, maxUrls);
   if (urls.length === 0) {
     return NextResponse.json({ error: "Sitemap introuvable ou vide" }, { status: 404 });
   }
 
-  const results: SchemaResult[] = [];
-
-  for (const url of urls) {
+  const results = await mapLimit(urls, 6, async (url): Promise<SchemaResult> => {
     const html = await fetchWithTimeout(url);
     if (!html) {
-      results.push({ url, types: [], errors: ["Fetch failed"], warnings: [], rawJson: null, status: "error" });
-      continue;
+      return { url, types: [], errors: ["Fetch failed"], warnings: [], rawJson: null, status: "error" };
     }
 
     const { types, errors, warnings, raw } = parseJsonLd(html);
@@ -229,8 +248,8 @@ export async function POST(request: NextRequest) {
       status = "error";
     }
 
-    results.push({ url, types, errors, warnings, rawJson: raw, status });
-  }
+    return { url, types, errors, warnings, rawJson: raw, status };
+  });
 
   // Optional: verify first N pages via Google Rich Results API.
   if (verifyWithGoogle) {
@@ -238,8 +257,7 @@ export async function POST(request: NextRequest) {
       .filter((r) => r.types.length > 0)
       .slice(0, maxVerify);
 
-    // Sequential (Google API can rate-limit; service-account quota is modest)
-    for (const r of toVerify) {
+    await mapLimit(toVerify, 2, async (r) => {
       const gr = await testRichResults(r.url);
       r.google_verified = gr.google_verified;
       r.google_types = gr.detected_types;
@@ -257,7 +275,8 @@ export async function POST(request: NextRequest) {
         if (!localSet.has(t)) discrepancies.push(`google-only: ${t}`);
       }
       r.google_discrepancies = discrepancies;
-    }
+      return r;
+    });
   }
 
   const withSchema = results.filter((r) => r.types.length > 0).length;
@@ -265,11 +284,14 @@ export async function POST(request: NextRequest) {
   const googleVerifiedCount = results.filter((r) => r.google_verified).length;
 
   return NextResponse.json({
+    success: true,
     results,
     score,
     total: results.length,
     withSchema,
     googleVerifiedCount,
     verifiedWithGoogle: verifyWithGoogle,
+    partial: urls.length >= maxUrls,
+    duration_ms: Date.now() - startedAt,
   });
 }

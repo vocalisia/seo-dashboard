@@ -89,6 +89,7 @@ interface Cached {
 }
 const CACHE = new Map<string, Cached>();
 const CACHE_TTL_MS = 15 * 60 * 1000;
+const GA4_SITE_CONCURRENCY = 3;
 
 interface SiteRow {
   id: number;
@@ -302,6 +303,19 @@ async function getSites(siteIdParam: string | null): Promise<SiteRow[]> {
   }));
 }
 
+async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const current = index++;
+      results[current] = await mapper(items[current]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 export async function GET(req: Request) {
   const auth = await requireApiSession();
   if (auth.unauthorized) return auth.unauthorized;
@@ -317,20 +331,17 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: "No active sites" }, { status: 404 });
     }
 
-    const results: SiteTraffic[] = [];
     const now = Date.now();
-
-    for (const site of sites) {
+    const results = await mapLimit(sites, siteIdParam ? 1 : GA4_SITE_CONCURRENCY, async (site) => {
       const cacheKey = `${site.id}:${win}`;
       const cached = CACHE.get(cacheKey);
       if (cached && now - cached.ts < CACHE_TTL_MS) {
-        results.push(cached.data);
-        continue;
+        return cached.data;
       }
       const data = await fetchSiteTraffic(site, win);
       CACHE.set(cacheKey, { data, ts: now });
-      results.push(data);
-    }
+      return data;
+    });
 
     // Portfolio summary
     const totalUsers = results.reduce((acc, r) => acc + r.global.users, 0);

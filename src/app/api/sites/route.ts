@@ -36,9 +36,17 @@ const LANG_COUNTRIES: Record<string, string[]> = {
   it: ["ITA","CHE","SMR","VAT"],
   nl: ["NLD","BEL"],
   pt: ["PRT","BRA","AGO","MOZ"],
+  ch: ["CHE"],
 };
 
 export async function GET(request: NextRequest) {
+  const startedAt = Date.now();
+  const timingHeaders = (cache: "HIT" | "MISS" | "SKIP" = "MISS") => ({
+    "X-Cache": cache,
+    "X-Response-Time": `${Date.now() - startedAt}ms`,
+    "Server-Timing": `app;dur=${Date.now() - startedAt}`,
+  });
+
   const authState = await requireApiSession();
   if (authState.unauthorized) {
     return authState.unauthorized;
@@ -64,18 +72,25 @@ export async function GET(request: NextRequest) {
   const daysParam = request.nextUrl.searchParams.get("days");
   const days = Math.max(1, Math.min(365, parseInt(daysParam ?? "30", 10) || 30));
   const noCache = request.nextUrl.searchParams.get("nocache") === "1";
+  const wantsMetrics = Boolean(daysParam || language);
 
   // Check cache (unless ?nocache=1)
-  const cacheKey = `sites:${language || "all"}:${days}`;
+  const cacheKey = wantsMetrics ? `sites:${language || "all"}:${days}` : "sites:list";
   if (!noCache) {
     const cached = getCached(cacheKey);
     if (cached) {
-      return NextResponse.json(cached, { headers: { "X-Cache": "HIT" } });
+      return NextResponse.json(cached, { headers: timingHeaders("HIT") });
     }
   }
 
   try {
     const sql = getSQL();
+
+    if (!wantsMetrics) {
+      const rows = await sql`SELECT * FROM sites WHERE is_active = true ORDER BY name`;
+      setCached(cacheKey, rows);
+      return NextResponse.json(rows, { headers: timingHeaders("MISS") });
+    }
 
     // Get all active sites first so we can compute per-site TLD country filter.
     const siteList = (await sql`
@@ -108,51 +123,99 @@ export async function GET(request: NextRequest) {
     // C1: avg_position read from search_console_query_data (query-level, real Google position).
     // clicks/impressions stay on search_console_data (page-level totals identical).
     const gscMap = new Map<number, { total_clicks: number; total_impressions: number; avg_position: number }>();
-    for (const s of siteList) {
-      const wanted = siteCountryMap[s.id];
-      const totalsRow = (await sql`
-        SELECT
+    if (!countryFilter) {
+      const totalsRows = (await sql`
+        SELECT site_id,
           COALESCE(SUM(clicks), 0) as total_clicks,
           COALESCE(SUM(impressions), 0) as total_impressions
         FROM search_console_data
-        WHERE site_id = ${s.id}
-          AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+        WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
           AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-          AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+        GROUP BY site_id
       `) as Array<Record<string, unknown>>;
-      // Real Google position: impressions-weighted from query-level table (matches GSC UI)
-      const posRow = (await sql`
-        SELECT
+      const posRows = (await sql`
+        SELECT site_id,
           COALESCE(
             SUM(impressions * position)::float / NULLIF(SUM(impressions), 0),
             0
           ) as avg_position
         FROM search_console_query_data
-        WHERE site_id = ${s.id}
-          AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+        WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
           AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-          AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+        GROUP BY site_id
       `) as Array<Record<string, unknown>>;
-      const t = totalsRow[0] ?? {};
-      const p = posRow[0] ?? {};
-      let avg = Number(p.avg_position ?? 0);
-      // Fallback to page-level if query-level not yet synced for this site
-      if (avg === 0) {
-        const fallback = (await sql`
-          SELECT COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
+
+      const totalsMap = new Map<number, Record<string, unknown>>();
+      const posMap = new Map<number, number>();
+      for (const row of totalsRows) totalsMap.set(Number(row.site_id), row);
+      for (const row of posRows) posMap.set(Number(row.site_id), Number(row.avg_position ?? 0));
+
+      const missingPositionIds = siteList.map((s) => s.id).filter((id) => !posMap.get(id));
+      if (missingPositionIds.length > 0) {
+        const fallbackRows = (await sql`
+          SELECT site_id, COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
+          FROM search_console_data
+          WHERE site_id = ANY(${missingPositionIds})
+            AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+            AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+          GROUP BY site_id
+        `) as Array<Record<string, unknown>>;
+        for (const row of fallbackRows) posMap.set(Number(row.site_id), Number(row.avg_position ?? 0));
+      }
+
+      for (const s of siteList) {
+        const t = totalsMap.get(s.id) ?? {};
+        gscMap.set(s.id, {
+          total_clicks: Number(t.total_clicks ?? 0),
+          total_impressions: Number(t.total_impressions ?? 0),
+          avg_position: Number(posMap.get(s.id) ?? 0),
+        });
+      }
+    } else {
+      for (const s of siteList) {
+        const wanted = siteCountryMap[s.id];
+        const totalsRow = (await sql`
+          SELECT
+            COALESCE(SUM(clicks), 0) as total_clicks,
+            COALESCE(SUM(impressions), 0) as total_impressions
           FROM search_console_data
           WHERE site_id = ${s.id}
             AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
             AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
             AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
         `) as Array<Record<string, unknown>>;
-        avg = Number(fallback[0]?.avg_position ?? 0);
+        const posRow = (await sql`
+          SELECT
+            COALESCE(
+              SUM(impressions * position)::float / NULLIF(SUM(impressions), 0),
+              0
+            ) as avg_position
+          FROM search_console_query_data
+          WHERE site_id = ${s.id}
+            AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+            AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+            AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+        `) as Array<Record<string, unknown>>;
+        const t = totalsRow[0] ?? {};
+        const p = posRow[0] ?? {};
+        let avg = Number(p.avg_position ?? 0);
+        if (avg === 0) {
+          const fallback = (await sql`
+            SELECT COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
+            FROM search_console_data
+            WHERE site_id = ${s.id}
+              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
+              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+              AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+          `) as Array<Record<string, unknown>>;
+          avg = Number(fallback[0]?.avg_position ?? 0);
+        }
+        gscMap.set(s.id, {
+          total_clicks: Number(t.total_clicks ?? 0),
+          total_impressions: Number(t.total_impressions ?? 0),
+          avg_position: avg,
+        });
       }
-      gscMap.set(s.id, {
-        total_clicks: Number(t.total_clicks ?? 0),
-        total_impressions: Number(t.total_impressions ?? 0),
-        avg_position: avg,
-      });
     }
 
     // Rebuild full site rows with joined data
@@ -178,7 +241,7 @@ export async function GET(request: NextRequest) {
     });
 
     setCached(cacheKey, rows);
-    return NextResponse.json(rows, { headers: { "X-Cache": "MISS" } });
+    return NextResponse.json(rows, { headers: timingHeaders("MISS") });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

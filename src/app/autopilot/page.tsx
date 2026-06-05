@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, Zap, Clock, CheckCircle, XCircle, ExternalLink, Globe, Image as ImageIcon, PlayCircle, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface Site {
   id: number;
@@ -87,6 +88,7 @@ export default function AutopilotPage() {
   const [batchResult, setBatchResult] = useState<{ published: number; failed: number; total: number } | null>(null);
   const [autopilotEnabled, setAutopilotEnabled] = useState<boolean>(true);
   const [togglingAutopilot, setTogglingAutopilot] = useState(false);
+  const [operationStatus, setOperationStatus] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSites();
@@ -224,13 +226,18 @@ export default function AutopilotPage() {
     setLoading(true);
     setResult(null);
     setError(null);
+    setOperationStatus(dryRun ? "Test IA en cours: keyword, article, liens internes..." : "Publication en cours: IA, image, GitHub, indexation...");
 
     try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), dryRun ? 120000 : 240000);
       const res = await fetch("/api/autopilot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite, dry_run: dryRun, language: selectedLanguage }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timeout);
 
       const data = await res.json() as AutopilotResult;
 
@@ -260,6 +267,8 @@ export default function AutopilotPage() {
   async function runBatchToday() {
     setBatchRunning(true);
     setBatchResult(null);
+    setError(null);
+    setOperationStatus("Batch hebdomadaire en cours: cela peut prendre plusieurs minutes.");
     try {
       const res = await fetch("/api/autopilot/weekly", { method: "POST" });
       const d = await res.json() as { published?: number; failed?: number; total_runs?: number; results?: { status: string }[] };
@@ -437,6 +446,12 @@ export default function AutopilotPage() {
         {/* Controls */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
           <h2 className="font-medium text-gray-200">Lancer l&apos;autopilot</h2>
+          {operationStatus && (loading || batchRunning) && (
+            <div className="rounded-lg border border-blue-800 bg-blue-950/30 px-4 py-3 text-sm text-blue-200 flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              {operationStatus}
+            </div>
+          )}
 
           <div className="flex flex-wrap gap-4">
             {/* Site selector */}
@@ -601,7 +616,7 @@ export default function AutopilotPage() {
               {result.image_url ? (
                 <div className="mt-2">
                   <div className="text-xs text-gray-400 mb-1 flex items-center gap-1">
-                    <ImageIcon className="w-3 h-3" /> Image générée (DALL-E 3)
+                    <ImageIcon className="w-3 h-3" /> Image générée (Gemini/Pollinations)
                   </div>
                   <div className="relative w-full max-w-md h-40 rounded-lg overflow-hidden border border-gray-700">
                     <Image
@@ -624,7 +639,7 @@ export default function AutopilotPage() {
               ) : (
                 <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
                   <ImageIcon className="w-3 h-3" />
-                  <span>Aucune image générée (quota DALL-E ou clé manquante)</span>
+                  <span>Aucune image générée (Gemini indisponible, fallback image gratuit indisponible)</span>
                 </div>
               )}
 
@@ -668,7 +683,12 @@ export default function AutopilotPage() {
                 <thead>
                   <tr className="text-xs text-gray-400 border-b border-gray-800">
                     <th className="px-5 py-3 text-left font-medium">Site</th>
-                    <th className="px-5 py-3 text-left font-medium">Mot-clé</th>
+                    <th className="px-5 py-3 text-left font-medium">
+                      <span className="inline-flex items-center gap-2">
+                        Mot-clé
+                        <CopyKeywordsButton keywords={runs.map((run) => run.keyword)} />
+                      </span>
+                    </th>
                     <th className="px-5 py-3 text-left font-medium">Langue</th>
                     <th className="px-5 py-3 text-left font-medium">Date</th>
                     <th className="px-5 py-3 text-left font-medium">Statut</th>

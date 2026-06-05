@@ -31,6 +31,20 @@ function hasValidCronSecret(req: NextRequest): boolean {
   return false;
 }
 
+function hasLocalDevBasicAuth(req: NextRequest): boolean {
+  if (process.env.NODE_ENV !== "development") return false;
+  const host = req.nextUrl.hostname;
+  const isLocalhost = host === "localhost" || host === "127.0.0.1" || host === "::1";
+  if (!isLocalhost) return false;
+  const authHeader = req.headers.get("authorization") ?? "";
+  if (!authHeader.startsWith("Basic ")) return false;
+  const decoded = Buffer.from(authHeader.slice(6), "base64").toString("utf-8");
+  const [user, ...rest] = decoded.split(":");
+  const expectedUser = process.env.LOCAL_BASIC_AUTH_USER ?? "1983";
+  const expectedPass = process.env.LOCAL_BASIC_AUTH_PASS ?? "1983";
+  return user === expectedUser && rest.join(":") === expectedPass;
+}
+
 // HTTP Basic Auth (1st layer before NextAuth)
 function checkBasicAuth(req: NextRequest): NextResponse | null {
   const basicUser = process.env.BASIC_AUTH_USER?.trim();
@@ -47,6 +61,7 @@ function checkBasicAuth(req: NextRequest): NextResponse | null {
     const [user, ...rest] = decoded.split(":");
     const pass = rest.join(":");
     if (user === basicUser && pass === basicPass) return null;
+    if (hasLocalDevBasicAuth(req)) return null;
   }
 
   return new NextResponse("Accès restreint", {
@@ -79,6 +94,10 @@ export default auth((req) => {
 
   // Allow if has valid cron secret on cron-protected routes
   if (isCronProtected && hasValidCronSecret(req)) {
+    return NextResponse.next();
+  }
+
+  if (hasLocalDevBasicAuth(req)) {
     return NextResponse.next();
   }
 

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, Download, Layers } from "lucide-react";
 import Link from "next/link";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface Site {
   id: number;
@@ -16,7 +17,8 @@ interface KeywordRow {
   impressions: number;
   position: number;
   volume: number;
-  difficulty: "easy" | "medium" | "hard";
+  volume_source?: string | null;
+  difficulty: "easy" | "medium" | "hard" | "unknown";
   intent: string;
   site_name?: string;
 }
@@ -30,6 +32,7 @@ const DIFF_COLORS: Record<string, string> = {
   easy: "text-green-400",
   medium: "text-yellow-400",
   hard: "text-red-400",
+  unknown: "text-gray-500",
 };
 
 const INTENT_COLORS: Record<string, string> = {
@@ -42,13 +45,14 @@ const INTENT_COLORS: Record<string, string> = {
 export default function KeywordsProPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
-  const [minClicks, setMinClicks] = useState(2000);
-  const [minWords, setMinWords] = useState(3);
+  const [minClicks, setMinClicks] = useState(1);
+  const [minWords, setMinWords] = useState(1);
   const [posMin, setPosMin] = useState(1);
   const [posMax, setPosMax] = useState(100);
   const [loading, setLoading] = useState(false);
   const [keywords, setKeywords] = useState<KeywordRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
   const [clustering, setClustering] = useState(false);
   const [clusters, setClusters] = useState<Cluster[] | null>(null);
   const [sortCol, setSortCol] = useState<keyof KeywordRow>("clicks");
@@ -71,18 +75,23 @@ export default function KeywordsProPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSite]);
 
-  async function fetchKeywords() {
+  async function fetchKeywords(overrides?: Partial<{ minClicks: number; minWords: number; posMin: number; posMax: number }>) {
     if (!selectedSite) return;
+    const nextMinClicks = overrides?.minClicks ?? minClicks;
+    const nextMinWords = overrides?.minWords ?? minWords;
+    const nextPosMin = overrides?.posMin ?? posMin;
+    const nextPosMax = overrides?.posMax ?? posMax;
     setLoading(true);
     setError(null);
     setClusters(null);
+    setHasSearched(true);
     try {
       const qs = new URLSearchParams({
         siteId: String(selectedSite),
-        minClicks: String(minClicks),
-        minWords: String(minWords),
-        posMin: String(posMin),
-        posMax: String(posMax),
+        minClicks: String(nextMinClicks),
+        minWords: String(nextMinWords),
+        posMin: String(nextPosMin),
+        posMax: String(nextPosMax),
       });
       const res = await fetch(`/api/keywords-pro?${qs}`);
       const data = await res.json() as { success: boolean; keywords?: KeywordRow[]; error?: string };
@@ -96,6 +105,14 @@ export default function KeywordsProPage() {
       setError(err instanceof Error ? err.message : "Erreur réseau");
     }
     setLoading(false);
+  }
+
+  async function relaxFilters() {
+    setMinClicks(0);
+    setMinWords(1);
+    setPosMin(1);
+    setPosMax(100);
+    await fetchKeywords({ minClicks: 0, minWords: 1, posMin: 1, posMax: 100 });
   }
 
   async function clusterKeywords() {
@@ -116,12 +133,12 @@ export default function KeywordsProPage() {
   function exportCSV() {
     const showSite = selectedSite === "all";
     const header = showSite
-      ? "Site,Keyword,Clicks,Impressions,Position,Volume,Difficulty,Intent"
-      : "Keyword,Clicks,Impressions,Position,Volume,Difficulty,Intent";
+      ? "Site,Keyword,Clicks,Impressions,Position,Volume,VolumeSource,Difficulty,Intent"
+      : "Keyword,Clicks,Impressions,Position,Volume,VolumeSource,Difficulty,Intent";
     const rows = sorted.map((k) =>
       showSite
-        ? `"${(k.site_name ?? "").replace(/"/g, '""')}","${k.keyword.replace(/"/g, '""')}",${k.clicks},${k.impressions},${k.position.toFixed(1)},${k.volume},${k.difficulty},${k.intent}`
-        : `"${k.keyword.replace(/"/g, '""')}",${k.clicks},${k.impressions},${k.position.toFixed(1)},${k.volume},${k.difficulty},${k.intent}`
+        ? `"${(k.site_name ?? "").replace(/"/g, '""')}","${k.keyword.replace(/"/g, '""')}",${k.clicks},${k.impressions},${k.position.toFixed(1)},${k.volume},"${k.volume_source ?? ""}",${k.difficulty},${k.intent}`
+        : `"${k.keyword.replace(/"/g, '""')}",${k.clicks},${k.impressions},${k.position.toFixed(1)},${k.volume},"${k.volume_source ?? ""}",${k.difficulty},${k.intent}`
     );
     const csv = [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -187,7 +204,7 @@ export default function KeywordsProPage() {
             </div>
           </div>
           <div className="flex gap-3">
-            <button onClick={fetchKeywords} disabled={loading || !selectedSite}
+            <button onClick={() => fetchKeywords()} disabled={loading || !selectedSite}
               className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors">
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
               {loading ? "Chargement..." : "Filtrer mots-clés"}
@@ -242,13 +259,18 @@ export default function KeywordsProPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-xs text-gray-400 border-b border-gray-800 bg-gray-800/40">
-                    <th className="px-5 py-3 text-left">Mot-clé</th>
+                    <th className="px-5 py-3 text-left">
+                      <span className="inline-flex items-center gap-2">
+                        Mot-clé
+                        <CopyKeywordsButton keywords={sorted.slice(0, 200).map((k) => k.keyword)} />
+                      </span>
+                    </th>
                     {selectedSite === "all" && <th className="px-4 py-3 text-left">Site</th>}
                     {(["clicks", "impressions", "position", "volume"] as const).map((col) => (
                       <th key={col} onClick={() => toggleSort(col)}
                         className="px-4 py-3 text-right cursor-pointer select-none hover:text-gray-200">
                         <span className="inline-flex items-center gap-1">
-                          {col === "clicks" ? "Clics" : col === "impressions" ? "Impressions" : col === "position" ? "Position" : "Vol. estimé"}
+                          {col === "clicks" ? "Clics" : col === "impressions" ? "Impressions" : col === "position" ? "Position GSC" : "Volume réel"}
                           {sortCol === col && <span>{sortDir === "desc" ? "↓" : "↑"}</span>}
                         </span>
                       </th>
@@ -269,7 +291,15 @@ export default function KeywordsProPage() {
                           {Number(kw.position).toFixed(1)}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-right text-purple-400 font-medium">{Number(kw.volume).toLocaleString()}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        {Number(kw.volume) > 0 ? (
+                          <span className="text-purple-400 font-medium" title={kw.volume_source ?? "Source volume"}>
+                            {Number(kw.volume).toLocaleString()}
+                          </span>
+                        ) : (
+                          <span className="text-gray-600" title="Aucun volume fiable importé">-</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-center">
                         <span className={`text-xs font-medium ${DIFF_COLORS[kw.difficulty] ?? "text-gray-400"}`}>{kw.difficulty}</span>
                       </td>
@@ -287,7 +317,20 @@ export default function KeywordsProPage() {
           </div>
         )}
 
-        {!loading && keywords.length === 0 && !error && (
+        {!loading && keywords.length === 0 && !error && hasSearched && (
+          <div className="bg-gray-900 border border-yellow-800/60 rounded-xl py-12 px-6 text-center text-sm">
+            <div className="text-yellow-300 font-semibold mb-2">Aucun mot-cle avec ces filtres.</div>
+            <div className="text-gray-400 mb-4">
+              Baisse le minimum de clics, reduis le nombre de mots ou garde positions 1-100.
+            </div>
+            <button onClick={relaxFilters}
+              className="px-4 py-2 rounded-lg bg-yellow-600 hover:bg-yellow-500 text-white font-medium">
+              Relacher les filtres
+            </button>
+          </div>
+        )}
+
+        {!loading && keywords.length === 0 && !error && !hasSearched && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center text-gray-500 text-sm">
             Sélectionne un site et clique &quot;Filtrer mots-clés&quot;
           </div>

@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { buildPublishedArticleUrl, slugDateFromCreatedAt } from "@/lib/autopilot-published-url";
 import { resolveSiteRepoConfig } from "@/lib/autopilot-config";
+import { requireApiSession } from "@/lib/api-auth";
 
 interface AutopilotRun {
   id: number;
@@ -22,6 +23,9 @@ interface AutopilotRun {
 type RunRow = AutopilotRun & { site_url?: string | null };
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const { searchParams } = new URL(req.url);
   const siteIdParam = searchParams.get("site_id");
   const sql = getSQL();

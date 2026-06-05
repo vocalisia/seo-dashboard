@@ -16,6 +16,11 @@ interface Report {
   created_at: string;
 }
 
+interface Site {
+  id: number;
+  name: string;
+}
+
 function fmtDate(iso: string) {
   try {
     return new Date(iso).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -70,6 +75,8 @@ export default function ReportsPage() {
   const [lastGenerated, setLastGenerated] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [notification, setNotification] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [generationStatus, setGenerationStatus] = useState<string | null>(null);
+  const [generationProgress, setGenerationProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
 
   function showNotification(type: "success" | "error", text: string) {
     setNotification({ type, text });
@@ -82,7 +89,9 @@ export default function ReportsPage() {
       const res = await fetch("/api/reports");
       const data = await res.json();
       if (Array.isArray(data)) setReports(data);
-    } catch { /* ignore */ }
+    } catch {
+      showNotification("error", "Impossible de charger les rapports");
+    }
     setLoading(false);
   };
 
@@ -113,11 +122,71 @@ export default function ReportsPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  async function generateNow() {
+  async function fetchSitesForGeneration(): Promise<Site[]> {
+    const res = await fetch("/api/sites");
+    const data = await res.json() as Site[] | { sites?: Site[] };
+    const list = Array.isArray(data) ? data : data.sites ?? [];
+    return list.filter((site) => Number.isFinite(site.id));
+  }
+
+  async function generateNowBySite() {
     setGenerating(true);
+    setGenerationProgress(null);
+    setGenerationStatus("Initialisation des tables...");
     try {
       await fetch("/api/init", { method: "POST" });
-      const res = await fetch("/api/reports/generate", { method: "POST" });
+      const sites = await fetchSitesForGeneration();
+      if (sites.length === 0) throw new Error("Aucun site actif");
+
+      let failed = 0;
+      setGenerationProgress({ done: 0, total: sites.length, failed: 0 });
+
+      for (let i = 0; i < sites.length; i++) {
+        const site = sites[i];
+        setGenerationStatus(`Génération rapport ${i + 1}/${sites.length}: ${site.name}`);
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 45000);
+        try {
+          const res = await fetch("/api/reports/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ site_id: site.id }),
+            signal: controller.signal,
+          });
+          if (!res.ok) failed++;
+        } catch {
+          failed++;
+        } finally {
+          window.clearTimeout(timeout);
+          setGenerationProgress({ done: i + 1, total: sites.length, failed });
+        }
+      }
+
+      if (failed === 0) {
+        setLastGenerated(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
+        showNotification("success", "Rapports générés avec succès");
+      } else {
+        showNotification("error", `${failed} rapport(s) non généré(s). Les autres ont continué.`);
+      }
+      await fetchReports();
+    } catch (e) {
+      showNotification("error", `Erreur génération : ${e instanceof Error ? e.message : "réseau"}`);
+    }
+    setGenerationStatus(null);
+    setGenerationProgress(null);
+    setGenerating(false);
+  }
+
+  async function generateNow() {
+    setGenerating(true);
+    setGenerationStatus("Initialisation des tables...");
+    try {
+      await fetch("/api/init", { method: "POST" });
+      setGenerationStatus("Génération rapports: GSC + IA/cache par site...");
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 180000);
+      const res = await fetch("/api/reports/generate", { method: "POST", signal: controller.signal });
+      window.clearTimeout(timeout);
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
         showNotification("error", `Génération échouée (${res.status}) : ${txt.slice(0, 200)}`);
@@ -127,8 +196,9 @@ export default function ReportsPage() {
       }
       await fetchReports();
     } catch (e) {
-      showNotification("error", `Erreur génération : ${e instanceof Error ? e.message : "réseau"}`);
+      showNotification("error", `Erreur génération : ${e instanceof Error && e.name === "AbortError" ? "timeout 180s" : e instanceof Error ? e.message : "réseau"}`);
     }
+    setGenerationStatus(null);
     setGenerating(false);
   }
 
@@ -156,7 +226,7 @@ export default function ReportsPage() {
           {lastGenerated && (
             <span className="text-xs bg-green-500/20 text-green-400 px-3 py-1 rounded-full">Régénéré à {lastGenerated}</span>
           )}
-          <button type="button" onClick={generateNow} disabled={generating}
+          <button type="button" onClick={generateNowBySite} disabled={generating}
             className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
             {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             {generating ? "Génération en cours..." : "Générer maintenant"}
@@ -165,6 +235,18 @@ export default function ReportsPage() {
       </header>
 
       <div className="px-6 py-6">
+        {generationStatus && (
+          <div className="mb-4 rounded-lg border border-blue-800 bg-blue-950/30 px-4 py-3 text-sm text-blue-200 flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            {generationStatus}
+            {generationProgress && (
+              <span className="ml-auto text-xs text-blue-300">
+                {generationProgress.done}/{generationProgress.total}
+                {generationProgress.failed > 0 ? ` · ${generationProgress.failed} échec(s)` : ""}
+              </span>
+            )}
+          </div>
+        )}
         {loading ? (
           <div className="flex justify-center py-20"><Loader2 className="w-8 h-8 animate-spin text-blue-500" /></div>
         ) : reports.length === 0 ? (
@@ -172,7 +254,7 @@ export default function ReportsPage() {
             <FileText className="w-12 h-12 text-gray-700 mx-auto mb-4" />
             <p className="text-gray-400 mb-2">Aucun rapport généré</p>
             <p className="text-gray-600 text-sm mb-6">Les rapports sont générés automatiquement chaque lundi à 8h.<br />Clique sur &quot;Générer maintenant&quot; pour créer le premier rapport.</p>
-            <button type="button" onClick={generateNow} disabled={generating}
+            <button type="button" onClick={generateNowBySite} disabled={generating}
               className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-xl text-sm font-medium flex items-center gap-2 mx-auto disabled:opacity-50">
               {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />}
               {generating ? "Génération..." : "Générer le premier rapport"}

@@ -348,11 +348,14 @@ export function scoreReadiness(
   }
 
   if (aiBotsAllowedExplicitly.length > 0) {
-    score += 20;
+    score += Math.min(20, Math.round(8 + aiBotsAllowedExplicitly.length * 2));
   } else if (aiBotsAllowedPassively.length > 0) {
-    score += 5;
+    score += Math.min(
+      20,
+      Math.round((aiBotsAllowedPassively.length / AI_BOT_NAMES.length) * 20),
+    );
     recs.push(
-      "Mentionner explicitement les bots IA (User-agent: GPTBot / ClaudeBot / PerplexityBot) dans robots.txt avec Allow: / (+15 pts)",
+      "Mentionner explicitement les bots IA (User-agent: GPTBot / ClaudeBot / PerplexityBot) dans robots.txt avec Allow: / (+5 pts de preuve)",
     );
   } else {
     recs.push(
@@ -362,58 +365,76 @@ export function scoreReadiness(
 
   const hasSchema = (name: string) =>
     schemasDetected.some((s) => s.toLowerCase() === name.toLowerCase());
+  const uniqueSchemas = Array.from(new Set(schemasDetected.map((s) => s.toLowerCase())));
+
+  let foundationSchemaScore = 0;
+  if (hasSchema("Organization")) foundationSchemaScore += 7;
+  if (hasSchema("WebSite")) foundationSchemaScore += 5;
+  if (hasSchema("BreadcrumbList")) foundationSchemaScore += 3;
+  if (hasSchema("Product") || hasSchema("Service")) foundationSchemaScore += 3;
+  if (foundationSchemaScore === 0 && uniqueSchemas.length > 0) {
+    foundationSchemaScore = Math.min(12, uniqueSchemas.length * 5);
+  } else if (uniqueSchemas.length > 2) {
+    foundationSchemaScore += Math.min(4, (uniqueSchemas.length - 2) * 2);
+  }
+  score += Math.min(16, foundationSchemaScore);
 
   if (hasSchema("FAQPage") || hasSchema("QAPage")) {
-    score += 15;
+    score += 8;
   } else {
-    recs.push("Ajouter un schema JSON-LD FAQPage sur pages clés (+15 pts)");
+    recs.push("Ajouter un schema JSON-LD FAQPage sur pages clés (+8 pts)");
   }
 
   if (hasSchema("HowTo") || hasSchema("Recipe")) {
-    score += 10;
+    score += 6;
   } else {
-    recs.push("Ajouter un schema HowTo sur tutoriels/guides (+10 pts)");
+    recs.push("Ajouter un schema HowTo sur tutoriels/guides (+6 pts)");
   }
 
   const hasArticle =
     hasSchema("Article") || hasSchema("NewsArticle") || hasSchema("BlogPosting") || hasSchema("TechArticle");
   const hasAuthor = hasSchema("Person");
   if (hasArticle && hasAuthor) {
-    score += 10;
+    score += 8;
   } else if (hasArticle) {
-    recs.push("Ajouter un author Person au schema Article (+10 pts)");
+    score += 4;
+    recs.push("Ajouter un author Person au schema Article (+4 pts)");
   } else {
-    recs.push("Ajouter un schema Article (ou BlogPosting) avec author Person (+10 pts)");
-  }
-
-  if (hasSchema("Organization")) {
-    score += 10;
-  } else {
-    recs.push("Ajouter un schema Organization global (+10 pts)");
+    recs.push("Ajouter un schema Article (ou BlogPosting) avec author Person (+8 pts)");
   }
 
   if (hasOG) {
-    score += 5;
+    score += 8;
   } else {
-    recs.push("Compléter les balises Open Graph (og:title, og:image, og:type) (+5 pts)");
+    recs.push("Compléter les balises Open Graph (og:title, og:image, og:type) (+8 pts)");
   }
 
   // Bonus tier (LLM-citation magnets)
   if (hasSchema("DefinedTermSet") || hasSchema("DefinedTerm")) {
-    score += 5;
+    score += 4;
   } else {
-    recs.push("BONUS: ajouter un schema DefinedTermSet (glossaire) — les LLM citent les définitions (+5 pts)");
+    recs.push("BONUS: ajouter un schema DefinedTermSet (glossaire) — les LLM citent les définitions (+4 pts)");
   }
   if (hasSchema("Dataset")) {
-    score += 5;
+    score += 3;
   } else {
-    recs.push("BONUS: ajouter un schema Dataset si tu publies des données chiffrées (+5 pts)");
+    recs.push("BONUS: ajouter un schema Dataset si tu publies des données chiffrées (+3 pts)");
   }
   if (hasSchema("Course") || hasSchema("LearningResource")) {
-    score += 3;
+    score += 2;
   }
   if (hasSchema("ClaimReview")) {
-    score += 2;
+    score += 1;
+  }
+
+  const totalReachableAiBots = aiBotsAllowedExplicitly.length + aiBotsAllowedPassively.length;
+  if (
+    llmsTxtValid &&
+    totalReachableAiBots >= Math.ceil(AI_BOT_NAMES.length * 0.75) &&
+    uniqueSchemas.length >= 2 &&
+    hasOG
+  ) {
+    score += 4;
   }
 
   return { score: Math.min(100, score), recommendations: recs };

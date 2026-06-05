@@ -6,6 +6,12 @@ import { requireCronOrUser } from "@/lib/cron-auth";
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
+interface SiteRow {
+  id: number;
+  name: string;
+  url: string;
+}
+
 async function analyzeWithAI(siteId: number, weekStart: string, siteName: string, siteUrl: string, data: {
   topQueries: { query: string; clicks: number; impressions: number; position: number }[];
   gains: { query: string; gain: number; position_now: number }[];
@@ -61,7 +67,24 @@ export async function POST(request: Request) {
   try {
     await initDB(); // ensure weekly_reports table exists
     const sql = getSQL();
-    const sites = await sql`SELECT * FROM sites WHERE is_active = true`;
+
+    let requestedSiteId: number | null = null;
+    try {
+      const body = await request.json() as { site_id?: unknown };
+      if (typeof body.site_id === "number" && Number.isFinite(body.site_id)) {
+        requestedSiteId = Math.floor(body.site_id);
+      }
+    } catch {
+      // Cron calls can send an empty body. Generate all sites in that case.
+    }
+
+    const sites = requestedSiteId
+      ? await sql`SELECT id, name, url FROM sites WHERE is_active = true AND id = ${requestedSiteId}`
+      : await sql`SELECT id, name, url FROM sites WHERE is_active = true`;
+
+    if (requestedSiteId && sites.length === 0) {
+      return NextResponse.json({ success: false, error: "Site introuvable ou inactif" }, { status: 404 });
+    }
 
     const weekStart = new Date();
     weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1); // Monday
@@ -69,7 +92,7 @@ export async function POST(request: Request) {
 
     const results = [];
 
-    for (const site of sites) {
+    for (const site of sites as SiteRow[]) {
       try {
         // Données 7 derniers jours
         const topQueries = await sql`

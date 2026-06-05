@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, HeartPulse, CheckCircle, AlertTriangle, XCircle, Link2, ExternalLink, Bot } from "lucide-react";
+import { ArrowLeft, Loader2, HeartPulse, CheckCircle, AlertTriangle, XCircle, Link2, ExternalLink, Bot, Activity } from "lucide-react";
 import Link from "next/link";
 
 interface Site { id: number; name: string; url: string; }
@@ -58,6 +58,11 @@ function ScoreBar({ label, score, max = 100 }: { label: string; score: number; m
   );
 }
 
+function formatMs(ms: number | null) {
+  if (!ms || !Number.isFinite(ms)) return "-";
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
 export default function HealthPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
@@ -67,38 +72,52 @@ export default function HealthPage() {
   const [loadingB, setLoadingB] = useState(false);
   const [allGrades, setAllGrades] = useState<{ name: string; grade: string; score: number; id: number }[]>([]);
   const [loadingAll, setLoadingAll] = useState(false);
+  const [lastTiming, setLastTiming] = useState<{ label: string; ms: number } | null>(null);
+
+  async function timedFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const started = performance.now();
+    const res = await fetch(input, init);
+    setLastTiming({ label, ms: performance.now() - started });
+    return res;
+  }
 
   async function fetchSites() {
     try {
-      const res = await fetch("/api/sites");
+      const res = await timedFetch("Sites", "/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
       if (list.length > 0) {
         setSites(list);
         if (!selectedSite && list.length > 0) setSelectedSite(list[0].id);
-        setLoadingAll(true);
-        const batch = list.slice(0, 16);
-        const results: { name: string; grade: string; score: number; id: number }[] = [];
-        for (let i = 0; i < batch.length; i += 4) {
-          const chunk = batch.slice(i, i + 4);
-          const settled = await Promise.all(
-            chunk.map(async (s) => {
-              const ctrl = new AbortController();
-              const timeout = setTimeout(() => ctrl.abort(), 15000);
-              try {
-                const r = await fetch(`/api/seo-health?site_id=${s.id}`, { signal: ctrl.signal });
-                const dd = await r.json() as HealthData;
-                return dd.success ? { name: s.name, grade: dd.grade, score: dd.overall_score, id: s.id } : null;
-              } catch { return null; }
-              finally { clearTimeout(timeout); }
-            })
-          );
-          for (const r of settled) { if (r) results.push(r); }
-        }
-        setAllGrades(results.sort((a, b) => b.score - a.score));
-        setLoadingAll(false);
       }
     } catch { setLoadingAll(false); }
+  }
+
+  async function loadAllGrades() {
+    if (sites.length === 0) return;
+    setLoadingAll(true);
+    const results: { name: string; grade: string; score: number; id: number }[] = [];
+    try {
+      for (let i = 0; i < sites.length; i += 4) {
+        const chunk = sites.slice(i, i + 4);
+        const settled = await Promise.all(
+          chunk.map(async (s) => {
+            const ctrl = new AbortController();
+            const timeout = setTimeout(() => ctrl.abort(), 8000);
+            try {
+              const r = await timedFetch(`Health ${s.name}`, `/api/seo-health?site_id=${s.id}`, { signal: ctrl.signal });
+              const dd = await r.json() as HealthData;
+              return dd.success ? { name: s.name, grade: dd.grade, score: dd.overall_score, id: s.id } : null;
+            } catch { return null; }
+            finally { clearTimeout(timeout); }
+          })
+        );
+        for (const r of settled) { if (r) results.push(r); }
+      }
+      setAllGrades(results.sort((a, b) => b.score - a.score));
+    } finally {
+      setLoadingAll(false);
+    }
   }
 
   async function fetchHealth() {
@@ -107,7 +126,7 @@ export default function HealthPage() {
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), 15000);
     try {
-      const res = await fetch(`/api/seo-health?site_id=${selectedSite}`, { signal: ctrl.signal });
+      const res = await timedFetch("Health site", `/api/seo-health?site_id=${selectedSite}`, { signal: ctrl.signal });
       const d = await res.json() as HealthData;
       if (d.success) setHealth(d);
     } catch { setHealth(null); }
@@ -119,7 +138,7 @@ export default function HealthPage() {
     if (!selectedSite || selectedSite === "all") return;
     setLoadingB(true);
     try {
-      const res = await fetch("/api/broken-links", {
+      const res = await timedFetch("Broken links", "/api/broken-links", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite }),
@@ -148,6 +167,10 @@ export default function HealthPage() {
         </Link>
         <HeartPulse className="w-5 h-5 text-rose-400" />
         <h1 className="text-xl font-semibold">SEO Health Check</h1>
+        <div className="ml-auto flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400">
+          <Activity className="w-3.5 h-3.5 text-cyan-400" />
+          {lastTiming ? `${lastTiming.label}: ${formatMs(lastTiming.ms)}` : "vitesse en attente"}
+        </div>
       </div>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
@@ -171,7 +194,12 @@ export default function HealthPage() {
               <Loader2 className="w-4 h-4 animate-spin" /> Chargement classement...
             </div>
           )}
-          <button onClick={checkBroken} disabled={loadingB}
+          <button onClick={loadAllGrades} disabled={loadingAll || sites.length === 0}
+            className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2">
+            {loadingAll ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
+            Classement tous sites
+          </button>
+          <button onClick={checkBroken} disabled={loadingB || selectedSite === "all"}
             className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2">
             {loadingB ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
             {loadingB ? "Scan liens..." : "Vérifier liens cassés"}

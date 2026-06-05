@@ -18,9 +18,13 @@ interface BloatRow {
 }
 
 interface BloatResponse {
+  success?: boolean;
   total: number;
   bloat_count: number;
   rows: BloatRow[];
+  partial?: boolean;
+  duration_ms?: number;
+  error?: string;
 }
 
 const REC_COLOR: Record<BloatRow["recommendation"], string> = {
@@ -35,6 +39,7 @@ export default function IndexBloatPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BloatResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/sites")
@@ -51,16 +56,23 @@ export default function IndexBloatPage() {
     if (!site) return;
     setLoading(true);
     setResult(null);
+    setError(null);
     try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 65000);
       const res = await fetch("/api/index-bloat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite, site_url: site.url }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timeout);
       const d = await res.json() as BloatResponse;
+      if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
       setResult(d);
-    } catch {
+    } catch (e) {
       setResult(null);
+      setError(e instanceof Error && e.name === "AbortError" ? "Analyse trop longue: limite 65s atteinte" : e instanceof Error ? e.message : "Erreur inconnue");
     }
     setLoading(false);
   }
@@ -71,6 +83,7 @@ export default function IndexBloatPage() {
       .filter((r) => r.recommendation === "noindex")
       .map((r) => r.url)
       .join("\n");
+    if (!urls) return;
     navigator.clipboard.writeText(urls).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -138,7 +151,7 @@ export default function IndexBloatPage() {
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                 <div className="text-2xl font-bold text-yellow-400">{noindexCount}</div>
-                <div className="text-xs text-gray-400 mt-1">A noindexer</div>
+                <div className="text-xs text-gray-400 mt-1">A passer en noindex</div>
               </div>
             </div>
 
@@ -147,14 +160,20 @@ export default function IndexBloatPage() {
               <strong>Comment dé-indexer:</strong> Ajouter dans le{" "}
               <code className="bg-blue-900/40 px-1 rounded">&lt;head&gt;</code> de chaque page concernée:{" "}
               <code className="bg-blue-900/40 px-1 rounded text-xs">
-                &lt;meta name="robots" content="noindex, nofollow" /&gt;
+                &lt;meta name="robots" content="noindex, follow" /&gt;
               </code>
             </div>
+            {result.partial && (
+              <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
+                Analyse partielle: sitemap ou rÃ©sultats bornÃ©s pour garder la page rapide.
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex gap-3">
               <button
                 onClick={copyNoindex}
+                disabled={noindexCount === 0}
                 className="flex items-center gap-2 text-sm bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-lg"
               >
                 {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
@@ -202,7 +221,17 @@ export default function IndexBloatPage() {
                 </div>
               </div>
             )}
+            {result.rows.length === 0 && (
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center text-sm text-gray-400">
+                Aucun bloat Ã©vident trouvÃ© sur ce site avec les rÃ¨gles actuelles.
+              </div>
+            )}
           </>
+        )}
+        {error && (
+          <div className="bg-red-900/30 border border-red-800 rounded-xl px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
         )}
       </div>
     </div>

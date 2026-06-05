@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { requireApiSession } from "@/lib/api-auth";
 
 interface CountryRow {
   country: string;
@@ -43,6 +44,9 @@ interface ArticleRow {
  *   - articles: autopilot_runs filtered by language matching country
  */
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const { searchParams } = new URL(req.url);
   const siteIdParam = searchParams.get("site_id");
   const country = searchParams.get("country");
@@ -52,8 +56,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: "site_id required" }, { status: 400 });
   }
 
-  const siteId = parseInt(siteIdParam, 10);
-  if (isNaN(siteId) || siteId <= 0) {
+  const isAllSites = siteIdParam === "all";
+  const siteId = isAllSites ? 0 : parseInt(siteIdParam, 10);
+  if (!isAllSites && (isNaN(siteId) || siteId <= 0)) {
     return NextResponse.json({ success: false, error: "Invalid site_id" }, { status: 400 });
   }
   if (!Number.isFinite(days) || days <= 0 || days > 365) {
@@ -70,7 +75,7 @@ export async function GET(req: NextRequest) {
              SUM(impressions) AS impressions,
              COUNT(DISTINCT query) AS queries
       FROM search_console_data
-      WHERE site_id = ${siteId}
+      WHERE (${isAllSites} OR site_id = ${siteId})
         AND country IS NOT NULL
         AND country != ''
         AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
@@ -88,13 +93,13 @@ export async function GET(req: NextRequest) {
                  SUM(impressions) AS impressions,
                  AVG(position)    AS position
           FROM search_console_data
-          WHERE site_id = ${siteId}
+          WHERE (${isAllSites} OR site_id = ${siteId})
             AND country = ${country}
             AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
             AND query IN (
               SELECT query
               FROM search_console_data
-              WHERE site_id = ${siteId}
+              WHERE (${isAllSites} OR site_id = ${siteId})
                 AND country = ${country}
                 AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
                 AND page != ''
@@ -113,12 +118,12 @@ export async function GET(req: NextRequest) {
                  SUM(impressions) AS impressions,
                  AVG(position)    AS position
           FROM search_console_data
-          WHERE site_id = ${siteId}
+          WHERE (${isAllSites} OR site_id = ${siteId})
             AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
             AND query IN (
               SELECT query
               FROM search_console_data
-              WHERE site_id = ${siteId}
+              WHERE (${isAllSites} OR site_id = ${siteId})
                 AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${days - 1})::date
                 AND page != ''
               GROUP BY query
@@ -151,7 +156,7 @@ export async function GET(req: NextRequest) {
                  ar.status, ar.created_at
           FROM autopilot_runs ar
           LEFT JOIN sites s ON s.id = ar.site_id
-          WHERE ar.site_id = ${siteId}
+          WHERE (${isAllSites} OR ar.site_id = ${siteId})
             AND COALESCE(ar.language, 'fr') = ${filterLang}
           ORDER BY ar.created_at DESC
           LIMIT 50
@@ -163,7 +168,7 @@ export async function GET(req: NextRequest) {
                  ar.status, ar.created_at
           FROM autopilot_runs ar
           LEFT JOIN sites s ON s.id = ar.site_id
-          WHERE ar.site_id = ${siteId}
+          WHERE (${isAllSites} OR ar.site_id = ${siteId})
           ORDER BY ar.created_at DESC
           LIMIT 50
         `) as ArticleRow[]);

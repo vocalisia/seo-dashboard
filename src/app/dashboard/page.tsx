@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import {
   Globe, Search, MousePointerClick,
   BarChart3, RefreshCw, Loader2, ChevronDown, ChevronRight,
-  PlaySquare, TrendingUp, TrendingDown, X, Smartphone, ChevronsDownUp, ChevronsUpDown, ExternalLink
+  PlaySquare, TrendingUp, TrendingDown, X, Smartphone, ChevronsDownUp, ChevronsUpDown, ExternalLink, Activity
 } from "lucide-react";
 import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface Site {
   id: number; name: string; url: string;
@@ -18,7 +19,7 @@ interface QueryData {
   query: string; total_clicks: number; total_impressions: number;
   avg_ctr: number; avg_position: number; first_seen?: string | null;
   // From tracked_keywords JOIN
-  volume_market?: number | null; volume_fr?: number | null; market?: string | null;
+  volume_market?: number | null; volume_fr?: number | null; market?: string | null; volume_source?: string | null;
 }
 
 interface GainData {
@@ -31,7 +32,7 @@ interface GainData {
   impressions_now: number;
   first_seen?: string | null;
   // From tracked_keywords JOIN
-  volume_market?: number | null; volume_fr?: number | null; market?: string | null;
+  volume_market?: number | null; volume_fr?: number | null; market?: string | null; volume_source?: string | null;
 }
 
 interface GainLabels { w0: string; w1: string; w2: string; w3: string; w4: string }
@@ -40,6 +41,14 @@ const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec
 
 type Period = "3" | "7" | "30" | "90";
 type TabType = "keywords" | "gains" | "analytics" | "device";
+
+interface ServiceTiming {
+  label: string;
+  ms: number;
+  ok: boolean;
+  at: number;
+  cache?: string | null;
+}
 
 interface DeviceRow {
   device: string;
@@ -55,33 +64,18 @@ interface AnalyticsDay {
   bounce_rate: number; avg_session_duration: number;
 }
 
-// Volume estimé = impressions / share (% des recherches totales où on apparaît)
-// Calibré pour rester réaliste : aux positions profondes Google nous affiche encore
-// (impressions ≈ vraies recherches). Plafonné à 3x pour éviter les nombres absurdes.
-function estimatedMonthlyVolume(impressions: number, position: number): number {
-  if (impressions <= 0 || position <= 0) return 0;
-  const share = position <= 3 ? 0.95
-    : position <= 10 ? 0.80
-    : position <= 20 ? 0.60
-    : position <= 50 ? 0.45
-    : 0.35;
-  return Math.round(impressions / share);
-}
-
 // Prefer DB-stored real volume (DataForSEO / Ahrefs / Keyword Planner via sync)
-// over the impression-based estimate. DB volumes come from `tracked_keywords`
-// (columns volume_market / volume_fr) populated by the sync script.
+// only. GSC impressions are not a monthly search volume, so we do not fabricate
+// a volume when no trusted source is available.
 function resolveVolume(
   volMarket: number | null | undefined,
   volFr: number | null | undefined,
-  impressions: number,
-  position: number,
 ): number {
   const m = Number(volMarket ?? 0);
-  if (m > 0) return m;
+  if (m > 1) return m;
   const f = Number(volFr ?? 0);
-  if (f > 0) return f;
-  return estimatedMonthlyVolume(impressions, position);
+  if (f > 1) return f;
+  return 0;
 }
 
 function volLabel(vol: number): { label: string; color: string } {
@@ -145,10 +139,35 @@ function solution(pos: number): string {
   return "🔨 Loin — créer du contenu dédié sur ce mot clé";
 }
 
+function formatMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "-";
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+async function runLimited<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  const queue = [...items];
+  const runners = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (item !== undefined) await worker(item);
+    }
+  });
+  await Promise.all(runners);
+}
+
 export default function DashboardPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [statsRefreshing, setStatsRefreshing] = useState(false);
+  const [pageLoadMs, setPageLoadMs] = useState<number | null>(null);
+  const [serviceTimings, setServiceTimings] = useState<ServiceTiming[]>([]);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [activeTab, setActiveTab] = useState<Record<number, TabType>>({});
   const [period, setPeriod] = useState<Period>("7"); // 7j default: 3j lag=2j = often just 1 real day
@@ -197,11 +216,28 @@ export default function DashboardPage() {
     siteId: number; query: string; actionType: string; loading: boolean; response?: string; error?: string;
   } | null>(null);
 
+  function recordTiming(timing: ServiceTiming) {
+    setServiceTimings((prev) => [timing, ...prev].slice(0, 12));
+  }
+
+  async function timedFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const started = performance.now();
+    const res = await fetch(input, init);
+    recordTiming({
+      label,
+      ms: performance.now() - started,
+      ok: res.ok,
+      at: Date.now(),
+      cache: res.headers.get("X-Cache"),
+    });
+    return res;
+  }
+
   async function askAiAgent(siteId: number, query: string, position: number, monthlyVolume: number, actionType: "push" | "optimize" | "maintain" | "create") {
     setAiModal({ siteId, query, actionType, loading: true });
     try {
       const site = sites.find(s => s.id === siteId);
-      const res = await fetch("/api/ai/seo-action", {
+      const res = await timedFetch("IA action", "/api/ai/seo-action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -224,8 +260,9 @@ export default function DashboardPage() {
     }
   }
 
-  async function fetchSites(lang?: string, p?: Period) {
-    setLoading(true);
+  async function fetchSites(lang?: string, p?: Period, silent = false) {
+    if (silent) setStatsRefreshing(true);
+    else setLoading(true);
     setConfigError(null);
     try {
       const langKey = lang ?? langFilter;
@@ -233,7 +270,7 @@ export default function DashboardPage() {
       const params = new URLSearchParams();
       if (langKey) params.set("language", langKey);
       params.set("days", periodKey);
-      const res = await fetch(`/api/sites?${params.toString()}`);
+      const res = await timedFetch("Sites + stats", `/api/sites?${params.toString()}`);
       const data = await res.json() as unknown;
       if (data && typeof data === "object" && data !== null && "error" in data) {
         const err = data as { error?: string; message?: string };
@@ -244,16 +281,35 @@ export default function DashboardPage() {
               : "DATABASE_URL manquant dans .env.local."
           );
           setSites([]);
-          setLoading(false);
+          if (silent) setStatsRefreshing(false);
+          else setLoading(false);
           return;
         }
       }
       if (Array.isArray(data)) setSites(data);
     } catch { /* ignore */ }
-    setLoading(false);
+    if (silent) setStatsRefreshing(false);
+    else setLoading(false);
   }
 
-  useEffect(() => { fetchSites(); }, []); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+  async function loadInitialDashboard() {
+    setLoading(true);
+    setConfigError(null);
+    try {
+      const res = await timedFetch("Sites liste rapide", "/api/sites");
+      const data = await res.json() as unknown;
+      if (Array.isArray(data)) setSites(data);
+    } catch { /* ignore */ }
+    setLoading(false);
+    void fetchSites(undefined, period, true);
+  }
+
+  useEffect(() => { void loadInitialDashboard(); }, []); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+
+  useEffect(() => {
+    const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    if (nav) setPageLoadMs(nav.domContentLoadedEventEnd);
+  }, []);
 
   async function loadKeywords(siteId: number, p: Period) {
     const key = `${siteId}-${p}-${langFilter || "all"}`;
@@ -261,7 +317,7 @@ export default function DashboardPage() {
     setKwLoadingIds(prev => new Set(prev).add(siteId));
     try {
       const langQs = langFilter ? `&language=${langFilter}` : "";
-      const res = await fetch(`/api/search-console?siteId=${siteId}&type=queries&days=${p}&limit=300${langQs}`);
+      const res = await timedFetch("Mots-cles site", `/api/search-console?siteId=${siteId}&type=queries&days=${p}&limit=300${langQs}`);
       const data = await res.json();
       if (Array.isArray(data)) setKeywords(prev => ({ ...prev, [key]: data }));
     } catch { /* ignore */ }
@@ -272,7 +328,7 @@ export default function DashboardPage() {
     if (gains[siteId] && !force) return;
     try {
       const langQs = langFilter ? `&language=${langFilter}` : "";
-      const res = await fetch(`/api/search-console?siteId=${siteId}&type=gains&limit=200${langQs}`);
+      const res = await timedFetch("Gains site", `/api/search-console?siteId=${siteId}&type=gains&limit=200${langQs}`);
       const data = await res.json() as { rows?: GainData[]; labels?: GainLabels } | GainData[];
       if (Array.isArray(data)) {
         setGains(prev => ({ ...prev, [siteId]: data }));
@@ -292,7 +348,7 @@ export default function DashboardPage() {
     setDeviceData({});
 
     // Re-fetch sites with new country filter → updates clics/impr/position per site
-    await fetchSites(lang);
+    await fetchSites(lang, undefined, true);
 
     // Re-fetch keywords for all expanded sites
     const p = period;
@@ -300,7 +356,7 @@ export default function DashboardPage() {
     for (const expandedId of expandedIds) {
       setKwLoadingIds(prev => new Set(prev).add(expandedId));
       try {
-        const res = await fetch(`/api/search-console?siteId=${expandedId}&type=queries&days=${p}&limit=300${langQs}`);
+        const res = await timedFetch("Mots-cles filtre", `/api/search-console?siteId=${expandedId}&type=queries&days=${p}&limit=300${langQs}`);
         const data = await res.json();
         if (Array.isArray(data)) {
           const key = `${expandedId}-${p}-${lang || "all"}`;
@@ -330,17 +386,19 @@ export default function DashboardPage() {
     } else {
       const allIds = sites.map(s => s.id);
       setExpandedIds(new Set(allIds));
-      for (const id of allIds) {
-        void loadKeywords(id, period);
-        void loadGains(id);
-      }
+      setBulkLoading(true);
+      await runLimited(allIds, 4, async (id) => {
+        await loadKeywords(id, period);
+        await loadGains(id);
+      });
+      setBulkLoading(false);
     }
   }
 
   async function loadAnalytics(siteId: number, p: Period) {
     if (analytics[siteId]) return;
     try {
-      const res = await fetch(`/api/analytics?siteId=${siteId}&days=${p}`);
+      const res = await timedFetch("Analytics site", `/api/analytics?siteId=${siteId}&days=${p}`);
       const data = await res.json();
       if (Array.isArray(data)) setAnalytics(prev => ({ ...prev, [siteId]: data.map((r: AnalyticsDay) => ({ ...r, date: r.date.toString().slice(5, 10) })) }));
     } catch { /* ignore */ }
@@ -349,7 +407,7 @@ export default function DashboardPage() {
   async function loadDeviceSplit(siteId: number, p: Period) {
     if (deviceData[siteId]) return;
     try {
-      const res = await fetch(`/api/device-split?site_id=${siteId}&days=${p}`);
+      const res = await timedFetch("Device split", `/api/device-split?site_id=${siteId}&days=${p}`);
       const data = await res.json() as { overview?: DeviceRow[] };
       if (data.overview && Array.isArray(data.overview)) {
         setDeviceData(prev => ({ ...prev, [siteId]: data.overview as DeviceRow[] }));
@@ -367,7 +425,7 @@ export default function DashboardPage() {
 
   async function changePeriod(p: Period) {
     setPeriod(p);
-    await fetchSites(undefined, p);
+    await fetchSites(undefined, p, true);
     for (const id of expandedIds) await loadKeywords(id, p);
   }
 
@@ -378,7 +436,7 @@ export default function DashboardPage() {
     setHighVolSelected(new Set());
     setHighVolPanelLoading(true);
     try {
-      const res = await fetch(`/api/keywords/high-volume?site_id=${siteId}&min_imp=30`);
+      const res = await timedFetch("High volume", `/api/keywords/high-volume?site_id=${siteId}&min_imp=30`);
       const d = await res.json() as { success: boolean; keywords?: typeof highVolKws };
       if (d.success && d.keywords) {
         const untracked = d.keywords.filter(k => !k.already_tracked).slice(0, 40);
@@ -395,7 +453,7 @@ export default function DashboardPage() {
     if (toAdd.length === 0) return;
     setHighVolLoading(prev => new Set(prev).add(siteId));
     try {
-      const res = await fetch(`/api/keywords/high-volume?site_id=${siteId}`, {
+      const res = await timedFetch("Ajout high volume", `/api/keywords/high-volume?site_id=${siteId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ keywords: toAdd.map(k => ({ keyword: k.keyword, source: k.source })) }),
@@ -415,7 +473,7 @@ export default function DashboardPage() {
     setActiveKw({ siteId, query });
     setKwHistLoading(true);
     try {
-      const res = await fetch(`/api/keyword-history?siteId=${siteId}&query=${encodeURIComponent(query)}&days=90`);
+      const res = await timedFetch("Historique mot-cle", `/api/keyword-history?siteId=${siteId}&query=${encodeURIComponent(query)}&days=90`);
       const data = await res.json();
       if (Array.isArray(data)) setKwHistory(data.map(r => ({ date: r.date.slice(5), position: Math.round(Number(r.position) * 10) / 10, clicks: Number(r.clicks) })));
     } catch { setKwHistory([]); }
@@ -428,7 +486,7 @@ export default function DashboardPage() {
     setSyncing(true);
     setSyncMsg(null);
     try {
-      const res = await fetch("/api/sync", { method: "POST" });
+      const res = await timedFetch("Sync GSC/GA4", "/api/sync", { method: "POST" });
       const data = await res.json();
       if (res.status === 401 || data.error?.includes("authentifié")) {
         setSyncMsg({ type: "err", text: "Connecte-toi Google d'abord → /login" });
@@ -439,7 +497,7 @@ export default function DashboardPage() {
         const total = results.reduce((s: number, r: { gsc?: number }) => s + (r.gsc || 0), 0);
         setSyncMsg({ type: "ok", text: `Sync OK — ${total} lignes GSC importées` });
         setKeywords({}); setGains({});
-        await fetchSites();
+        await fetchSites(undefined, undefined, true);
       }
     } catch (err) {
       setSyncMsg({ type: "err", text: err instanceof Error ? err.message : "Erreur réseau" });
@@ -453,6 +511,10 @@ export default function DashboardPage() {
   const activeSites = sites.filter(s => Number(s.avg_position_30d) > 0);
   const avgPosition = activeSites.length > 0
     ? activeSites.reduce((s, site) => s + Number(site.avg_position_30d), 0) / activeSites.length
+    : 0;
+  const latestTiming = serviceTimings[0];
+  const avgServiceMs = serviceTimings.length
+    ? serviceTimings.reduce((sum, item) => sum + item.ms, 0) / serviceTimings.length
     : 0;
 
   if (loading) return (
@@ -722,8 +784,15 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {statsRefreshing && (
+        <div className="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center gap-2 bg-cyan-950/30 border border-cyan-800/50 text-cyan-200">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Stats SEO en chargement en arriere-plan. La page reste utilisable.
+        </div>
+      )}
+
       {/* KPIs globaux */}
-      <div className="px-6 py-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="px-6 py-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><MousePointerClick className="w-3 h-3" /> Clics GSC ({period}j)</div>
           <div className="text-2xl font-bold text-blue-400">{totalClicks.toLocaleString()}</div>
@@ -738,6 +807,17 @@ export default function DashboardPage() {
           <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Globe className="w-3 h-3" /> Position moy. globale</div>
           <div className="text-2xl font-bold text-green-400">{avgPosition > 0 ? avgPosition.toFixed(1) : "—"}</div>
           <div className="text-xs text-gray-400 mt-1">{activeSites.length} sites avec données</div>
+        </div>
+        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+          <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Activity className="w-3 h-3" /> Vitesse services</div>
+          <div className={`text-2xl font-bold ${avgServiceMs && avgServiceMs > 1500 ? "text-yellow-400" : "text-cyan-400"}`}>
+            {latestTiming ? formatMs(latestTiming.ms) : formatMs(pageLoadMs ?? 0)}
+          </div>
+          <div className="text-xs text-gray-400 mt-1 truncate">
+            {latestTiming
+              ? `${latestTiming.label}${latestTiming.cache ? ` - ${latestTiming.cache}` : ""} - moy. ${formatMs(avgServiceMs)}`
+              : `page ${formatMs(pageLoadMs ?? 0)}`}
+          </div>
         </div>
       </div>
 
@@ -763,10 +843,10 @@ export default function DashboardPage() {
           );
         })}
         <div className="ml-auto flex items-center gap-2">
-          <button type="button" onClick={toggleAll}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-700 bg-gray-800 text-gray-400 hover:text-white hover:border-gray-500 transition">
-            {expandedIds.size === sites.length ? <ChevronsDownUp className="w-3 h-3" /> : <ChevronsUpDown className="w-3 h-3" />}
-            {expandedIds.size === sites.length ? "Tout fermer" : "Tout ouvrir"}
+          <button type="button" onClick={toggleAll} disabled={bulkLoading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-700 bg-gray-800 text-gray-400 hover:text-white hover:border-gray-500 transition disabled:opacity-50 disabled:cursor-wait">
+            {bulkLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : expandedIds.size === sites.length ? <ChevronsDownUp className="w-3 h-3" /> : <ChevronsUpDown className="w-3 h-3" />}
+            {bulkLoading ? "Chargement par lots..." : expandedIds.size === sites.length ? "Tout fermer" : "Tout ouvrir"}
           </button>
         </div>
       </div>
@@ -796,7 +876,7 @@ export default function DashboardPage() {
               if (sortCol === "position") { va = Number(a.avg_position); vb = Number(b.avg_position); }
               else if (sortCol === "impressions") { va = Number(a.total_impressions); vb = Number(b.total_impressions); }
               else if (sortCol === "ctr") { va = Number(a.avg_ctr); vb = Number(b.avg_ctr); }
-              else if (sortCol === "volume") { va = resolveVolume(a.volume_market, a.volume_fr, Number(a.total_impressions), Number(a.avg_position)); vb = resolveVolume(b.volume_market, b.volume_fr, Number(b.total_impressions), Number(b.avg_position)); }
+              else if (sortCol === "volume") { va = resolveVolume(a.volume_market, a.volume_fr); vb = resolveVolume(b.volume_market, b.volume_fr); }
               else { va = Number(a.total_clicks); vb = Number(b.total_clicks); }
               return sortDir === "asc" ? va - vb : vb - va;
             });
@@ -808,7 +888,7 @@ export default function DashboardPage() {
                 const impr = Number(g.impressions_now) || 0;
                 const pos = Number(g.position_now) || 0;
                 const monthlyImpr = impr * (30 / 7);
-                return resolveVolume(g.volume_market, g.volume_fr, Math.round(monthlyImpr), pos);
+                return resolveVolume(g.volume_market, g.volume_fr);
               };
               const oppEst = (g: GainData) => opportunityScore(volEst(g), Number(g.position_now) || 0);
               if (gainSortCol === "position_now") { va = Number(a.position_now); vb = Number(b.position_now); }
@@ -922,7 +1002,7 @@ export default function DashboardPage() {
                             if (highVolKws.length === 0 || highVolLoading.has(site.id)) return;
                             setHighVolLoading(prev => new Set(prev).add(site.id));
                             try {
-                              const res = await fetch(`/api/keywords/high-volume?site_id=${site.id}`, {
+                              const res = await timedFetch("Tout ajouter high volume", `/api/keywords/high-volume?site_id=${site.id}`, {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ keywords: highVolKws.map(k => ({ keyword: k.keyword, source: k.source })) }),
@@ -1011,13 +1091,21 @@ export default function DashboardPage() {
                     <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                   ) : tab === "keywords" ? (
                     kws.length === 0 ? (
-                      <div className="py-6 text-center text-gray-400 text-sm">Aucune donnée GSC pour cette période</div>
+                      <div className="py-6 text-center text-gray-400 text-sm">
+                        Aucune requête GSC pour ce site avec le filtre actuel
+                        {langFilter ? " (pays/langue trop restrictif possible)" : ""}.
+                      </div>
                     ) : (
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="text-gray-400 text-xs bg-gray-800/50">
                             <th className="text-left py-2 px-5">#</th>
-                            <th className="text-left py-2 px-3">Mot clé</th>
+                            <th className="text-left py-2 px-3">
+                              <span className="inline-flex items-center gap-2">
+                                Mot clé
+                                <CopyKeywordsButton keywords={kws.slice(0, 100).map((kw) => kw.query)} />
+                              </span>
+                            </th>
                             {(["clicks","impressions","ctr","position"] as const).map(col => {
                               const labels = { clicks: "Clics", impressions: "Impressions", ctr: "CTR", position: "Position" };
                               const active = sortCol === col;
@@ -1041,7 +1129,7 @@ export default function DashboardPage() {
                                 <th className="text-right py-2 px-3 cursor-pointer select-none"
                                   onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir("desc"); } }}>
                                   <span className={`inline-flex items-center justify-end gap-1 ${active ? "text-white" : "hover:text-gray-300"}`}>
-                                    Vol./mois
+                                    Volume source
                                     <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
                                       <span className={active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}>▲</span>
                                       <span className={active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}>▼</span>
@@ -1104,7 +1192,7 @@ export default function DashboardPage() {
                               </td>
                               <td className="text-right py-2 px-3">
                                 {(() => {
-                                  const vol = resolveVolume(kw.volume_market, kw.volume_fr, Number(kw.total_impressions), Number(kw.avg_position));
+                                  const vol = resolveVolume(kw.volume_market, kw.volume_fr);
                                   const { label, color } = volLabel(vol);
                                   return <span className={`text-xs font-medium ${color}`}>{label}</span>;
                                 })()}
@@ -1122,7 +1210,12 @@ export default function DashboardPage() {
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="text-gray-400 text-xs bg-gray-800/50">
-                            <th className="text-left py-2 px-5">Mot clé</th>
+                            <th className="text-left py-2 px-5">
+                              <span className="inline-flex items-center gap-2">
+                                Mot clé
+                                <CopyKeywordsButton keywords={gainList.map((kw) => kw.query)} />
+                              </span>
+                            </th>
                             <th className="text-right py-2 px-2 cursor-pointer select-none"
                               onClick={() => { if (gainSortCol === "position_now") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("position_now"); setGainSortDir("asc"); } }}>
                               <div className={`inline-flex flex-col items-end ${gainSortCol === "position_now" ? "text-white" : "hover:text-gray-300"}`}>
@@ -1160,10 +1253,10 @@ export default function DashboardPage() {
                               <span className={gainSortCol === "clicks_gain" ? "text-white" : "hover:text-gray-300"}>Clics +/- {gainSortCol === "clicks_gain" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
                             </th>
                             <th className="text-right py-2 px-3 cursor-pointer select-none"
-                              title="Volume mensuel estimé d'après impressions GSC + position moyenne. Clique pour trier."
+                              title="Volume importé depuis une source externe fiable. Vide si aucune source volume n'est disponible."
                               onClick={() => { if (gainSortCol === "volume") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("volume"); setGainSortDir("desc"); } }}>
                               <span className={gainSortCol === "volume" ? "text-white" : "text-gray-400 hover:text-gray-300"}>
-                                Volume / mois {gainSortCol === "volume" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
+                                Volume source {gainSortCol === "volume" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
                               </span>
                             </th>
                             <th className="text-right py-2 px-3 cursor-pointer select-none"
@@ -1230,7 +1323,7 @@ export default function DashboardPage() {
                                   {(() => {
                                     const impr = Number(g.impressions_now) || 0;
                                     const pos = Number(g.position_now) || 0;
-                                    const vol = resolveVolume(g.volume_market, g.volume_fr, Math.round(impr * (30 / 7)), pos);
+                                    const vol = resolveVolume(g.volume_market, g.volume_fr);
                                     if (vol <= 0) return <span className="text-gray-600 text-xs">—</span>;
                                     const { label, color } = volLabel(vol);
                                     return <span className={`text-xs font-semibold ${color}`}>{label}</span>;
@@ -1241,7 +1334,7 @@ export default function DashboardPage() {
                                     const impr = Number(g.impressions_now) || 0;
                                     const pos = Number(g.position_now) || 0;
                                     if (pos <= 0) return <span className="text-gray-600 text-xs">—</span>;
-                                    const monthlyVol = resolveVolume(g.volume_market, g.volume_fr, Math.round(impr * (30 / 7)), pos);
+                                    const monthlyVol = resolveVolume(g.volume_market, g.volume_fr);
                                     const score = opportunityScore(monthlyVol, pos);
                                     const { label, color, emoji } = oppLabel(score);
                                     return <span className={`text-xs ${color}`} title={`Si tu passes top 3, tu gagnes ~${score} clics/mois`}>{emoji} {label}</span>;
@@ -1251,7 +1344,7 @@ export default function DashboardPage() {
                                   {(() => {
                                     const impr = Number(g.impressions_now) || 0;
                                     const pos = Number(g.position_now) || 0;
-                                    const monthlyVol = pos > 0 ? resolveVolume(g.volume_market, g.volume_fr, Math.round(impr * (30 / 7)), pos) : 0;
+                                    const monthlyVol = pos > 0 ? resolveVolume(g.volume_market, g.volume_fr) : 0;
                                     const action = recommendedAction(pos, monthlyVol);
                                     const btnColor = action.type === "push" ? "bg-orange-500/20 text-orange-300 border-orange-500/40 hover:bg-orange-500/30" :
                                                      action.type === "optimize" ? "bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30" :

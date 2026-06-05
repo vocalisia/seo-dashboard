@@ -8,7 +8,7 @@ import {
 import {
   Globe, MousePointerClick, Search, TrendingUp, Users,
   Eye, Loader2, BarChart3, ArrowLeft, Clock, Activity,
-  Filter, ChevronDown
+  Filter, ChevronDown, AlertTriangle
 } from "lucide-react";
 import Link from "next/link";
 
@@ -31,12 +31,16 @@ interface DayRow {
 }
 
 export default function OverviewPage() {
-  const [period, setPeriod] = useState<Period>("30");
+  const [period, setPeriod] = useState<Period>("7");
   // GSC has 2-3 day delay, GA4 has 1 day delay
   const [summary, setSummary] = useState<SiteSummary[]>([]);
+  const [previousSummary, setPreviousSummary] = useState<SiteSummary[]>([]);
   const [gscSeries, setGscSeries] = useState<DayRow[]>([]);
   const [ga4Series, setGa4Series] = useState<DayRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingParts, setLoadingParts] = useState<Record<string, boolean>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [lastLoadMs, setLastLoadMs] = useState<number | null>(null);
   const [selectedSites, setSelectedSites] = useState<number[]>([]);
   const [sortMetric, setSortMetric] = useState<"clicks"|"impressions"|"sessions"|"position">("clicks");
   const [tableSortCol, setTableSortCol] = useState<"clicks"|"sessions"|"position"|"avg_duration"|"impressions">("clicks");
@@ -44,22 +48,47 @@ export default function OverviewPage() {
   const [showSiteFilter, setShowSiteFilter] = useState(false);
   const [activePanel, setActivePanel] = useState<"clicks"|"impressions"|"sessions"|"position">("clicks");
 
-  async function loadAll() {
-    setLoading(true);
+  async function fetchJsonWithTimeout<T>(label: string, url: string, timeoutMs = 12000): Promise<T | null> {
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), timeoutMs);
+    setLoadingParts((prev) => ({ ...prev, [label]: true }));
     try {
-      const [s, g, a] = await Promise.all([
-        fetch(`/api/overview?type=summary&days=${period}`).then(r => r.json()).catch(() => null),
-        fetch(`/api/overview?type=gsc&days=${period}`).then(r => r.json()).catch(() => null),
-        fetch(`/api/overview?type=ga4&days=${period}`).then(r => r.json()).catch(() => null),
-      ]);
-      if (Array.isArray(s)) { setSummary(s); if (selectedSites.length === 0) setSelectedSites(s.map((x: SiteSummary) => x.site_id)); }
-      if (Array.isArray(g)) setGscSeries(g);
-      if (Array.isArray(a)) setGa4Series(a);
-    } catch { /* All fetches errored — keep prior data */ }
-    setLoading(false);
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) throw new Error(`${label}: HTTP ${res.status}`);
+      return await res.json() as T;
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : `${label}: erreur reseau`);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+      setLoadingParts((prev) => ({ ...prev, [label]: false }));
+    }
   }
 
-  useEffect(() => { loadAll(); }, [period]); // eslint-disable-line react-hooks/set-state-in-effect
+  async function loadAll() {
+    const started = performance.now();
+    setLoading(true);
+    setLoadError(null);
+
+    const s = await fetchJsonWithTimeout<SiteSummary[]>("summary", `/api/overview?type=summary&days=${period}`, 12000);
+    if (Array.isArray(s)) {
+      setSummary(s);
+      setSelectedSites((prev) => prev.length === 0
+        ? s.map((x) => x.site_id)
+        : prev.filter((id) => s.some((x) => x.site_id === id)));
+    }
+    setLoading(false);
+    setLastLoadMs(performance.now() - started);
+
+    void fetchJsonWithTimeout<SiteSummary[]>("previous", `/api/overview?type=summary&days=${period}&offset=${period}`, 12000)
+      .then((prev) => { if (Array.isArray(prev)) setPreviousSummary(prev); });
+    void fetchJsonWithTimeout<DayRow[]>("gsc", `/api/overview?type=gsc&days=${period}`, 12000)
+      .then((g) => { if (Array.isArray(g)) setGscSeries(g); });
+    void fetchJsonWithTimeout<DayRow[]>("ga4", `/api/overview?type=ga4&days=${period}`, 12000)
+      .then((a) => { if (Array.isArray(a)) setGa4Series(a); });
+  }
+
+  useEffect(() => { void loadAll(); }, [period]); // eslint-disable-line react-hooks/set-state-in-effect
 
   // Build time-series aggregated by date for selected sites
   const timeSeriesData = useMemo(() => {
@@ -117,10 +146,78 @@ export default function OverviewPage() {
     clicks: summary.reduce((s, x) => s + Number(x.clicks||0), 0),
     impressions: summary.reduce((s, x) => s + Number(x.impressions||0), 0),
     sessions: summary.reduce((s, x) => s + Number(x.sessions||0), 0),
+    organicSessions: summary.reduce((s, x) => s + Number(x.organic_sessions||0), 0),
     users: summary.reduce((s, x) => s + Number(x.users||0), 0),
     activeSites: summary.filter(x => Number(x.clicks) > 0).length,
     avgPos: (() => { const a = summary.filter(x => Number(x.position) > 0); return a.length ? a.reduce((s,x)=>s+Number(x.position),0)/a.length : 0; })(),
   }), [summary]);
+
+  const previousTotals = useMemo(() => ({
+    clicks: previousSummary.reduce((s, x) => s + Number(x.clicks||0), 0),
+    impressions: previousSummary.reduce((s, x) => s + Number(x.impressions||0), 0),
+    sessions: previousSummary.reduce((s, x) => s + Number(x.sessions||0), 0),
+    organicSessions: previousSummary.reduce((s, x) => s + Number(x.organic_sessions||0), 0),
+    avgPos: (() => { const a = previousSummary.filter(x => Number(x.position) > 0); return a.length ? a.reduce((s,x)=>s+Number(x.position),0)/a.length : 0; })(),
+  }), [previousSummary]);
+
+  const previousBySite = useMemo(() => {
+    const map = new Map<number, SiteSummary>();
+    previousSummary.forEach((site) => map.set(site.site_id, site));
+    return map;
+  }, [previousSummary]);
+
+  function pctChange(current: number, previous: number) {
+    if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
+    if (previous === 0) return current === 0 ? 0 : null;
+    return ((current - previous) / Math.abs(previous)) * 100;
+  }
+
+  function formatDelta(current: number, previous: number, lowerIsBetter = false) {
+    const change = pctChange(current, previous);
+    if (change == null) return "n/a";
+    const adjusted = lowerIsBetter ? -change : change;
+    const sign = adjusted > 0 ? "+" : "";
+    return `${sign}${adjusted.toFixed(0)}%`;
+  }
+
+  const alerts = useMemo(() => {
+    const out: Array<{ level: "danger" | "warn" | "info"; site: string; text: string }> = [];
+    summary.forEach((site) => {
+      const prev = previousBySite.get(site.site_id);
+      if (!prev) return;
+      const clicks = Number(site.clicks || 0);
+      const prevClicks = Number(prev.clicks || 0);
+      const impressions = Number(site.impressions || 0);
+      const prevImpressions = Number(prev.impressions || 0);
+      const sessions = Number(site.sessions || 0);
+      const prevSessions = Number(prev.sessions || 0);
+      const pos = Number(site.position || 0);
+      const prevPos = Number(prev.position || 0);
+      const clickDrop = pctChange(clicks, prevClicks);
+      const impressionChange = pctChange(impressions, prevImpressions);
+      const sessionDrop = pctChange(sessions, prevSessions);
+      const posWorse = prevPos > 0 && pos > 0 ? pos - prevPos : 0;
+      const bridgeRate = clickToOrganicSessionRate(site);
+
+      if (clickDrop != null && clickDrop <= -30 && prevClicks >= 5) {
+        out.push({ level: "danger", site: site.name, text: `clics GSC ${clickDrop.toFixed(0)}% vs periode precedente` });
+      }
+      if (impressionChange != null && impressionChange >= 25 && clickDrop != null && clickDrop <= -10) {
+        out.push({ level: "warn", site: site.name, text: "impressions GSC en hausse mais clics en baisse" });
+      }
+      if (sessionDrop != null && sessionDrop <= -30 && prevSessions >= 20) {
+        out.push({ level: "warn", site: site.name, text: `sessions GA4 ${sessionDrop.toFixed(0)}% vs periode precedente` });
+      }
+      if (posWorse >= 8) {
+        out.push({ level: "warn", site: site.name, text: `position GSC degradee de ${posWorse.toFixed(1)} places` });
+      }
+      if (bridgeRate != null && clicks >= 5 && (bridgeRate < 35 || bridgeRate > 180)) {
+        out.push({ level: "info", site: site.name, text: `ecart GA4/GSC a verifier (${bridgeRate.toFixed(0)}%)` });
+      }
+    });
+    const weight = { danger: 0, warn: 1, info: 2 };
+    return out.sort((a, b) => weight[a.level] - weight[b.level]).slice(0, 8);
+  }, [summary, previousBySite, totals.organicSessions, totals.clicks]);
 
   const periodLabel = { "3": "3 derniers jours", "7": "7 jours", "30": "30 jours", "90": "90 jours" };
   const siteNames = useMemo(() => {
@@ -130,11 +227,18 @@ export default function OverviewPage() {
   }, [summary]);
 
   const panelMeta = [
-    { key: "clicks" as const, label: "Clics", icon: MousePointerClick, color: "#3b82f6", total: totals.clicks },
-    { key: "impressions" as const, label: "Impressions", icon: Search, color: "#8b5cf6", total: totals.impressions },
-    { key: "sessions" as const, label: "Sessions GA4", icon: Users, color: "#10b981", total: totals.sessions },
-    { key: "position" as const, label: "Position moy.", icon: Globe, color: "#f59e0b", total: totals.avgPos, isAvg: true },
+    { key: "clicks" as const, label: "Clics Google", source: "GSC", icon: MousePointerClick, color: "#3b82f6", total: totals.clicks, previous: previousTotals.clicks },
+    { key: "impressions" as const, label: "Impressions Google", source: "GSC", icon: Search, color: "#8b5cf6", total: totals.impressions, previous: previousTotals.impressions },
+    { key: "sessions" as const, label: "Sessions site", source: "GA4", icon: Users, color: "#10b981", total: totals.sessions, previous: previousTotals.sessions },
+    { key: "position" as const, label: "Position Google", source: "GSC", icon: Globe, color: "#f59e0b", total: totals.avgPos, previous: previousTotals.avgPos, isAvg: true },
   ];
+
+  function clickToOrganicSessionRate(site?: SiteSummary) {
+    const clicks = Number(site?.clicks ?? totals.clicks) || 0;
+    const organicSessions = Number(site?.organic_sessions ?? totals.organicSessions) || 0;
+    if (clicks <= 0) return null;
+    return (organicSessions / clicks) * 100;
+  }
 
   const lineKeys = useMemo(() => {
     if (timeSeriesData.length === 0) return [];
@@ -170,6 +274,19 @@ export default function OverviewPage() {
           <BarChart3 className="w-5 h-5 text-blue-400" />
           <h1 className="text-lg font-bold">Vue Globale</h1>
           <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full">{summary.length} sites</span>
+          <span className={`text-xs px-2 py-0.5 rounded-full ${
+            loadError ? "bg-red-500/20 text-red-300" :
+            loadingParts.gsc || loadingParts.ga4 ? "bg-cyan-500/20 text-cyan-300" :
+            "bg-gray-800 text-gray-400"
+          }`}>
+            {loadError
+              ? "chargement partiel"
+              : loadingParts.gsc || loadingParts.ga4
+                ? "series en fond"
+                : lastLoadMs
+                  ? `charge ${lastLoadMs >= 1000 ? `${(lastLoadMs / 1000).toFixed(1)}s` : `${Math.round(lastLoadMs)}ms`}`
+                  : "pret"}
+          </span>
           <span className="text-xs text-gray-600 hidden md:block">· GSC délai 2-3j · GA4 délai 1j</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -213,10 +330,10 @@ export default function OverviewPage() {
           {/* Sort */}
           <select value={sortMetric} onChange={e => setSortMetric(e.target.value as typeof sortMetric)}
             className="bg-gray-800 border border-gray-700 text-gray-300 text-xs rounded-lg px-3 py-2">
-            <option value="clicks">Trier: Clics</option>
-            <option value="impressions">Trier: Impressions</option>
-            <option value="sessions">Trier: Sessions</option>
-            <option value="position">Trier: Position</option>
+            <option value="clicks">Trier: Clics Google (GSC)</option>
+            <option value="impressions">Trier: Impressions Google (GSC)</option>
+            <option value="sessions">Trier: Sessions site (GA4)</option>
+            <option value="position">Trier: Position Google (GSC)</option>
           </select>
         </div>
       </header>
@@ -227,22 +344,77 @@ export default function OverviewPage() {
         </div>
       ) : (
         <div className="flex-1 px-6 py-5 space-y-5">
+          <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3 text-xs text-cyan-100">
+            GSC mesure les clics et impressions depuis Google. GA4 mesure les sessions sur le site apres chargement, consentement et tracking. Les deux sources ne doivent pas etre egales; le ratio organique GA4 / clics GSC sert seulement d'indicateur de coherence.
+          </div>
+          {loadError && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              Vue globale chargee partiellement: {loadError}. Les donnees deja disponibles restent affichees.
+            </div>
+          )}
 
           {/* ── KPI CARDS ── */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {panelMeta.map(m => (
               <button key={m.key} onClick={() => setActivePanel(m.key)}
                 className={`text-left bg-gray-900 rounded-xl border p-4 transition ${activePanel === m.key ? "border-blue-500" : "border-gray-800 hover:border-gray-600"}`}>
-                <div className="flex items-center gap-2 text-xs text-gray-400 mb-2"><m.icon className="w-3.5 h-3.5" />{m.label} ({periodLabel[period]})</div>
+                <div className="flex items-center gap-2 text-xs text-gray-400 mb-2">
+                  <m.icon className="w-3.5 h-3.5" />
+                  <span>{m.label}</span>
+                  <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[10px] text-gray-300">{m.source}</span>
+                  <span>({periodLabel[period]})</span>
+                </div>
                 <div className="text-2xl font-bold" style={{ color: m.color }}>
                   {m.isAvg ? (m.total > 0 ? m.total.toFixed(1) : "—") : m.total.toLocaleString()}
                 </div>
                 <div className="text-xs text-gray-400 mt-1">~{m.isAvg ? "moy." : Math.round(m.total / parseInt(period))}/jour</div>
+                {previousSummary.length > 0 && (
+                  <div className={`text-xs mt-2 ${formatDelta(m.total, m.previous, Boolean(m.isAvg)).startsWith("+") ? "text-green-300" : "text-red-300"}`}>
+                    {formatDelta(m.total, m.previous, Boolean(m.isAvg))} vs periode precedente
+                  </div>
+                )}
               </button>
             ))}
           </div>
 
           {/* ── EVOLUTION CHART (MULTI-SITE) ── */}
+          {alerts.length > 0 && (
+            <div className="bg-gray-900 rounded-xl border border-orange-800/60 p-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-orange-200 mb-3">
+                <AlertTriangle className="h-4 w-4" />
+                Alertes automatiques
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {alerts.map((alert, index) => (
+                  <div key={`${alert.site}-${index}`} className={`rounded-lg border px-3 py-2 text-xs ${
+                    alert.level === "danger" ? "border-red-800 bg-red-900/20 text-red-200" :
+                    alert.level === "warn" ? "border-orange-800 bg-orange-900/20 text-orange-200" :
+                    "border-cyan-800 bg-cyan-900/20 text-cyan-200"
+                  }`}>
+                    <span className="font-semibold">{alert.site}</span> - {alert.text}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+              <div className="text-xs text-gray-400 mb-1">Sessions organiques GA4</div>
+              <div className="text-xl font-bold text-green-400">{totals.organicSessions.toLocaleString()}</div>
+            </div>
+            <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+              <div className="text-xs text-gray-400 mb-1">Ratio organique GA4 / clics GSC</div>
+              <div className="text-xl font-bold text-cyan-300">
+                {clickToOrganicSessionRate() == null ? "—" : `${clickToOrganicSessionRate()!.toFixed(0)}%`}
+              </div>
+            </div>
+            <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+              <div className="text-xs text-gray-400 mb-1">Lecture correcte</div>
+              <div className="text-sm text-gray-300">GSC = entree Google. GA4 = visites mesurees sur le site.</div>
+            </div>
+          </div>
+
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
             <div className="flex items-center justify-between mb-4">
               <div className="text-sm font-semibold text-gray-300">
@@ -308,9 +480,9 @@ export default function OverviewPage() {
                   <tr className="text-gray-400 border-b border-gray-800">
                     <th className="text-left py-1.5 pr-3">Site</th>
                     {([
-                      { col: "clicks" as const, label: "Clics" },
-                      { col: "sessions" as const, label: "Sessions" },
-                      { col: "position" as const, label: "Pos." },
+                      { col: "clicks" as const, label: "Clics GSC" },
+                      { col: "sessions" as const, label: "Sessions GA4" },
+                      { col: "position" as const, label: "Pos. GSC" },
                       { col: "avg_duration" as const, label: "Dur. moy." },
                     ]).map(({ col, label }) => (
                       <th key={col} onClick={() => toggleTableSort(col)}

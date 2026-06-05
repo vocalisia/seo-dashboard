@@ -8,6 +8,7 @@ import {
   ChevronDown, ChevronUp, Shield, FileText,
 } from "lucide-react";
 import Link from "next/link";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface Site {
   id: number;
@@ -65,6 +66,7 @@ interface GapRow {
   our_position: number | null;
   competitor_positions: { domain: string; pos: number }[];
   volume: number;
+  derived_question?: boolean;
 }
 
 type ActiveTab = "analysis" | "gaps";
@@ -382,9 +384,18 @@ export default function CompetitorsPage() {
   }
 
   function isQuestion(kw: string): boolean {
-    const QUESTION_WORDS = ["comment","pourquoi","quand","quel","quelle","quels","quelles","qu'est","qu est","how","what","why","when","which","where","who","is","are","does","do","can","best","top"];
+    const QUESTION_WORDS = ["comment","pourquoi","combien","quand","quel","quelle","quels","quelles","qu'est","qu est","est-ce","où","ou","qui","que","quoi","how","what","why","when","which","where","who","is","are","does","do","can","should","best","top","meilleur","meilleure","comparatif"];
     const lower = kw.toLowerCase();
+    if (lower.includes("?")) return true;
     return QUESTION_WORDS.some(w => lower.startsWith(w + " ") || lower.includes(" " + w + " "));
+  }
+
+  function questionVariant(keyword: string): string {
+    const clean = keyword.trim().replace(/\?+$/, "");
+    if (isQuestion(clean)) return clean;
+    if (/\b(comparatif|vs|alternative|meilleur|best|top)\b/i.test(clean)) return `quel est le meilleur ${clean}`;
+    if (/\b(prix|tarif|cost|devis)\b/i.test(clean)) return `combien coûte ${clean}`;
+    return `comment choisir ${clean}`;
   }
 
   function isLongTail(kw: string): boolean {
@@ -396,6 +407,13 @@ export default function CompetitorsPage() {
     if (gapsTypeFilter === "questions") return isQuestion(g.keyword);
     return true;
   });
+  const derivedQuestionRows: GapRow[] = gapsTypeFilter === "questions" && filteredGapRows.length === 0 && gapRows.length > 0
+    ? gapRows
+        .filter((g) => isLongTail(g.keyword) || g.volume >= 100)
+        .slice(0, 10)
+        .map((g) => ({ ...g, keyword: questionVariant(g.keyword), derived_question: true }))
+    : [];
+  const visibleGapRows = filteredGapRows.length > 0 ? filteredGapRows : derivedQuestionRows;
 
   const callAiWidget = useCallback(async (prompt: string, competitors: string[]) => {
     const ctx = `Concurrents analysés: ${competitors.join(", ")}`;
@@ -485,10 +503,21 @@ export default function CompetitorsPage() {
   const selectedSiteObj = sites.find((s) => s.id === selectedSite);
   const competitorDomains = competitors.map((c) => c.domain);
 
+  function inferIntent(keyword: string, rawIntent?: string): Exclude<IntentFilter, "all"> {
+    const raw = (rawIntent ?? "").toLowerCase().trim();
+    if (raw === "commercial" || raw === "informational" || raw === "transactional") return raw;
+    const lower = keyword.toLowerCase();
+    if (/\b(acheter|buy|prix|price|tarif|devis|commander|order|abonnement|subscription|cost)\b/.test(lower)) return "transactional";
+    if (/\b(meilleur|meilleure|best|top|comparatif|vs|alternative|avis|review)\b/.test(lower)) return "commercial";
+    if (isQuestion(lower)) return "informational";
+    return "informational";
+  }
+
   // Filtered gaps
   const filteredGaps = gaps.filter((g) => {
     const matchCompetitor = !activeCompetitorFilter || g.competitor_domain === activeCompetitorFilter || g.competitor === activeCompetitorFilter;
-    const matchIntent = intentFilter === "all" || g.intent?.toLowerCase() === intentFilter;
+    const inferredIntent = inferIntent(g.keyword, g.intent);
+    const matchIntent = intentFilter === "all" || inferredIntent === intentFilter;
     return matchCompetitor && matchIntent;
   });
 
@@ -571,7 +600,7 @@ export default function CompetitorsPage() {
           <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-800 flex flex-wrap items-center justify-between gap-3">
               <h2 className="font-medium text-gray-200 flex items-center gap-2">
-                <GitCompare className="w-4 h-4 text-purple-400" /> Keyword Gaps ({filteredGapRows.length}{filteredGapRows.length !== gapRows.length ? `/${gapRows.length}` : ""})
+                <GitCompare className="w-4 h-4 text-purple-400" /> Keyword Gaps ({visibleGapRows.length}{visibleGapRows.length !== gapRows.length ? `/${gapRows.length}` : ""})
               </h2>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1">
@@ -586,7 +615,7 @@ export default function CompetitorsPage() {
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-600/20 border border-orange-600/40 text-orange-300 hover:bg-orange-600/40 disabled:opacity-40 disabled:cursor-not-allowed transition"
                   title="Relancer l'audit IA pour avoir les gaps à jour">
                   {gapsRefreshing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                  {gapsRefreshing ? "Audit en cours..." : "Lancer audit IA (frais)"}
+                  {gapsRefreshing ? "Audit en cours..." : "Lancer audit IA live"}
                 </button>
                 <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
                   className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none w-48">
@@ -597,7 +626,7 @@ export default function CompetitorsPage() {
             </div>
             {gapsLoading ? (
               <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-purple-400" /></div>
-            ) : filteredGapRows.length === 0 && gapRows.length > 0 ? (
+            ) : visibleGapRows.length === 0 && gapRows.length > 0 ? (
               <div className="py-12 text-center text-gray-400 text-sm">
                 Aucun mot-clé ne correspond au filtre <span className="text-purple-400">{gapsTypeFilter === "longtail" ? "Long tail" : "Questions"}</span>. Essaie un autre filtre.
               </div>
@@ -610,7 +639,12 @@ export default function CompetitorsPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-xs text-gray-400 border-b border-gray-800 bg-gray-800/40">
-                      <th className="px-5 py-3 text-left">Mot-clé</th>
+                      <th className="px-5 py-3 text-left">
+                        <span className="inline-flex items-center gap-2">
+                          Mot-clé
+                          <CopyKeywordsButton keywords={visibleGapRows.map((g) => g.keyword)} />
+                        </span>
+                      </th>
                       <th className="px-5 py-3 text-right">Vol. estimé</th>
                       <th className="px-5 py-3 text-right">Notre pos.</th>
                       <th className="px-5 py-3 text-left">Concurrents</th>
@@ -618,9 +652,16 @@ export default function CompetitorsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredGapRows.map((g, i) => (
+                    {visibleGapRows.map((g, i) => (
                       <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                        <td className="px-5 py-3 font-medium text-white">{g.keyword}</td>
+                        <td className="px-5 py-3 font-medium text-white">
+                          {g.keyword}
+                          {g.derived_question && (
+                            <span className="ml-2 text-[10px] text-cyan-300 bg-cyan-900/30 border border-cyan-700/40 px-1.5 py-0.5 rounded">
+                              dérivé
+                            </span>
+                          )}
+                        </td>
                         <td className="px-5 py-3 text-right text-blue-400 font-semibold">{g.volume.toLocaleString()}</td>
                         <td className="px-5 py-3 text-right">
                           {g.our_position !== null
@@ -710,7 +751,7 @@ export default function CompetitorsPage() {
               </button>
               <button
                 onClick={() => {
-                  if (confirm("Forcer un nouveau scan IA va consommer du quota AI (Perplexity/Anthropic). Continuer ?")) {
+                  if (confirm("Forcer un nouveau scan IA live peut consommer du quota Gemini/Perplexity. Continuer ?")) {
                     void runResearch(true);
                   }
                 }}
@@ -719,12 +760,12 @@ export default function CompetitorsPage() {
                 title="Force un nouvel appel AI live — ignore le cache (consomme du quota)"
               >
                 <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-                Rescan IA (frais)
+                Rescan IA live
               </button>
             </div>
             <p className="text-xs text-gray-400">
               <strong>Voir l&apos;analyse (cache)</strong> = lit les données stockées (rapide, gratuit).
-              <strong className="ml-2">Rescan IA (frais)</strong> = nouvel appel AI live (Perplexity/Anthropic, consomme du quota).
+              <strong className="ml-2">Rescan IA live</strong> = nouvel appel IA via Gemini/Perplexity. Anthropic/OpenAI ne sont pas utilises par le routeur principal.
               Le cache expire automatiquement après 60 jours.
             </p>
           </div>
@@ -783,9 +824,9 @@ export default function CompetitorsPage() {
                       onClick={() => void runLlmScan(true)}
                       disabled={llmScanRunning}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-600/20 border border-orange-600/40 text-orange-300 hover:bg-orange-600/40 disabled:opacity-40 transition"
-                      title="Force un nouveau scan (ignore cache 7j)"
+                      title="Force un nouveau scan live (ignore cache 7j)"
                     >
-                      <RefreshCw className="w-3 h-3" /> Rescan frais
+                      <RefreshCw className="w-3 h-3" /> Rescan live
                     </button>
                   )}
                   {activeCompetitorFilter && (
@@ -1014,7 +1055,12 @@ export default function CompetitorsPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-xs text-gray-400 border-b border-gray-800 bg-gray-800/40">
-                      <th className="px-5 py-3 text-left">Mot-clé</th>
+                      <th className="px-5 py-3 text-left">
+                        <span className="inline-flex items-center gap-2">
+                          Mot-clé
+                          <CopyKeywordsButton keywords={filteredGaps.map((g) => g.keyword)} />
+                        </span>
+                      </th>
                       {hasVolumes && <th className="px-5 py-3 text-right">Volume/mois</th>}
                       <th className="px-5 py-3 text-left">Concurrent</th>
                       <th className="px-5 py-3 text-right">Pos. concurrent</th>
@@ -1026,6 +1072,7 @@ export default function CompetitorsPage() {
                   <tbody>
                     {filteredGaps.map((g, i) => {
                       const domain = g.competitor_domain || g.competitor || "—";
+                      const inferredIntent = inferIntent(g.keyword, g.intent);
                       return (
                         <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                           <td className="px-5 py-3 font-medium text-white">{g.keyword}</td>
@@ -1059,8 +1106,8 @@ export default function CompetitorsPage() {
                             </span>
                           </td>
                           <td className="px-5 py-3 text-center">
-                            <span className={`text-xs px-2 py-0.5 rounded ${INTENT_COLOR[g.intent] ?? "text-gray-400 bg-gray-800"}`}>
-                              {g.intent || "—"}
+                            <span className={`text-xs px-2 py-0.5 rounded ${INTENT_COLOR[inferredIntent] ?? "text-gray-400 bg-gray-800"}`}>
+                              {g.intent || inferredIntent}
                             </span>
                           </td>
                           <td className="px-5 py-3 text-center">
@@ -1296,7 +1343,12 @@ function ExpandedCompetitorPanel({
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-xs text-gray-400 border-b border-gray-800">
-                      <th className="px-3 py-2 text-left">Mot-clé</th>
+                      <th className="px-3 py-2 text-left">
+                        <span className="inline-flex items-center gap-2">
+                          Mot-clé
+                          <CopyKeywordsButton keywords={tabStats.top.map((k) => k.keyword)} className="h-6 w-6" />
+                        </span>
+                      </th>
                       <th className="px-3 py-2 text-right">Volume</th>
                       <th className="px-3 py-2 text-right">Pos.</th>
                       <th className="px-3 py-2 text-center">Intent</th>

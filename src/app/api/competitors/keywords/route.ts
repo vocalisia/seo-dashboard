@@ -5,8 +5,10 @@ import { getSQL } from "@/lib/db";
 import { logError } from "@/lib/logger";
 
 const QUESTION_WORDS = [
-  "comment", "pourquoi", "quand", "quel", "quelle", "quels", "quelles", "qu'est",
-  "how", "what", "why", "when", "which", "where", "who",
+  "comment", "pourquoi", "combien", "quand", "quel", "quelle", "quels", "quelles", "qu'est", "qu est",
+  "est-ce", "où", "ou", "qui", "que", "quoi",
+  "how", "what", "why", "when", "which", "where", "who", "is", "are", "does", "do", "can", "should",
+  "best", "top", "meilleur", "meilleure", "comparatif",
 ];
 
 interface KeywordRow {
@@ -25,6 +27,7 @@ interface CategoryStats {
 
 function isQuestion(kw: string): boolean {
   const lower = kw.toLowerCase().trim();
+  if (lower.includes("?")) return true;
   return QUESTION_WORDS.some((w) => lower.startsWith(w + " ") || lower.startsWith(w + "'"));
 }
 

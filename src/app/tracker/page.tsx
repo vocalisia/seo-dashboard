@@ -24,11 +24,41 @@ interface TrackerData {
   keywords: KwHistory[];
 }
 
+type FreshnessLevel = "fresh" | "partial" | "late" | "empty";
+
+interface TrackerStatus {
+  success: boolean;
+  engine: string;
+  cycle_days: number;
+  limit_per_site: number;
+  summary: {
+    total_sites: number;
+    total_keywords: number;
+    checked_in_cycle: number;
+    coverage_pct: number;
+    latest_checked_at: string | null;
+    age_hours: number | null;
+    level: FreshnessLevel;
+  };
+  sites: Array<{
+    site_id: number;
+    site_name: string;
+    total_keywords: number;
+    checked_in_cycle: number;
+    coverage_pct: number;
+    latest_checked_at: string | null;
+    age_hours: number | null;
+    level: FreshnessLevel;
+  }>;
+}
+
 export default function TrackerPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [data, setData] = useState<TrackerData | null>(null);
+  const [status, setStatus] = useState<TrackerStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(false);
 
   const fetchSites = async () => {
     try {
@@ -40,7 +70,10 @@ export default function TrackerPage() {
   };
 
   const fetchData = async () => {
-    if (!selectedSite || selectedSite === "all") return;
+    if (!selectedSite || selectedSite === "all") {
+      setData(null);
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch(`/api/position-history?site_id=${selectedSite}&days=90`);
@@ -62,10 +95,75 @@ export default function TrackerPage() {
     }
   };
 
+  const fetchStatus = async () => {
+    if (!selectedSite) return;
+    setStatusLoading(true);
+    try {
+      const siteParam = selectedSite === "all" ? "all" : String(selectedSite);
+      const res = await fetch(`/api/rank-tracker/status?site_id=${siteParam}&cycle_days=4&engine=brave`);
+      const d = await res.json() as TrackerStatus;
+      setStatus(d?.success ? d : null);
+    } catch {
+      setStatus(null);
+    } finally {
+      setStatusLoading(false);
+    }
+  };
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchSites(); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selectedSite) void fetchData(); }, [selectedSite]);
+  useEffect(() => {
+    if (selectedSite) {
+      void fetchStatus();
+      void fetchData();
+    }
+  }, [selectedSite]);
+
+  const FRESHNESS_COPY: Record<FreshnessLevel, { label: string; hint: string; dot: string; ping: string; border: string }> = {
+    fresh: {
+      label: "Tracker a jour",
+      hint: "Cycle 4 jours couvert.",
+      dot: "bg-emerald-400",
+      ping: "bg-emerald-400",
+      border: "border-emerald-800/50",
+    },
+    partial: {
+      label: "Cycle en cours",
+      hint: "Couverture partielle, donnees exploitables.",
+      dot: "bg-yellow-400",
+      ping: "bg-yellow-400",
+      border: "border-yellow-800/50",
+    },
+    late: {
+      label: "Tracker en retard",
+      hint: "Une partie des mots-cles depasse le cycle.",
+      dot: "bg-orange-400",
+      ping: "bg-orange-400",
+      border: "border-orange-800/50",
+    },
+    empty: {
+      label: "Aucun check recent",
+      hint: "Aucune donnee rank tracker sur ce cycle.",
+      dot: "bg-gray-500",
+      ping: "bg-gray-600",
+      border: "border-gray-800",
+    },
+  };
+
+  function formatLastChecked(value: string | null): string {
+    if (!value) return "Jamais";
+    return new Date(value).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+  }
+
+  function currentStatus() {
+    if (!status) return null;
+    if (selectedSite !== "all") {
+      const siteStatus = status.sites.find((s) => s.site_id === selectedSite);
+      if (siteStatus) return siteStatus;
+    }
+    return status.summary;
+  }
 
   // Mini sparkline chart (pure CSS). Static class names so Tailwind doesn't purge them.
   function Sparkline({ values, color = "emerald", inverted = false }: { values: number[]; color?: "emerald" | "red"; inverted?: boolean }) {
@@ -145,9 +243,58 @@ export default function TrackerPage() {
             ))}
           </select>
           {selectedSite === "all" && (
-            <span className="text-xs text-gray-500">Sélectionner un site pour voir le tracker</span>
+            <span className="text-xs text-gray-500">Vue globale du statut VPS. Selectionner un site pour voir les courbes.</span>
           )}
         </div>
+
+        {statusLoading && !status ? (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center gap-3 text-sm text-gray-400">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Statut tracker...
+          </div>
+        ) : status && currentStatus() ? (
+          (() => {
+            const s = currentStatus();
+            if (!s) return null;
+            const copy = FRESHNESS_COPY[s.level];
+            return (
+              <section className={`bg-gray-900 border ${copy.border} rounded-xl p-4 flex flex-col md:flex-row md:items-center gap-4`}>
+                <div className="flex items-center gap-3">
+                  <span className="relative flex h-3 w-3">
+                    <span className={`absolute inline-flex h-full w-full rounded-full opacity-60 animate-ping ${copy.ping}`} />
+                    <span className={`relative inline-flex h-3 w-3 rounded-full ${copy.dot}`} />
+                  </span>
+                  <div>
+                    <div className="text-sm font-medium text-gray-100">{copy.label}</div>
+                    <div className="text-xs text-gray-500">
+                      {copy.hint} Moteur {status.engine}, top {status.limit_per_site} mots-cles/site.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="md:ml-auto grid grid-cols-3 gap-4 text-xs">
+                  <div>
+                    <div className="text-gray-500">Couverture</div>
+                    <div className="text-gray-100 font-semibold">{s.coverage_pct}%</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500">Cycle</div>
+                    <div className="text-gray-100 font-semibold">{status.cycle_days} jours</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500">Dernier check</div>
+                    <div className="text-gray-100 font-semibold">{formatLastChecked(s.latest_checked_at)}</div>
+                  </div>
+                </div>
+              </section>
+            );
+          })()
+        ) : (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-sm">
+            <div className="text-gray-300 font-medium">Statut indisponible</div>
+            <div className="text-xs text-gray-500 mt-1">Impossible de lire la fraicheur du rank tracker pour le moment.</div>
+          </div>
+        )}
 
         {loading && (
           <div className="flex items-center justify-center py-12">

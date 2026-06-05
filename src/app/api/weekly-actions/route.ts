@@ -13,7 +13,7 @@ interface KwOpportunity {
   position: number;
   impressions: number;
   clicks: number;
-  monthly_volume: number;
+  monthly_impressions: number;
   potential_clicks: number;
   action_type: "push" | "optimize" | "maintain" | "create";
 }
@@ -31,30 +31,29 @@ function ctrAtPosition(pos: number): number {
   return 0.001;
 }
 
-function shareAtPosition(pos: number): number {
-  if (pos <= 1) return 0.90;
-  if (pos <= 2) return 0.78;
-  if (pos <= 3) return 0.65;
-  if (pos <= 5) return 0.48;
-  if (pos <= 7) return 0.35;
-  if (pos <= 10) return 0.25;
-  if (pos <= 15) return 0.14;
-  if (pos <= 20) return 0.08;
-  if (pos <= 30) return 0.04;
-  if (pos <= 50) return 0.02;
-  return 0.01;
-}
-
-function classifyAction(pos: number, monthlyVol: number): KwOpportunity["action_type"] {
+function classifyAction(pos: number, monthlyImpressions: number): KwOpportunity["action_type"] {
   if (pos <= 3) return "maintain";
   if (pos <= 10) return "optimize";
-  if (pos <= 20 && monthlyVol >= 100) return "push";
-  if (pos <= 30 && monthlyVol >= 500) return "push";
-  if (monthlyVol >= 1000) return "create";
+  if (pos <= 20 && monthlyImpressions >= 100) return "push";
+  if (pos <= 30 && monthlyImpressions >= 500) return "push";
+  if (monthlyImpressions >= 1000) return "create";
   return "maintain";
 }
 
-export async function GET(_req: NextRequest) {
+function buildLocalSummary(opportunities: KwOpportunity[]): string {
+  if (opportunities.length === 0) return "";
+  return [
+    "Plan d'action hebdo:",
+    ...opportunities.slice(0, 3).map((o, i) =>
+      `${i + 1}. ${o.site_name}: travailler "${o.query}" (pos ${o.position.toFixed(1)}, potentiel +${o.potential_clicks} clics/mois sur impressions GSC).`
+    ),
+    `Gain total estime: +${opportunities.reduce((sum, o) => sum + o.potential_clicks, 0).toLocaleString()} clics/mois si les quick wins passent top 3.`,
+    "Risque: verifier que la page cible correspond bien a l'intention avant de modifier title/contenu.",
+  ].join("\n");
+}
+
+export async function GET(req: NextRequest) {
+  const startedAt = Date.now();
   const auth = await requireApiSession();
   if (auth.unauthorized) return auth.unauthorized;
 
@@ -62,17 +61,20 @@ export async function GET(_req: NextRequest) {
     return NextResponse.json({ success: false, error: "DB not configured", actions: [] }, { status: 503 });
   }
 
+  const headers = () => ({
+    "X-Response-Time": `${Date.now() - startedAt}ms`,
+    "Server-Timing": `app;dur=${Date.now() - startedAt}`,
+  });
+
   try {
     const sql = getSQL();
-
-    // Top opportunités: dernier 7j, position 4-30, volume estimé > 50/mois
     const rows = await sql`
       SELECT
         s.id AS site_id,
         s.name AS site_name,
         s.url AS site_url,
         gsc.query,
-        ROUND(AVG(gsc.position)::numeric, 1) AS position,
+        ROUND((SUM(gsc.position * gsc.impressions)::numeric / NULLIF(SUM(gsc.impressions), 0)), 1) AS position,
         SUM(gsc.impressions) AS impressions,
         SUM(gsc.clicks) AS clicks
       FROM search_console_data gsc
@@ -87,78 +89,58 @@ export async function GET(_req: NextRequest) {
     `;
 
     const opportunities: KwOpportunity[] = (rows as Array<Record<string, unknown>>)
-      .map((r) => {
-        const position = Number(r.position) || 0;
-        const impressions = Number(r.impressions) || 0;
-        const clicks = Number(r.clicks) || 0;
-        // Weekly impressions → ~monthly
-        const monthlyImpr = impressions * (30 / 7);
-        const share = shareAtPosition(position);
-        const monthlyVolume = share > 0 ? Math.round(monthlyImpr / share) : 0;
-        // Potential gain if reaching top 3
-        const potentialClicks = Math.max(0, Math.round(monthlyVolume * (ctrAtPosition(3) - ctrAtPosition(position))));
+      .map((row) => {
+        const position = Number(row.position) || 0;
+        const impressions = Number(row.impressions) || 0;
+        const clicks = Number(row.clicks) || 0;
+        const monthlyImpressions = impressions * (30 / 7);
+        const potentialClicks = Math.max(0, Math.round(monthlyImpressions * (ctrAtPosition(3) - ctrAtPosition(position))));
         return {
-          site_id: Number(r.site_id),
-          site_name: String(r.site_name),
-          site_url: String(r.site_url),
-          query: String(r.query),
+          site_id: Number(row.site_id),
+          site_name: String(row.site_name),
+          site_url: String(row.site_url),
+          query: String(row.query),
           position,
           impressions,
           clicks,
-          monthly_volume: monthlyVolume,
+          monthly_impressions: Math.round(monthlyImpressions),
           potential_clicks: potentialClicks,
-          action_type: classifyAction(position, monthlyVolume),
+          action_type: classifyAction(position, monthlyImpressions),
         };
       })
       .filter((o) => o.position >= 4 && o.position <= 30 && o.potential_clicks >= 20)
       .sort((a, b) => b.potential_clicks - a.potential_clicks)
       .slice(0, 10);
 
-    // AI executive summary
-    let aiSummary = "";
-    if (opportunities.length > 0) {
-      const summary = opportunities.slice(0, 5).map((o, i) =>
-        `${i + 1}. "${o.query}" sur ${o.site_name} (pos ${o.position.toFixed(1)}, vol ${o.monthly_volume}/mois → +${o.potential_clicks} clics si top 3)`
-      ).join("\n");
-
-      const prompt = `Voici les 5 mots-clés prioritaires de la semaine pour notre portefeuille SEO multi-sites :
-
-${summary}
-
-Génère un PLAN D'ACTION HEBDO ULTRA-CONCRET (max 200 mots, en français) :
-1. Top 3 actions à faire LUNDI matin (avec qui s'en occupe : SEO / rédacteur / dev)
-2. Estimation du gain en clics/mois si tout est exécuté
-3. 1 risque à surveiller cette semaine
-
-Style: bullet points, marqueurs ✅ 🚀 ⚠️, pas de blabla.`;
-
+    let aiSummary = buildLocalSummary(opportunities);
+    if (req.nextUrl.searchParams.get("ai") === "1" && opportunities.length > 0) {
       try {
+        const prompt = `Voici les mots-cles prioritaires:\n\n${opportunities.slice(0, 5).map((o, i) =>
+          `${i + 1}. "${o.query}" sur ${o.site_name} (pos ${o.position.toFixed(1)}, impressions mensuelles GSC ${o.monthly_impressions}, potentiel +${o.potential_clicks})`
+        ).join("\n")}\n\nGenere un plan d'action SEO hebdo concret en francais, max 200 mots.`;
         const today = new Date().toISOString().slice(0, 10);
-        const topKwSignature = opportunities.slice(0, 5).map((o) => `${o.site_id}:${o.query}`).join("|");
+        const signature = opportunities.slice(0, 5).map((o) => `${o.site_id}:${o.query}`).join("|");
         const { reply } = await askAICached({
-          cacheKey: `weekly-actions:${today}:${topKwSignature}`,
-          messages: [
-            { role: "system", content: "Tu es un Head of SEO d'une agence française. Tu pilotes 17 sites et tu donnes des consignes claires à ton équipe chaque lundi matin." },
-            { role: "user", content: prompt },
-          ],
+          cacheKey: `weekly-actions:${today}:${signature}`,
+          messages: [{ role: "user", content: prompt }],
           model: "smart",
           maxTokens: 800,
         });
         aiSummary = reply;
-      } catch (e) {
-        aiSummary = `Erreur IA : ${e instanceof Error ? e.message : "unknown"}`;
+      } catch {
+        // Keep local deterministic summary.
       }
     }
 
     return NextResponse.json({
       success: true,
       generated_at: new Date().toISOString(),
-      total_potential_clicks: opportunities.reduce((s, o) => s + o.potential_clicks, 0),
+      total_potential_clicks: opportunities.reduce((sum, o) => sum + o.potential_clicks, 0),
       actions: opportunities,
       ai_summary: aiSummary,
-    });
+    }, { headers: headers() });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json({ success: false, error: message, actions: [] }, { status: 500 });
   }
 }

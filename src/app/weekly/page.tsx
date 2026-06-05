@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Loader2, Target, TrendingUp, AlertTriangle, RefreshCw } from "lucide-react";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
+import { formatFixed, toFiniteNumber } from "@/lib/safe-number";
 
 interface Action {
   site_id: number;
@@ -11,7 +13,7 @@ interface Action {
   position: number;
   impressions: number;
   clicks: number;
-  monthly_volume: number;
+  monthly_impressions: number;
   potential_clicks: number;
   action_type: "push" | "optimize" | "maintain" | "create";
 }
@@ -107,7 +109,7 @@ export default function WeeklyActionsPage() {
                   <TrendingUp className="w-3 h-3" /> Potentiel total
                 </div>
                 <div className="text-3xl font-bold text-orange-400">+{data.total_potential_clicks?.toLocaleString()}</div>
-                <div className="text-xs text-gray-500 mt-1">clics/mois si top 3 atteint</div>
+                <div className="text-xs text-gray-500 mt-1">estimation sur impressions GSC réelles</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Mots-clés ciblés</div>
@@ -143,10 +145,15 @@ export default function WeeklyActionsPage() {
                 <thead className="bg-gray-800/50">
                   <tr className="text-gray-400 text-xs">
                     <th className="text-left py-2 px-4">#</th>
-                    <th className="text-left py-2 px-4">Mot-clé</th>
+                    <th className="text-left py-2 px-4">
+                      <span className="inline-flex items-center gap-2">
+                        Mot-clé
+                        <CopyKeywordsButton keywords={data.actions.map((a) => a.query)} />
+                      </span>
+                    </th>
                     <th className="text-left py-2 px-4">Site</th>
-                    <th className="text-right py-2 px-4">Position</th>
-                    <th className="text-right py-2 px-4">Volume / mois</th>
+                    <th className="text-right py-2 px-4">Position GSC</th>
+                    <th className="text-right py-2 px-4">Impr. GSC/mois</th>
                     <th className="text-right py-2 px-4">Potentiel</th>
                     <th className="text-left py-2 px-4">Action</th>
                   </tr>
@@ -164,11 +171,11 @@ export default function WeeklyActionsPage() {
                       </td>
                       <td className="text-right py-3 px-4">
                         <span className={`font-semibold ${a.position <= 10 ? "text-green-400" : a.position <= 20 ? "text-yellow-400" : "text-gray-300"}`}>
-                          {a.position.toFixed(1)}
+                          {formatFixed(a.position)}
                         </span>
                       </td>
-                      <td className="text-right py-3 px-4 text-gray-300">{a.monthly_volume.toLocaleString()}</td>
-                      <td className="text-right py-3 px-4 text-orange-400 font-bold">+{a.potential_clicks.toLocaleString()}</td>
+                      <td className="text-right py-3 px-4 text-gray-300">{toFiniteNumber(a.monthly_impressions).toLocaleString()}</td>
+                      <td className="text-right py-3 px-4 text-orange-400 font-bold">+{toFiniteNumber(a.potential_clicks).toLocaleString()}</td>
                       <td className="py-3 px-4">
                         <span className={`text-xs px-2 py-0.5 rounded border ${TYPE_COLOR[a.action_type]}`}>
                           {TYPE_LABEL[a.action_type]}

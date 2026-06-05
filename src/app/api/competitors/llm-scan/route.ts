@@ -4,7 +4,7 @@ export const maxDuration = 60;
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL, ensureSchema } from "@/lib/db";
 import { logError, logger } from "@/lib/logger";
-import { scanCompetitors, type LLMScanFindings } from "@/lib/llm-scan";
+import { scanCompetitors, scoreReadiness, type LLMScanFindings } from "@/lib/llm-scan";
 import { requireCronOrUser } from "@/lib/cron-auth";
 
 const CACHE_DAYS = 7;
@@ -54,15 +54,29 @@ function findingsToPayload(
 
 function cacheRowToPayload(row: CachedScanRow): ScanResultPayload {
   const raw = row.raw_findings ?? null;
+  const aiBotsAllowed = Array.isArray(row.ai_bots_allowed) ? row.ai_bots_allowed : [];
+  const aiBotsExplicit = Array.isArray(raw?.ai_bots_allowed_explicitly)
+    ? raw.ai_bots_allowed_explicitly
+    : [];
+  const aiBotsPassive = aiBotsAllowed.filter((bot) => !aiBotsExplicit.includes(bot));
+  const schemasDetected = Array.isArray(row.schemas_detected) ? row.schemas_detected : [];
+  const recalculated = scoreReadiness(
+    raw?.llms_txt_valid ?? !!row.llms_txt_present,
+    aiBotsExplicit,
+    aiBotsPassive,
+    schemasDetected,
+    raw?.has_open_graph ?? false,
+  );
+
   return {
     competitor_domain: row.competitor_domain,
-    llm_readiness_score: Number(row.llm_readiness_score) || 0,
+    llm_readiness_score: recalculated.score,
     llms_txt_present: !!row.llms_txt_present,
     llms_txt_content: row.llms_txt_content,
-    ai_bots_allowed: Array.isArray(row.ai_bots_allowed) ? row.ai_bots_allowed : [],
+    ai_bots_allowed: aiBotsAllowed,
     ai_bots_disallowed: raw?.ai_bots_disallowed ?? [],
-    schemas_detected: Array.isArray(row.schemas_detected) ? row.schemas_detected : [],
-    recommendations: raw?.recommendations ?? [],
+    schemas_detected: schemasDetected,
+    recommendations: recalculated.recommendations,
     has_open_graph: raw?.has_open_graph ?? false,
     scanned_at: row.scanned_at,
   };

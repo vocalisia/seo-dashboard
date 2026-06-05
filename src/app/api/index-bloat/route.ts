@@ -3,6 +3,9 @@ import { requireApiSession } from "@/lib/api-auth";
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
 interface BloatRow {
   url: string;
   reason: string;
@@ -31,7 +34,7 @@ const THIN_PATTERNS: { reason: string; re: RegExp; rec: BloatRow["recommendation
 
 const ORPHAN_IMPRESSION_THRESHOLD = 2;
 
-async function fetchSitemapUrls(siteUrl: string): Promise<string[]> {
+async function fetchSitemapUrls(siteUrl: string, limit = 2000): Promise<string[]> {
   const base = siteUrl.replace(/\/$/, "");
   try {
     const res = await fetch(base + "/sitemap.xml", {
@@ -43,6 +46,7 @@ async function fetchSitemapUrls(siteUrl: string): Promise<string[]> {
     const urls: string[] = [];
     for (const m of text.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)) {
       urls.push(m[1].trim());
+      if (urls.length >= limit) break;
     }
     return urls;
   } catch {
@@ -63,6 +67,7 @@ export async function POST(request: NextRequest) {
 
   let siteId: number;
   let siteUrl: string;
+  const startedAt = Date.now();
 
   try {
     const body = await request.json() as { site_id?: unknown; site_url?: unknown };
@@ -187,9 +192,12 @@ export async function POST(request: NextRequest) {
   }
 
   return NextResponse.json({
+    success: true,
     total: sitemapUrls.length,
     bloat_count: bloatRows.length,
     rows: bloatRows.slice(0, 500),
+    partial: sitemapUrls.length >= 2000 || bloatRows.length > 500,
+    duration_ms: Date.now() - startedAt,
     summary: {
       sitemap_pages: sitemapUrls.length,
       low_impression_pages: lowImpPages.size,

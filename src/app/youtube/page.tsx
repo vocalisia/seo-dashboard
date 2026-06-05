@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   PlaySquare, Search, Loader2, TrendingUp, Users, Eye,
-  BarChart3, DollarSign, ArrowLeft, ChevronDown, ChevronUp,
+  BarChart3, ArrowLeft, ChevronDown, ChevronUp,
   ExternalLink
 } from "lucide-react";
 import { NicheScanResult } from "@/lib/youtube";
@@ -49,8 +49,16 @@ function OpportunityBadge({ score }: { score: number }) {
   );
 }
 
+function monetizationSignal(min: number, max: number): { label: string; color: string } {
+  const avg = (min + max) / 2;
+  if (avg >= 18) return { label: "Fort", color: "text-emerald-400" };
+  if (avg >= 11) return { label: "Moyen", color: "text-yellow-400" };
+  return { label: "Bas", color: "text-gray-400" };
+}
+
 function NicheCard({ result }: { result: NicheScanResult }) {
   const [expanded, setExpanded] = useState(false);
+  const monetization = monetizationSignal(result.estimatedCPM.min, result.estimatedCPM.max);
 
   if (result.error) {
     return (
@@ -101,11 +109,9 @@ function NicheCard({ result }: { result: NicheScanResult }) {
         <div>
           <div className="flex justify-between text-sm mb-1">
             <span className="text-gray-400 flex items-center gap-1">
-              <DollarSign className="w-3 h-3" /> CPM estimé
+              <BarChart3 className="w-3 h-3" /> Monétisation
             </span>
-            <span className="font-semibold text-green-400">
-              ${result.estimatedCPM.min}–${result.estimatedCPM.max}
-            </span>
+            <span className={`font-semibold ${monetization.color}`}>{monetization.label}</span>
           </div>
           <div className="flex gap-2 text-xs text-gray-500 mt-2">
             <span>{result.channelCount} chaînes trouvées</span>
@@ -229,8 +235,7 @@ export default function YouTubeScannerPage() {
         setError(data.error);
       } else {
         setResults(data.results ?? []);
-        // Each keyword uses ~202 quota units (2x search.list = 200 + stats = 2)
-        setQuotaUsed(prev => prev + kwList.length * 202);
+        setQuotaUsed(prev => prev + (Number(data.quota_units_estimated) || 0));
       }
     } catch {
       setError("Erreur de connexion au serveur");
@@ -249,7 +254,7 @@ export default function YouTubeScannerPage() {
             <PlaySquare className="w-8 h-8 text-red-500" />
             <div>
               <h1 className="text-xl font-bold">YouTube Niche Scanner</h1>
-              <p className="text-xs text-gray-400">Analyse la demande, la concurrence et le CPM de chaque niche</p>
+              <p className="text-xs text-gray-400">Analyse la demande, la concurrence et le potentiel de chaque niche</p>
             </div>
           </div>
           <div className="flex items-center gap-3">

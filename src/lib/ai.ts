@@ -1,35 +1,33 @@
 import { logError } from "./logger";
+import { google } from "googleapis";
 
-// Unified AI client — Perplexity-first (web-grounded) → Anthropic → graceful fail.
-// Mammouth removed 2026-05-26 (budget OUT since 2026-05-22).
+// Unified AI client: Gemini/Vertex first for normal work, Perplexity first for
+// web-grounded search, then graceful cache/local fallbacks.
+// Mammouth removed 2026-05-26.
 //
 // Provider priority:
-// 1. Perplexity Sonar (web search built-in, cheap for SEO competitor research)
-//    Set PERPLEXITY_API_KEY in Vercel env. Get key: https://www.perplexity.ai/settings/api
-//    Pro subscription = $5/mo credit (~5000 sonar queries).
-// 2. Anthropic Claude (high quality, no web search)
-//    Set ANTHROPIC_API_KEY in Vercel env.
-// 3. Local Claude Code OAuth (dev only).
+// 1. Gemini via GEMINI_API_KEY/GOOGLE_API_KEY or Google service account + Vertex.
+// 2. Perplexity Sonar for live SERP/search tasks when PERPLEXITY_API_KEY exists.
+// 3. Cache/local fallbacks handled by callers when both providers are unavailable.
 //
 // When NO provider available → throws AIProviderError(no_key) so caller can
 // fall back to cache or stub data (no "Crédit épuisé" raw error to users).
 
 const PERPLEXITY_BASE = "https://api.perplexity.ai";
-const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
-const ANTHROPIC_VERSION = "2023-06-01";
+const GEMINI_DEVELOPER_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const VERTEX_BASE = "https://aiplatform.googleapis.com/v1";
 
-// Anthropic-native model IDs (used when ANTHROPIC_API_KEY is set)
 export const MODELS = {
   // SEO task assignments
-  fast:        "claude-haiku-4-5",     // briefs rapides
-  smart:       "claude-sonnet-4-6",    // rapports hebdo
-  cluster:     "claude-haiku-4-5",     // clustering mots-clés
-  search:      "claude-sonnet-4-6",    // web grounding
-  creative:    "claude-sonnet-4-6",    // rédaction créative
+  fast:        "fast",
+  smart:       "smart",
+  cluster:     "cluster",
+  search:      "search",
+  creative:    "creative",
   // Direct aliases
-  haiku:       "claude-haiku-4-5",
-  sonnet:      "claude-sonnet-4-6",
-  opus:        "claude-opus-4-7",
+  haiku:       "fast",
+  sonnet:      "smart",
+  opus:        "creative",
 };
 
 // Perplexity Sonar models map (OpenAI-compatible)
@@ -44,14 +42,25 @@ const PERPLEXITY_MODELS: Record<string, string> = {
   opus: "sonar-reasoning",
 };
 
+const GEMINI_MODELS: Record<keyof typeof MODELS, string> = {
+  fast: "gemini-3.1-flash-lite-preview",
+  smart: "gemini-3-flash-preview",
+  cluster: "gemini-3.1-flash-lite-preview",
+  search: "gemini-3-flash-preview",
+  creative: "gemini-3-flash-preview",
+  haiku: "gemini-3.1-flash-lite-preview",
+  sonnet: "gemini-3-flash-preview",
+  opus: "gemini-3.1-pro-preview",
+};
+
 export class AIProviderError extends Error {
-  public readonly provider: "perplexity" | "anthropic" | "none";
+  public readonly provider: "gemini" | "perplexity" | "anthropic" | "none";
   public readonly code: "no_key" | "credit_low" | "rate_limit" | "auth" | "model" | "network" | "unknown";
   public readonly status?: number;
 
   constructor(
     message: string,
-    opts: { provider: "perplexity" | "anthropic" | "none"; code: AIProviderError["code"]; status?: number }
+    opts: { provider: "gemini" | "perplexity" | "anthropic" | "none"; code: AIProviderError["code"]; status?: number }
   ) {
     super(message);
     this.name = "AIProviderError";
@@ -63,44 +72,206 @@ export class AIProviderError extends Error {
 
 interface Message { role: "user" | "assistant" | "system"; content: string; }
 
+function cleanEnvValue(value: string | undefined): string | undefined {
+  const cleaned = value?.trim().replace(/\\r|\\n/g, "").trim();
+  return cleaned || undefined;
+}
+
+function parseGoogleCredentials(): { project_id?: string; client_email?: string; private_key?: string } | null {
+  const raw = process.env.GOOGLE_CREDENTIALS || process.env.GSC_SERVICE_ACCOUNT_JSON;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw.replace(/\n/g, "\\n").replace(/\\\\n/g, "\\n"));
+  } catch {
+    try {
+      return JSON.parse(raw.replace(/[\x00-\x1F\x7F]/g, (c) => (c === "\n" || c === "\r" || c === "\t" ? c : "")));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function getGeminiApiKey(): string | undefined {
+  return cleanEnvValue(process.env.GEMINI_API_KEY) || cleanEnvValue(process.env.GOOGLE_API_KEY);
+}
+
+function getVertexProjectId(): string | undefined {
+  return cleanEnvValue(process.env.GOOGLE_CLOUD_PROJECT) || parseGoogleCredentials()?.project_id;
+}
+
+function hasGeminiConfig(): boolean {
+  return Boolean(getGeminiApiKey() || getVertexProjectId());
+}
+
+function shouldTryPerplexityFirst(model: keyof typeof MODELS): boolean {
+  return model === "search";
+}
+
+function canTryNextProvider(err: AIProviderError): boolean {
+  return ["credit_low", "auth", "no_key", "model", "network", "rate_limit"].includes(err.code);
+}
+
 export async function askAI(
   messages: Message[],
   model: keyof typeof MODELS = "fast",
   maxTokens = 1500
 ): Promise<string> {
-  const modelId = MODELS[model];
-  const pplxKey = process.env.PERPLEXITY_API_KEY;
-  const anthKey = process.env.ANTHROPIC_API_KEY;
+  const geminiModel = GEMINI_MODELS[model] ?? GEMINI_MODELS.fast;
+  const pplxKey = cleanEnvValue(process.env.PERPLEXITY_API_KEY);
+  const tryPerplexityFirst = shouldTryPerplexityFirst(model);
 
-  // Primary path: Perplexity Sonar (web-grounded, cheaper for SEO research)
-  if (pplxKey) {
+  if (tryPerplexityFirst && pplxKey) {
     try {
       const pplxModel = PERPLEXITY_MODELS[model] ?? "sonar";
       return await callPerplexity(pplxKey, pplxModel, messages, maxTokens);
     } catch (err) {
-      // Fall through on credit/auth issues; surface other errors
-      if (!(err instanceof AIProviderError) || (err.code !== "credit_low" && err.code !== "auth" && err.code !== "no_key")) {
+      if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
         throw err;
       }
-      // Continue to next provider
     }
   }
 
-  // Fallback 1: Anthropic native
-  if (anthKey) {
-    return callAnthropicNative(anthKey, modelId, messages, maxTokens);
+  if (hasGeminiConfig()) {
+    try {
+      return await callGemini(geminiModel, messages, maxTokens);
+    } catch (err) {
+      if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
+        throw err;
+      }
+    }
   }
 
-  // Fallback 2: local Claude Code OAuth token (dev only)
-  const localToken = await getLocalOAuthToken();
-  if (localToken) {
-    return callAnthropicNative(localToken, modelId, messages, maxTokens, true);
+  if (!tryPerplexityFirst && pplxKey) {
+    try {
+      const pplxModel = PERPLEXITY_MODELS[model] ?? "sonar";
+      return await callPerplexity(pplxKey, pplxModel, messages, maxTokens);
+    } catch (err) {
+      if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
+        throw err;
+      }
+    }
   }
 
   throw new AIProviderError(
-    "No AI API key configured. Set PERPLEXITY_API_KEY (preferred) or ANTHROPIC_API_KEY in Vercel env.",
+    "No Gemini/Perplexity provider configured. Set GEMINI_API_KEY/GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT with service account credentials, or PERPLEXITY_API_KEY.",
     { provider: "none", code: "no_key" }
   );
+}
+
+function toGeminiContents(messages: Message[]): {
+  systemInstruction?: { parts: { text: string }[] };
+  contents: { role: "user" | "model"; parts: { text: string }[] }[];
+} {
+  const systemText = messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n")
+    .trim();
+
+  const contents = messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role === "assistant" ? "model" as const : "user" as const,
+      parts: [{ text: message.content }],
+    }));
+
+  return {
+    systemInstruction: systemText ? { parts: [{ text: systemText }] } : undefined,
+    contents: contents.length > 0 ? contents : [{ role: "user", parts: [{ text: "" }] }],
+  };
+}
+
+function readGeminiText(data: unknown): string {
+  const response = data as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  return response.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text ?? "")
+    .join("")
+    .trim() ?? "";
+}
+
+async function getVertexAccessToken(): Promise<string> {
+  const creds = parseGoogleCredentials();
+  const auth = new google.auth.GoogleAuth({
+    credentials: creds
+      ? {
+          client_email: creds.client_email,
+          private_key: creds.private_key,
+        }
+      : undefined,
+    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+  });
+  const token = await auth.getAccessToken();
+  if (!token) {
+    throw new AIProviderError("Gemini Vertex auth failed: no access token", { provider: "gemini", code: "auth" });
+  }
+  return token;
+}
+
+async function callGemini(model: string, messages: Message[], maxTokens: number): Promise<string> {
+  const payload = {
+    ...toGeminiContents(messages),
+    generationConfig: {
+      maxOutputTokens: maxTokens,
+      temperature: 0.2,
+    },
+  };
+
+  const apiKey = getGeminiApiKey();
+  const projectId = getVertexProjectId();
+  const location = cleanEnvValue(process.env.GOOGLE_CLOUD_LOCATION) || "global";
+  const endpoint = apiKey
+    ? `${GEMINI_DEVELOPER_BASE}/models/${model}:generateContent`
+    : `${VERTEX_BASE}/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+
+  if (!apiKey && !projectId) {
+    throw new AIProviderError("Gemini is not configured", { provider: "gemini", code: "no_key" });
+  }
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) {
+    headers["x-goog-api-key"] = apiKey;
+  } else {
+    headers.Authorization = `Bearer ${await getVertexAccessToken()}`;
+  }
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    let code: AIProviderError["code"] = "unknown";
+    let userMsg = `Gemini API error ${res.status}`;
+
+    if (res.status === 401 || res.status === 403) {
+      code = "auth";
+      userMsg = "Gemini auth failed. Check Gemini API key or Google service account permissions.";
+    } else if (res.status === 429) {
+      code = "rate_limit";
+      userMsg = "Gemini rate limit. Try again later or use cached data.";
+    } else if (res.status === 400 && /quota|budget|billing|insufficient/i.test(err)) {
+      code = "credit_low";
+      userMsg = "Gemini quota unavailable. The dashboard will use cache or local fallbacks.";
+    } else if (res.status === 404 && /model/i.test(err)) {
+      code = "model";
+      userMsg = `Gemini model unavailable: ${model}`;
+    } else if (res.status >= 500) {
+      code = "network";
+      userMsg = `Gemini unavailable (${res.status}). Try again later.`;
+    }
+
+    throw new AIProviderError(userMsg, { provider: "gemini", code, status: res.status });
+  }
+
+  const text = readGeminiText(await res.json());
+  if (!text) {
+    throw new AIProviderError("Gemini returned an empty response", { provider: "gemini", code: "unknown" });
+  }
+  return text;
 }
 
 // Perplexity Sonar API (OpenAI-compatible chat completions endpoint, web-grounded)
@@ -151,25 +322,15 @@ async function callPerplexity(
   return data.choices?.[0]?.message?.content ?? "";
 }
 
-// Generate image — DALL-E 3 then Pollinations Flux fallback (free, no key)
+// Generate image: Gemini first, then free Pollinations. No OpenAI fallback.
 export async function generateImage(prompt: string): Promise<string | null> {
   let tempUrl: string | null = null;
 
-  // Primary: OpenAI DALL-E 3
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (openaiKey) {
+  if (hasGeminiConfig()) {
     try {
-      const res = await fetch("https://api.openai.com/v1/images/generations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${openaiKey}` },
-        body: JSON.stringify({ model: "dall-e-3", prompt, n: 1, size: "1792x1024" }),
-      });
-      if (res.ok) {
-        const data = await res.json() as { data: { url: string }[] };
-        tempUrl = data.data?.[0]?.url ?? null;
-      }
-    } catch {
-      // fall through
+      tempUrl = await callGeminiImage(prompt);
+    } catch (err) {
+      logError("ai.generateImage.gemini", err);
     }
   }
 
@@ -209,84 +370,58 @@ export async function generateImage(prompt: string): Promise<string | null> {
   return tempUrl;
 }
 
-// Anthropic native API: /v1/messages with x-api-key header (or Bearer for OAuth)
-async function callAnthropicNative(
-  apiKey: string,
-  model: string,
-  messages: Message[],
-  maxTokens: number,
-  useBearer = false
-): Promise<string> {
-  const systemMsg = messages.find(m => m.role === "system")?.content ?? "";
-  const userMsgs = messages.filter(m => m.role !== "system").map(m => ({
-    role: m.role as "user" | "assistant",
-    content: m.content,
-  }));
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "anthropic-version": ANTHROPIC_VERSION,
+function readGeminiInlineImage(data: unknown): string | null {
+  const response = data as {
+    candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> } }>;
   };
-  if (useBearer) {
-    headers["Authorization"] = `Bearer ${apiKey}`;
+  for (const candidate of response.candidates ?? []) {
+    for (const part of candidate.content?.parts ?? []) {
+      if (part.inlineData?.data) {
+        const mimeType = part.inlineData.mimeType || "image/png";
+        return `data:${mimeType};base64,${part.inlineData.data}`;
+      }
+    }
+  }
+  return null;
+}
+
+async function callGeminiImage(prompt: string): Promise<string | null> {
+  const model = cleanEnvValue(process.env.GEMINI_IMAGE_MODEL) || "gemini-3.1-flash-image-preview";
+  const apiKey = getGeminiApiKey();
+  const projectId = getVertexProjectId();
+  const location = cleanEnvValue(process.env.GOOGLE_CLOUD_LOCATION) || "global";
+  const endpoint = apiKey
+    ? `${GEMINI_DEVELOPER_BASE}/models/${model}:generateContent`
+    : `${VERTEX_BASE}/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+
+  if (!apiKey && !projectId) return null;
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) {
+    headers["x-goog-api-key"] = apiKey;
   } else {
-    headers["x-api-key"] = apiKey;
+    headers.Authorization = `Bearer ${await getVertexAccessToken()}`;
   }
 
-  const body: Record<string, unknown> = {
-    model,
-    max_tokens: maxTokens,
-    messages: userMsgs,
-  };
-  if (systemMsg) body.system = systemMsg;
-
-  const res = await fetch(`${ANTHROPIC_BASE}/messages`, {
+  const res = await fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.4,
+        responseModalities: ["IMAGE"],
+      },
+    }),
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    let code: AIProviderError["code"] = "unknown";
-    let userMsg = `Anthropic API error ${res.status}`;
-
-    if (res.status === 401 || res.status === 403) {
-      code = "auth";
-      userMsg = "Anthropic auth failed — vérifie la clé ANTHROPIC_API_KEY";
-    } else if (res.status === 429) {
-      code = "rate_limit";
-      userMsg = "Anthropic rate limit — réessaie dans quelques secondes";
-    } else if (res.status === 400 && /credit balance is too low/i.test(err)) {
-      code = "credit_low";
-      userMsg = "Crédit Anthropic épuisé — recharge sur console.anthropic.com/billing";
-    } else if (res.status === 404 && /model/i.test(err)) {
-      code = "model";
-      userMsg = `Modèle Anthropic inconnu: ${model}`;
-    } else if (res.status >= 500) {
-      code = "network";
-      userMsg = `Anthropic indisponible (${res.status}) — réessaie`;
-    }
-
-    throw new AIProviderError(userMsg, { provider: "anthropic", code, status: res.status });
+    throw new AIProviderError(`Gemini image API error ${res.status}`, {
+      provider: "gemini",
+      code: res.status === 401 || res.status === 403 ? "auth" : res.status === 429 ? "rate_limit" : "unknown",
+      status: res.status,
+    });
   }
 
-  const data = await res.json() as { content: { type: string; text: string }[] };
-  return data.content?.find(c => c.type === "text")?.text ?? "";
-}
-
-// Local Claude Code OAuth token (dev fallback)
-async function getLocalOAuthToken(): Promise<string | null> {
-  if (process.env.NODE_ENV === "production") return null;
-  try {
-    const fs = await import("fs/promises");
-    const path = await import("path");
-    const os = await import("os");
-    const credPath = path.join(os.homedir(), ".claude", "credentials.json");
-    const raw = await fs.readFile(credPath, "utf8");
-    const data = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string } };
-    return data.claudeAiOauth?.accessToken ?? null;
-  } catch {
-    return null;
-  }
+  return readGeminiInlineImage(await res.json());
 }

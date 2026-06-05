@@ -24,6 +24,9 @@ interface PRResponse {
   orphans: string[];
   suggestions: string[];
   total: number;
+  partial?: boolean;
+  duration_ms?: number;
+  error?: string;
 }
 
 export default function PageRankPage() {
@@ -32,6 +35,7 @@ export default function PageRankPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<PRResponse | null>(null);
   const [tab, setTab] = useState<"top" | "orphans" | "suggestions">("top");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/sites")
@@ -48,16 +52,23 @@ export default function PageRankPage() {
     if (!site) return;
     setLoading(true);
     setResult(null);
+    setError(null);
     try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 65000);
       const res = await fetch("/api/pagerank", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ site_id: selectedSite, site_url: site.url }),
+        body: JSON.stringify({ site_id: selectedSite, site_url: site.url, max_pages: 80 }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timeout);
       const d = await res.json() as PRResponse;
+      if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
       setResult(d);
-    } catch {
+    } catch (e) {
       setResult(null);
+      setError(e instanceof Error && e.name === "AbortError" ? "Calcul trop long: limite 65s atteinte" : e instanceof Error ? e.message : "Erreur inconnue");
     }
     setLoading(false);
   }
@@ -93,7 +104,7 @@ export default function PageRankPage() {
             {loading ? "Calcul PageRank..." : "Calculer PageRank"}
           </button>
           {loading && (
-            <span className="text-xs text-gray-400">Crawl jusqu'à 100 pages — peut prendre 30-60s</span>
+            <span className="text-xs text-gray-400">Crawl jusqu'à 80 pages, avec timeout de sécurité</span>
           )}
         </div>
 
@@ -114,6 +125,11 @@ export default function PageRankPage() {
                 <div className="text-xs text-gray-400 mt-1">Suggestions maillage</div>
               </div>
             </div>
+            {result.partial && (
+              <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
+                Calcul partiel: le crawl a été borné pour garder l'outil réactif.
+              </div>
+            )}
 
             {/* Tabs */}
             <div className="flex gap-2 border-b border-gray-800 pb-0">
@@ -208,6 +224,11 @@ export default function PageRankPage() {
               </div>
             )}
           </>
+        )}
+        {error && (
+          <div className="bg-red-900/30 border border-red-800 rounded-xl px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
         )}
       </div>
     </div>

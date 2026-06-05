@@ -243,6 +243,87 @@ function looksLikeRedditFragment(text: string): boolean {
   return false;
 }
 
+const GENERIC_NICHE_PATTERNS = [
+  /\b(home workouts?|fitness|weight loss|meal prep|travel tips|productivity|side hustle|make money|beauty tips)\b/i,
+  /\b(busy professionals|beginners|students|parents|entrepreneurs|small business owners)\b/i,
+  /\b(gadgets?|tools?|guide|tips|ideas|resources|solutions)\b/i,
+];
+
+const SPECIFICITY_MARKERS = [
+  /\b(ai|automation|agent|api|compliance|invoice|debt|tesla|ev|cbd|switzerland|suisse|lead gen|voice|whatsapp|ga4|gsc|schema|llm)\b/i,
+  /\b(b2b|pme|smb|saas|crm|erp|fintech|healthtech|legaltech|martech|sales ops|support)\b/i,
+  /\b(france|suisse|swiss|canada|quebec|uk|deutschland|italia|latam|belgique)\b/i,
+];
+
+const NEWS_OR_CURIOSITY_PATTERNS = [
+  /\b(dies at|dead at|obituary|author of|unearths|dig of the century|largest .* to date)\b/i,
+  /\b(soar with|grades|class|university|berkeley|notre dame|sagrada|lego|persepolis)\b/i,
+  /\b(3d-printed book|raised lettering|homepage construction kit|small footprint)\b/i,
+  /\b(kvarn|vllm|kv-cache|huawei|native backend|quantization)\b/i,
+  /['"“”]/,
+  /\b(breaking|wins|loses|charged|arrested|election|earthquake|storm|war|movie|series|episode)\b/i,
+];
+
+function looksLikeNewsOrCuriosity(opp: StoredOpportunity): boolean {
+  const text = [
+    opp.niche,
+    ...(opp.core_keywords ?? []),
+    ...(opp.sample_queries ?? []),
+    opp.reason,
+  ].join(" ");
+  if (NEWS_OR_CURIOSITY_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  if (opp.site_type === "magazine" && opp.monetization === "ads" && (opp.core_keywords ?? []).some((keyword) => keyword.includes(":"))) {
+    return true;
+  }
+
+  const hasBusinessMarker = SPECIFICITY_MARKERS.some((pattern) => pattern.test(text)) ||
+    /\b(saas|tool|software|affiliate|lead|marketplace|e-commerce|subscription|automation|business|b2b)\b/i.test(text);
+  const words = opp.niche.trim().split(/\s+/);
+  const titleCaseWords = words.filter((word) => /^[A-Z][a-z]+/.test(word)).length;
+  return !hasBusinessMarker && opp.site_type === "magazine" && opp.monetization === "ads" && titleCaseWords >= 2;
+}
+
+function opportunityQualityScore(opp: StoredOpportunity): number {
+  const text = [
+    opp.niche,
+    opp.reason,
+    ...(opp.core_keywords ?? []),
+    ...(opp.sample_queries ?? []),
+    ...(opp.why_now ?? []).map((signal) => `${signal.source} ${signal.signal}`),
+  ].join(" ").toLowerCase();
+
+  let score = 0;
+  score += Math.min(30, Math.max(0, Number(opp.confidence_score || 0) * 0.25));
+  score += Math.min(18, Math.log10(Math.max(10, Number(opp.monthly_volume || 0))) * 4);
+  score += Math.min(16, Math.max(0, Number(opp.momentum_pct || 0)) / 4);
+  score += (opp.why_now?.length ?? 0) >= 2 ? 14 : (opp.why_now?.length ?? 0) * 6;
+  score += (opp.serp_evidence?.relatedQuestions?.length ?? 0) >= 3 ? 8 : 0;
+  score += SPECIFICITY_MARKERS.some((pattern) => pattern.test(text)) ? 16 : 0;
+  score += /lead-gen|subscription|saas|affiliate|e-commerce/i.test(opp.monetization) ? 8 : 0;
+
+  const nicheWordCount = opp.niche.trim().split(/\s+/).length;
+  if (nicheWordCount <= 2) score -= 16;
+  if (GENERIC_NICHE_PATTERNS.some((pattern) => pattern.test(opp.niche)) && !SPECIFICITY_MARKERS.some((pattern) => pattern.test(text))) {
+    score -= 28;
+  }
+  if ((opp.core_keywords ?? []).some((keyword) => GENERIC_NICHE_PATTERNS.some((pattern) => pattern.test(keyword))) && !SPECIFICITY_MARKERS.some((pattern) => pattern.test(text))) {
+    score -= 12;
+  }
+  if (!opp.reason || opp.reason.length < 90) score -= 8;
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function isHighQualityOpportunity(opp: StoredOpportunity): boolean {
+  if (looksLikeRedditFragment(opp.niche)) return false;
+  if (looksLikeNewsOrCuriosity(opp)) return false;
+  const quality = opportunityQualityScore(opp);
+  if (quality < 58) return false;
+  const text = `${opp.niche} ${(opp.core_keywords ?? []).join(" ")} ${(opp.sample_queries ?? []).join(" ")}`;
+  if (GENERIC_NICHE_PATTERNS.some((pattern) => pattern.test(text)) && quality < 74) return false;
+  return true;
+}
+
 async function enrichCandidatesWithAI(
   candidates: OpportunityCandidate[],
   preferredCategories: string[] = []
@@ -273,7 +354,7 @@ ${preferredCategories.includes("course") ? "Pour course : pense formations en li
 ${preferredCategories.includes("marketplace") ? "Pour marketplace : pense plateformes 2-sided (offre/demande), aggregateurs, places de marché de niche." : ""}`
     : "";
 
-  const prompt = `Tu es analyste SEO + business senior. À partir de signaux multi-sources (Amazon Best Sellers Rising, Indie Hackers revenus vérifiés, AppSumo nouveautés, Kickstarter trending, Reddit, HN, Product Hunt, Google Trends), tu dois SYNTHÉTISER des **niches business réelles à fort potentiel commercial**, pas répéter les titres bruts.
+  const prompt = `Tu es analyste SEO + business senior connecté au web via Perplexity/Sonar quand disponible. À partir de signaux multi-sources (Amazon Best Sellers Rising, Indie Hackers revenus vérifiés, AppSumo nouveautés, Kickstarter trending, Reddit, HN, Product Hunt, Google Trends), tu dois SYNTHÉTISER des **niches business réelles à fort potentiel commercial**, pas répéter les titres bruts.
 
 🎯 PRIORITÉ AUX SIGNAUX COMMERCIAUX :
 - Amazon Best Sellers = vraie demande consommateurs (e-commerce / produit physique)
@@ -285,6 +366,9 @@ ${preferredCategories.includes("marketplace") ? "Pour marketplace : pense platef
 ⚠️ RÈGLE CAPITALE :
 - Une niche n'est JAMAIS une question. JAMAIS un titre Reddit. JAMAIS une phrase.
 - Une niche = un MARCHÉ ou un SECTEUR (2-5 mots, type "Outils SaaS pour freelances", "Gadgets cuisine zéro déchet", "Formation IA pour PME").
+- Les volumes et positions ne sont PAS une vérité Google. Tu ne dois PAS inventer un "volume/mois".
+- Le champ monthly_volume doit reprendre/agréger prudemment les signaux numériques fournis dans INPUT; si le signal est faible ou incertain, baisse confidence_score au lieu de gonfler le volume.
+- Si tu utilises du contexte web Perplexity, il sert à valider: concurrents, angles, problèmes clients, tendance, maturité marché. Il ne remplace pas GSC/Keyword Planner/VPS tracker.
 - Si le signal brut est "Quels sont vos tips de vie adulte que personne ne t'apprend ?" → la niche réelle est "Conseils pratiques jeunes adultes" ou "Education financière 18-25 ans".
 - Si le signal brut est "Drop your SaaS and I'll tell you how to get 100 users" → la niche réelle est "Acquisition utilisateurs early-stage SaaS".
 
@@ -302,7 +386,7 @@ FORMAT JSON STRICT, 5 à 8 niches max :
   "opportunities": [
     {
       "niche": "Nom court 2-5 mots (ex: 'Outils acquisition early SaaS')",
-      "reason": "Pourquoi cette niche, basée sur 2-3 signaux concrets que tu cites",
+      "reason": "Pourquoi cette niche, basée sur 2-3 signaux concrets que tu cites + validation web si disponible",
       "site_type": "blog | magazine | e-commerce | saas | directory",
       "core_keywords": ["mot-cle commercial 1", "mot-cle commercial 2", "..."],
       "monthly_volume": 12000,
@@ -757,6 +841,40 @@ export async function POST(request: NextRequest) {
       };
     });
 
+    opportunities = opportunities
+      .map((opp) => {
+        const quality = opportunityQualityScore(opp);
+        return {
+          ...opp,
+          confidence_score: Math.round((Number(opp.confidence_score || 0) * 0.65) + (quality * 0.35)),
+          score_breakdown: {
+            ...(opp.score_breakdown ?? {
+              growth: 0,
+              volume: 0,
+              weakness: 0,
+              specificity: 0,
+              business: 0,
+              portfolioDistance: 0,
+            }),
+            specificity: Math.max(opp.score_breakdown?.specificity ?? 0, quality),
+          },
+        };
+      })
+      .filter(isHighQualityOpportunity)
+      .sort((a, b) => (b.confidence_score ?? 0) - (a.confidence_score ?? 0))
+      .slice(0, 8);
+
+    if (opportunities.length === 0) {
+      return NextResponse.json({
+        success: true,
+        opportunities: [],
+        keywords_analyzed: mergedRows.length,
+        sites_analyzed: sites.length,
+        discovery_mode: requestedMode,
+        message: "Scanner strict: aucune opportunite assez specifique. Relance avec une autre categorie ou un autre marche.",
+      });
+    }
+
     try {
       await sql.transaction(
         [
@@ -827,7 +945,17 @@ export async function GET() {
       ORDER BY confidence_score DESC, created_at DESC
       LIMIT 100
     `;
-    return NextResponse.json({ success: true, opportunities: rows });
+    const strictRows = (rows as StoredOpportunity[])
+      .filter(isHighQualityOpportunity)
+      .sort((a, b) => (Number(b.confidence_score || 0) - Number(a.confidence_score || 0)))
+      .slice(0, 30);
+    return NextResponse.json({
+      success: true,
+      opportunities: strictRows,
+      message: strictRows.length < rows.length
+        ? `${rows.length - strictRows.length} opportunites faibles masquees par le filtre qualite.`
+        : undefined,
+    });
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : "Failed to load opportunities", opportunities: [] },

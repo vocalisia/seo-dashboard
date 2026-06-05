@@ -26,12 +26,16 @@ interface SchemaResult {
 }
 
 interface AuditResponse {
+  success?: boolean;
   results: SchemaResult[];
   score: number;
   total: number;
   withSchema: number;
   googleVerifiedCount?: number;
   verifiedWithGoogle?: boolean;
+  partial?: boolean;
+  duration_ms?: number;
+  error?: string;
 }
 
 const STATUS_ICON: Record<SchemaResult["status"], string> = {
@@ -55,6 +59,7 @@ export default function SchemaPage() {
   const [audit, setAudit] = useState<AuditResponse | null>(null);
   const [modal, setModal] = useState<SchemaResult | null>(null);
   const [verifyWithGoogle, setVerifyWithGoogle] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/sites")
@@ -71,18 +76,34 @@ export default function SchemaPage() {
     if (!site) return;
     setLoading(true);
     setAudit(null);
+    setError(null);
     try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), verifyWithGoogle ? 70000 : 45000);
       const res = await fetch("/api/schema-audit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ siteUrl: site.url, verifyWithGoogle, maxVerify: 10 }),
+        body: JSON.stringify({ siteUrl: site.url, verifyWithGoogle, maxVerify: 6, maxUrls: 30 }),
+        signal: controller.signal,
       });
+      window.clearTimeout(timeout);
       const d = await res.json() as AuditResponse;
+      if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
       setAudit(d);
-    } catch {
+    } catch (e) {
       setAudit(null);
+      setError(e instanceof Error && e.name === "AbortError" ? "Audit trop long: limite atteinte" : e instanceof Error ? e.message : "Erreur inconnue");
     }
     setLoading(false);
+  }
+
+  function formatRawJson(raw: string | null): string {
+    if (!raw) return "—";
+    try {
+      return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+      return raw;
+    }
   }
 
   const scoreColor =
@@ -156,6 +177,11 @@ export default function SchemaPage() {
                 </div>
               )}
             </div>
+            {audit.partial && (
+              <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
+                Audit partiel: seules les premiÃ¨res URLs du sitemap ont Ã©tÃ© scannÃ©es pour garder la page rapide.
+              </div>
+            )}
 
             {/* Table */}
             <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
@@ -223,6 +249,11 @@ export default function SchemaPage() {
             </div>
           </>
         )}
+        {error && (
+          <div className="bg-red-900/30 border border-red-800 rounded-xl px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
+        )}
       </div>
 
       {/* Modal */}
@@ -236,7 +267,7 @@ export default function SchemaPage() {
               </button>
             </div>
             <pre className="p-5 overflow-auto text-xs text-green-300 font-mono flex-1">
-              {modal.rawJson ? JSON.stringify(JSON.parse(modal.rawJson), null, 2) : "—"}
+              {formatRawJson(modal.rawJson)}
             </pre>
           </div>
         </div>
