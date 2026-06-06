@@ -6,12 +6,73 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
+    const startedAt = Date.now();
+    const timingHeaders = () => ({
+      "X-Response-Time": `${Date.now() - startedAt}ms`,
+      "Server-Timing": `app;dur=${Date.now() - startedAt}`,
+    });
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get("site_id");
 
     if (!siteId) return NextResponse.json({ error: "site_id required" }, { status: 400 });
 
     const sql = getSQL();
+    if (siteId === "all") {
+      let rows = await sql`
+        SELECT
+          s.name AS site_name,
+          gl.linking_domain,
+          gl.target_page,
+          SUM(gl.link_count) AS link_count
+        FROM gsc_links gl
+        JOIN sites s ON s.id = gl.site_id
+        WHERE s.is_active = true
+        GROUP BY s.name, gl.linking_domain, gl.target_page
+        ORDER BY SUM(gl.link_count) DESC
+        LIMIT 100
+      `;
+
+      if ((rows as unknown[]).length === 0) {
+        rows = await sql`
+          SELECT
+            s.name AS site_name,
+            'DonnÃ©es GSC (impressions)' AS linking_domain,
+            scd.page AS target_page,
+            SUM(scd.impressions) AS link_count
+          FROM search_console_data scd
+          JOIN sites s ON s.id = scd.site_id
+          WHERE s.is_active = true
+            AND scd.date >= CURRENT_DATE - 7
+            AND scd.page IS NOT NULL
+            AND scd.page != ''
+          GROUP BY s.name, scd.page
+          ORDER BY SUM(scd.impressions) DESC
+          LIMIT 100
+        `;
+      }
+
+      const links = (rows as Record<string, unknown>[]).map((row) => ({
+        site_name: String(row.site_name ?? ""),
+        linking_domain: String(row.linking_domain ?? ""),
+        target_page: String(row.target_page ?? ""),
+        link_count: Number(row.link_count ?? 0),
+      }));
+
+      const totalDomains = new Set(links.map((l) => l.linking_domain)).size;
+      const totalLinks = links.reduce((s, l) => s + l.link_count, 0);
+      const authorityScore = Math.min(100, Math.round(Math.log1p(totalLinks) * 10 + totalDomains * 2));
+
+      return NextResponse.json({
+        links: links.slice(0, 100),
+        totalDomains,
+        totalLinks,
+        authorityScore,
+        source: "portfolio_cache",
+        sourceLabel: "Portefeuille cache + GSC local",
+        scoreLabel: "Score visibilitÃ© portefeuille",
+      }, { headers: timingHeaders() });
+    }
+
     const sites = await sql`SELECT * FROM sites WHERE id = ${parseInt(siteId, 10)} LIMIT 1`;
 
     if (!sites.length) return NextResponse.json({ error: "Site not found" }, { status: 404 });
@@ -112,7 +173,7 @@ export async function GET(req: NextRequest) {
         source === "gsc_impressions_fallback"
           ? "Score visibilité (estimé)"
           : "Score autorité",
-    });
+    }, { headers: timingHeaders() });
   } catch (err) {
     console.error(err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

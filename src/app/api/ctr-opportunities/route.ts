@@ -15,6 +15,7 @@ function getExpectedCtr(position: number): number {
 
 export async function GET(req: NextRequest) {
   try {
+    const startedAt = Date.now();
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get("site_id");
     const days = parseInt(searchParams.get("days") ?? "30", 10);
@@ -22,21 +23,31 @@ export async function GET(req: NextRequest) {
     if (!siteId) return NextResponse.json({ error: "site_id required" }, { status: 400 });
 
     const sql = getSQL();
+    const isAll = siteId === "all";
+    const parsedSiteId = Number.parseInt(siteId, 10);
+    if (!isAll && (!Number.isFinite(parsedSiteId) || parsedSiteId <= 0)) {
+      return NextResponse.json({ error: "Invalid site_id" }, { status: 400 });
+    }
+
     const rows = await sql`
       SELECT
-        query,
-        SUM(position * impressions)::float / NULLIF(SUM(impressions), 0) as position,
-        SUM(clicks) as clicks,
-        SUM(impressions) as impressions,
-        CAST(SUM(clicks) AS FLOAT) / NULLIF(SUM(impressions), 0) as ctr
-      FROM search_console_data
-      WHERE site_id = ${parseInt(siteId, 10)}
-        AND date >= NOW() - INTERVAL '1 day' * ${days}
-      GROUP BY query
+        d.query,
+        d.site_id,
+        s.name AS site_name,
+        SUM(d.position * d.impressions)::float / NULLIF(SUM(d.impressions), 0) as position,
+        SUM(d.clicks) as clicks,
+        SUM(d.impressions) as impressions,
+        CAST(SUM(d.clicks) AS FLOAT) / NULLIF(SUM(d.impressions), 0) as ctr
+      FROM search_console_data d
+      LEFT JOIN sites s ON s.id = d.site_id
+      WHERE (${isAll} OR d.site_id = ${parsedSiteId})
+        AND d.date >= NOW() - INTERVAL '1 day' * ${days}
+        AND d.query IS NOT NULL
+      GROUP BY d.query, d.site_id, s.name
       HAVING SUM(impressions) >= 50
-        AND (SUM(position * impressions)::float / NULLIF(SUM(impressions), 0)) <= 10
-      ORDER BY SUM(impressions) DESC
-      LIMIT 50
+        AND (SUM(d.position * d.impressions)::float / NULLIF(SUM(d.impressions), 0)) <= 10
+      ORDER BY SUM(d.impressions) DESC
+      LIMIT ${isAll ? 300 : 50}
     `;
 
     const results = rows
@@ -51,6 +62,8 @@ export async function GET(req: NextRequest) {
 
         return {
           query: row.query as string,
+          site_id: Number(row.site_id),
+          site_name: row.site_name ? String(row.site_name) : null,
           position: Math.round(position * 10) / 10,
           clicks,
           impressions,
@@ -63,7 +76,12 @@ export async function GET(req: NextRequest) {
       .filter((r) => r.ctrGap > 0)
       .sort((a, b) => b.potentialClicks - a.potentialClicks);
 
-    return NextResponse.json(results);
+    return NextResponse.json(results, {
+      headers: {
+        "X-Response-Time": `${Date.now() - startedAt}ms`,
+        "Server-Timing": `app;dur=${Date.now() - startedAt}`,
+      },
+    });
   } catch (err) {
     console.error(err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

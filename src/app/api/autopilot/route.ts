@@ -565,12 +565,12 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     const descMatch = articleContent.match(/^description:\s*["']?(.+?)["']?\s*$/m);
     const articleDescription = descMatch ? descMatch[1] : "";
 
-    // 6. Generate image via DALL-E 3 — context-aware prompt
+    // 6. Generate image via Gemini/Pollinations — context-aware prompt
     // Use article TITLE + DESCRIPTION as context so image matches the actual content,
     // not just the raw keyword. Detect business/industry from description for better visuals.
     let imageUrl: string | null = null;
     try {
-      // Build a rich, context-aware prompt in English (DALL-E understands English best)
+      // Build a rich, context-aware prompt in English for image generation.
       const imagePrompt = [
         `Professional editorial photograph illustrating an article titled "${articleTitle}".`,
         articleDescription ? `Article context: ${articleDescription}` : "",

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, TrendingUp, AlertTriangle, FileText, X } from "lucide-react";
+import { ArrowLeft, Loader2, TrendingUp, AlertTriangle, FileText, X, Activity } from "lucide-react";
 import Link from "next/link";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface Site {
   id: number;
@@ -12,6 +13,8 @@ interface Site {
 
 interface CtrRow {
   query: string;
+  site_id?: number;
+  site_name?: string | null;
   position: number;
   clicks: number;
   impressions: number;
@@ -23,6 +26,8 @@ interface CtrRow {
 
 interface CannibRow {
   query: string;
+  site_id?: number;
+  site_name?: string | null;
   pageCount: number;
   pages: string[];
   avgPosition: number;
@@ -39,6 +44,11 @@ function ctrGapColor(gap: number): string {
 
 function pct(v: number) {
   return (v * 100).toFixed(1) + "%";
+}
+
+function formatMs(ms: number | null) {
+  if (!ms || !Number.isFinite(ms)) return "-";
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 }
 
 function BriefModal({ query, position, impressions, siteUrl, onClose }: {
@@ -173,7 +183,19 @@ export default function OpportunitiesPage() {
   const [cannibRows, setCannibRows] = useState<CannibRow[]>([]);
   const [loadingCtr, setLoadingCtr] = useState(false);
   const [loadingCannib, setLoadingCannib] = useState(false);
+  const [lastTiming, setLastTiming] = useState<{ label: string; ms: number; server?: string | null } | null>(null);
   const [modal, setModal] = useState<CtrRow | null>(null);
+
+  async function timedFetch(label: string, url: string, init?: RequestInit) {
+    const started = performance.now();
+    const res = await fetch(url, init);
+    setLastTiming({
+      label,
+      ms: performance.now() - started,
+      server: res.headers.get("X-Response-Time"),
+    });
+    return res;
+  }
 
   useEffect(() => {
     fetch("/api/sites")
@@ -188,26 +210,27 @@ export default function OpportunitiesPage() {
   }, []);
 
   useEffect(() => {
-    if (!selectedSite || selectedSite === "all") return;
-    if (tab === "ctr") loadCtr(selectedSite.id);
-    if (tab === "cannib") loadCannib(selectedSite.id);
+    if (!selectedSite) return;
+    const id = selectedSite === "all" ? "all" : selectedSite.id;
+    if (tab === "ctr") loadCtr(id);
+    if (tab === "cannib") loadCannib(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSite, tab]);
 
-  async function loadCtr(siteId: number) {
+  async function loadCtr(siteId: number | "all") {
     setLoadingCtr(true);
     try {
-      const res = await fetch(`/api/ctr-opportunities?site_id=${siteId}&days=30`);
+      const res = await timedFetch("CTR opportunities", `/api/ctr-opportunities?site_id=${siteId}&days=30`);
       const data = await res.json() as CtrRow[];
       if (Array.isArray(data)) setCtrRows(data);
     } catch { /* ignore */ }
     setLoadingCtr(false);
   }
 
-  async function loadCannib(siteId: number) {
+  async function loadCannib(siteId: number | "all") {
     setLoadingCannib(true);
     try {
-      const res = await fetch(`/api/cannibalization?site_id=${siteId}`);
+      const res = await timedFetch("Cannibalisation", `/api/cannibalization?site_id=${siteId}`);
       const data = await res.json() as CannibRow[];
       if (Array.isArray(data)) setCannibRows(data);
     } catch { /* ignore */ }
@@ -235,6 +258,10 @@ export default function OpportunitiesPage() {
         </Link>
         <TrendingUp className="w-6 h-6 text-green-400" />
         <h1 className="text-xl font-bold">Opportunités SEO</h1>
+        <div className="ml-auto flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400">
+          <Activity className="w-3.5 h-3.5 text-cyan-400" />
+          {lastTiming ? `${lastTiming.label}: ${formatMs(lastTiming.ms)}${lastTiming.server ? ` serveur ${lastTiming.server}` : ""}` : "vitesse en attente"}
+        </div>
       </header>
 
       <div className="px-6 py-6 max-w-6xl mx-auto">
@@ -287,7 +314,13 @@ export default function OpportunitiesPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-gray-500 text-xs uppercase border-b border-gray-800">
-                        <th className="py-3 px-4 text-left">Mot clé</th>
+                        <th className="py-3 px-4 text-left">
+                          <span className="inline-flex items-center gap-2">
+                            Mot clé
+                            <CopyKeywordsButton keywords={ctrRows.map((row) => row.query)} />
+                          </span>
+                        </th>
+                        {selectedSite === "all" && <th className="py-3 px-4 text-left">Site</th>}
                         <th className="py-3 px-4 text-center">Position</th>
                         <th className="py-3 px-4 text-center">CTR actuel</th>
                         <th className="py-3 px-4 text-center">CTR attendu</th>
@@ -300,6 +333,7 @@ export default function OpportunitiesPage() {
                       {ctrRows.map((row, i) => (
                         <tr key={i} className="border-b border-gray-800/60 hover:bg-gray-800/30 transition">
                           <td className="py-3 px-4 text-gray-200 max-w-xs truncate font-medium">{row.query}</td>
+                          {selectedSite === "all" && <td className="py-3 px-4 text-xs text-blue-300">{row.site_name ?? "—"}</td>}
                           <td className="py-3 px-4 text-center text-gray-400">{row.position}</td>
                           <td className="py-3 px-4 text-center text-gray-400">{pct(row.actualCtr)}</td>
                           <td className="py-3 px-4 text-center text-gray-400">{pct(row.expectedCtr)}</td>
@@ -345,7 +379,13 @@ export default function OpportunitiesPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-gray-500 text-xs uppercase border-b border-gray-800">
-                        <th className="py-3 px-4 text-left">Mot clé</th>
+                        <th className="py-3 px-4 text-left">
+                          <span className="inline-flex items-center gap-2">
+                            Mot clé
+                            <CopyKeywordsButton keywords={cannibRows.map((row) => row.query)} />
+                          </span>
+                        </th>
+                        {selectedSite === "all" && <th className="py-3 px-4 text-left">Site</th>}
                         <th className="py-3 px-4 text-center">Nb pages</th>
                         <th className="py-3 px-4 text-left">URLs en compétition</th>
                         <th className="py-3 px-4 text-right">Clics</th>
@@ -356,6 +396,7 @@ export default function OpportunitiesPage() {
                       {cannibRows.map((row, i) => (
                         <tr key={i} className="border-b border-gray-800/60 hover:bg-gray-800/30 transition">
                           <td className="py-3 px-4 text-gray-200 font-medium max-w-xs truncate">{row.query}</td>
+                          {selectedSite === "all" && <td className="py-3 px-4 text-xs text-blue-300">{row.site_name ?? "—"}</td>}
                           <td className="py-3 px-4 text-center">
                             <span className="bg-orange-500/20 text-orange-400 px-2 py-1 rounded text-xs">
                               {row.pageCount}

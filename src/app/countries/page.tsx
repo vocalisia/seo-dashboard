@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, Globe, AlertTriangle, FileText, ExternalLink, CheckCircle, XCircle } from "lucide-react";
 import Link from "next/link";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
+import { formatFixed } from "@/lib/safe-number";
 
 interface Site {
   id: number;
@@ -94,7 +96,7 @@ export default function CountriesPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedSite && selectedSite !== "all") void fetchCountries();
+    if (selectedSite) void fetchCountries();
   }, [selectedSite, selectedCountry]);
 
   async function fetchSites() {
@@ -112,7 +114,7 @@ export default function CountriesPage() {
   }
 
   async function fetchCountries() {
-    if (!selectedSite || selectedSite === "all") return;
+    if (!selectedSite) return;
     setLoading(true);
     try {
       const url = selectedCountry
@@ -313,7 +315,7 @@ export default function CountriesPage() {
                             </a>
                             <div className="flex gap-3 flex-shrink-0">
                               <span>{p.clicks} clics</span>
-                              <span>pos. {p.position.toFixed(1)}</span>
+                              <span>pos. {formatFixed(p.position)}</span>
                               <span>{p.impressions} impr.</span>
                             </div>
                           </div>
@@ -348,7 +350,12 @@ export default function CountriesPage() {
                     <thead>
                       <tr className="text-xs text-gray-400 border-b border-gray-800">
                         <th className="px-5 py-3 text-left font-medium">Langue</th>
-                        <th className="px-5 py-3 text-left font-medium">Mot-clé</th>
+                        <th className="px-5 py-3 text-left font-medium">
+                          <span className="inline-flex items-center gap-2">
+                            Mot-clé
+                            <CopyKeywordsButton keywords={data.articles.map((a) => a.keyword)} />
+                          </span>
+                        </th>
                         <th className="px-5 py-3 text-left font-medium">Date</th>
                         <th className="px-5 py-3 text-left font-medium">Statut</th>
                         <th className="px-5 py-3 text-left font-medium">GitHub</th>

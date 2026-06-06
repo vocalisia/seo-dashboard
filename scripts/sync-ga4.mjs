@@ -6,23 +6,45 @@ import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Load env
-const envFile = readFileSync(join(__dirname, '../.env.local'), 'utf8');
-const env = {};
-for (const line of envFile.split('\n')) {
-  const m = line.match(/^([A-Z_]+)="?(.+?)"?\s*$/);
-  if (m) env[m[1]] = m[2].replace(/\\n/g, '\n');
+// Load env — try .env.production then .env.local (mirrors portfolio-audit pattern)
+function loadEnvFile(file) {
+  try {
+    const raw = readFileSync(join(__dirname, '..', file), 'utf8');
+    for (const line of raw.split('\n')) {
+      if (!line.trim() || line.startsWith('#')) continue;
+      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.+?)\s*$/);
+      if (!m) continue;
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      if (!process.env[m[1]]) process.env[m[1]] = v.replace(/\\n/g, '\n');
+    }
+  } catch (_e) { /* file may not exist */ }
 }
+loadEnvFile('.env.production');
+loadEnvFile('.env.local');
 
-const sql = neon(env.DATABASE_URL);
+const sql = neon(process.env.DATABASE_URL);
 
 // Service account
+import { existsSync } from 'fs';
 let credentials;
-try {
-  credentials = JSON.parse(env.GOOGLE_CREDENTIALS);
-} catch {
-  credentials = JSON.parse(readFileSync(join(__dirname, '../../seo-backtest/gsc-service-account.json'), 'utf8'));
+const saPaths = [
+  process.env.GOOGLE_APPLICATION_CREDENTIALS,
+  process.env.GOOGLE_CREDENTIALS ? null : undefined, // handled below
+  join(__dirname, '../../Downloads/gsc-service-account.json.json'),
+  join(__dirname, '../../Downloads/gsc-service-account.json'),
+  join(__dirname, '../../seo-backtest/gsc-service-account.json'),
+].filter(Boolean);
+
+if (process.env.GOOGLE_CREDENTIALS) {
+  try { credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS); } catch (_e) {}
 }
+if (!credentials) {
+  for (const p of saPaths) {
+    if (existsSync(p)) { credentials = JSON.parse(readFileSync(p, 'utf8')); console.log(`[auth] ${p}`); break; }
+  }
+}
+if (!credentials) { console.error('No GA4 service account found'); process.exit(1); }
 
 const auth = new google.auth.GoogleAuth({
   credentials,
@@ -35,10 +57,16 @@ const endDate = new Date().toISOString().split('T')[0];
 const startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
 async function syncSite(site) {
-  console.log(`\n→ ${site.name} (GA4: ${site.ga_property_id})`);
+  // Strip "properties/" prefix if already present to avoid "properties/properties/..." double-prefix
+  const propId = String(site.ga_property_id).replace(/^properties\//, '');
+  console.log(`\n→ ${site.name} (GA4: ${propId})`);
+  if (!propId || propId.startsWith('G-')) {
+    console.log(`  SKIP: ga_property_id is a Measurement ID, not a Property ID. Fix in DB.`);
+    return 0;
+  }
   try {
     const res = await analyticsData.properties.runReport({
-      property: `properties/${site.ga_property_id}`,
+      property: `properties/${propId}`,
       requestBody: {
         dateRanges: [{ startDate, endDate }],
         dimensions: [{ name: 'date' }, { name: 'sessionDefaultChannelGroup' }],

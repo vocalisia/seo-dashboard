@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Loader2, ChevronLeft, MousePointerClick } from "lucide-react";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface Site { id: number; name: string }
 interface Anomaly {
@@ -81,7 +82,12 @@ export default function CTRAnomalyPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-800/50 text-gray-400 text-xs">
                 <tr>
-                  <th className="text-left py-3 px-5">Mot clé</th>
+                  <th className="text-left py-3 px-5">
+                    <span className="inline-flex items-center gap-2">
+                      Mot clé
+                      <CopyKeywordsButton keywords={rows.map((r) => r.query)} />
+                    </span>
+                  </th>
                   <th className="text-right py-3 px-3">Position</th>
                   <th className="text-right py-3 px-3">CTR actuel</th>
                   <th className="text-right py-3 px-3">CTR attendu</th>

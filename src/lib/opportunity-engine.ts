@@ -186,37 +186,59 @@ const LABEL_STOPWORDS = new Set([
   "what", "why", "how", "who", "where", "when", "does", "did", "can", "should",
 ]);
 
+const CLUSTER_FILLER_WORDS = new Set([
+  "choisir", "choix", "guide", "avis", "meilleur", "meilleure", "comparatif",
+  "remboursement", "cher", "cheap", "review", "reviews", "pricing", "price",
+]);
+
 function topicalKeywords(text: string): string[] {
   return text
     .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
-    .filter((w) => w.length >= 4 && !LABEL_STOPWORDS.has(w) && !STOPWORDS.has(w))
+    .filter((w) => w.length >= 3 && !LABEL_STOPWORDS.has(w) && !STOPWORDS.has(w))
     .slice(0, 4);
 }
 
 function buildClusterLabel(queries: string[]): string {
   if (queries.length === 0) return "untitled niche";
 
-  const wordFreq = new Map<string, number>();
+  const wordFreq = new Map<string, { count: number; firstSeen: number }>();
+  let index = 0;
   for (const q of queries) {
     for (const w of topicalKeywords(q)) {
-      wordFreq.set(w, (wordFreq.get(w) ?? 0) + 1);
+      const current = wordFreq.get(w);
+      wordFreq.set(w, {
+        count: (current?.count ?? 0) + 1,
+        firstSeen: current?.firstSeen ?? index,
+      });
+      index += 1;
     }
   }
   const topWords = Array.from(wordFreq.entries())
-    .sort((a, b) => b[1] - a[1])
+    .sort((a, b) => b[1].count - a[1].count || a[1].firstSeen - b[1].firstSeen)
     .slice(0, 3)
     .map(([w]) => w);
 
   if (topWords.length >= 2) {
-    return topWords.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    return topWords.join(" ");
   }
 
   const best = [...queries].sort((a, b) => a.length - b.length)[0] ?? "";
   if (best.length <= 60 && !/[?!]/.test(best)) return best;
 
   return topWords[0] ?? "untitled niche";
+}
+
+function clusterTokens(query: string): string[] {
+  return topicalKeywords(query).filter((token) => !CLUSTER_FILLER_WORDS.has(token));
+}
+
+function overlapCount(a: string[], b: string[]): number {
+  const right = new Set(b);
+  return a.filter((token) => right.has(token)).length;
 }
 
 export function buildOpportunityCandidates(
@@ -229,12 +251,23 @@ export function buildOpportunityCandidates(
   const filtered = rows.filter((row) => normalize(row.query).length >= 8);
 
   const clusters = new Map<string, OpportunityKeywordRow[]>();
+  const clusterTokenIndex = new Map<string, string[]>();
   for (const row of filtered) {
-    const key = buildClusterKey(row.query);
+    const rowTokens = clusterTokens(row.query);
+    let key = "";
+    for (const [existingKey, existingTokens] of clusterTokenIndex.entries()) {
+      if (overlapCount(rowTokens, existingTokens) >= 2) {
+        key = existingKey;
+        break;
+      }
+    }
+    if (!key) key = rowTokens.slice(0, 3).join(" ") || buildClusterKey(row.query);
     if (!key) continue;
     const bucket = clusters.get(key) ?? [];
     bucket.push(row);
     clusters.set(key, bucket);
+    const merged = Array.from(new Set([...(clusterTokenIndex.get(key) ?? []), ...rowTokens]));
+    clusterTokenIndex.set(key, merged);
   }
 
   const candidates: OpportunityCandidate[] = [];

@@ -1,5 +1,5 @@
 // Cache-first wrapper around askAI() — avoids billing surprises by serving cached
-// responses when AI providers are exhausted (Mammouth removed, Anthropic/Perplexity
+// responses when AI providers are exhausted (Gemini/Perplexity
 // may be over budget on a given day).
 //
 // Usage:
@@ -114,7 +114,7 @@ export async function askAICached(opts: AskAICachedOpts): Promise<CachedResult> 
     } catch { /* ignore */ }
 
     // Final fallback: caller-provided stub or generic message
-    const fallback = opts.fallback ?? `**AI temporairement indisponible.**\n\nLes providers Perplexity / Anthropic ont atteint leur quota du jour. Cette analyse sera regénérée automatiquement quand le quota se reset (minuit Pacific).\n\nEn attendant, consulte le cache existant dans la table \`competitor_research\` ou regénère localement via Claude Code (\`node _kw-verify/refresh-cache.mjs\`).`;
+    const fallback = opts.fallback ?? `**IA indisponible pour cette analyse.**\n\nLe dashboard a essaye Gemini/Perplexity, puis utilise le cache, les donnees Search Console et les calculs locaux. Aucun appel Anthropic/OpenAI n'est lance par defaut.`;
     return { reply: fallback, cached: false, ai_unavailable: true, error_detail: detail };
   }
 }

@@ -287,6 +287,7 @@ function keywordConflictsArticleLanguage(raw: string, articleLang: string): bool
   if (q.length < 4) return false;
 
   for (const { lang, re } of LANG_STRONG_PATTERNS) {
+    if (lang === "en" && target !== "en") continue;
     if (lang !== target && re.test(q)) return true;
   }
 

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Layers, Zap, TrendingUp, ExternalLink } from "lucide-react";
+import { ArrowLeft, Loader2, Layers, Zap, TrendingUp, ExternalLink, Activity } from "lucide-react";
 import Link from "next/link";
+import { formatFixed, toFiniteNumber } from "@/lib/safe-number";
 
 interface Site { id: number; name: string; url: string; }
 
@@ -30,10 +31,18 @@ export default function ClustersPage() {
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastTiming, setLastTiming] = useState<{ label: string; ms: number } | null>(null);
+
+  async function timedFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const started = performance.now();
+    const res = await fetch(input, init);
+    setLastTiming({ label, ms: performance.now() - started });
+    return res;
+  }
 
   async function fetchSites() {
     try {
-      const res = await fetch("/api/sites");
+      const res = await timedFetch("Sites", "/api/sites");
       const d = await res.json() as Site[];
       const list = Array.isArray(d) ? d : [];
       if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
@@ -41,11 +50,11 @@ export default function ClustersPage() {
   }
 
   async function fetchCached() {
-    if (!selectedSite || selectedSite === "all") return;
+    if (!selectedSite) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/keyword-clusters?site_id=${selectedSite}&cached=true`);
+      const res = await timedFetch("Clusters cache", `/api/keyword-clusters?site_id=${selectedSite}&cached=true`);
       const d = await res.json() as { clusters?: Cluster[] };
       if (!res.ok) {
         const err = d as { error?: string };
@@ -63,11 +72,11 @@ export default function ClustersPage() {
   }
 
   async function generateClusters() {
-    if (!selectedSite || selectedSite === "all") return;
+    if (!selectedSite) return;
     setGenerating(true);
     setError(null);
     try {
-      const res = await fetch(`/api/keyword-clusters?site_id=${selectedSite}`);
+      const res = await timedFetch("Clusters generation", `/api/keyword-clusters?site_id=${selectedSite}`);
       const d = await res.json() as { clusters?: Cluster[]; error?: string };
       if (!res.ok) {
         setError(d.error ?? "La génération des clusters a échoué.");
@@ -83,10 +92,10 @@ export default function ClustersPage() {
   }
 
   useEffect(() => { void fetchSites(); }, []); // eslint-disable-line react-hooks/set-state-in-effect
-  useEffect(() => { if (selectedSite && selectedSite !== "all") void fetchCached(); }, [selectedSite]); // eslint-disable-line react-hooks/set-state-in-effect
+  useEffect(() => { if (selectedSite) void fetchCached(); }, [selectedSite]); // eslint-disable-line react-hooks/set-state-in-effect
 
   const totalKw = clusters.reduce((s, c) => s + (c.keywords?.length ?? 0), 0);
-  const totalImpr = clusters.reduce((s, c) => s + (c.total_impressions ?? 0), 0);
+  const totalImpr = clusters.reduce((s, c) => s + toFiniteNumber(c.total_impressions), 0);
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -96,6 +105,10 @@ export default function ClustersPage() {
         </Link>
         <Layers className="w-5 h-5 text-violet-400" />
         <h1 className="text-xl font-semibold">Keyword Clusters</h1>
+        <div className="ml-auto flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400">
+          <Activity className="w-3.5 h-3.5 text-cyan-400" />
+          {lastTiming ? `${lastTiming.label}: ${lastTiming.ms >= 1000 ? `${(lastTiming.ms / 1000).toFixed(1)}s` : `${Math.round(lastTiming.ms)}ms`}` : "vitesse en attente"}
+        </div>
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
@@ -123,7 +136,7 @@ export default function ClustersPage() {
             className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
-            {generating ? "Clustering IA..." : "Générer clusters"}
+            {generating ? "Clustering..." : selectedSite === "all" ? "Charger portfolio" : "Générer clusters"}
           </button>
         </div>
 
@@ -172,7 +185,7 @@ export default function ClustersPage() {
                   <div className="flex gap-4 text-xs text-gray-400">
                     <span>{c.keywords?.length ?? 0} mots-clés</span>
                     <span>{(c.total_impressions ?? 0).toLocaleString()} impr.</span>
-                    <span>pos. {(c.avg_position ?? 0).toFixed(1)}</span>
+                    <span>pos. {formatFixed(c.avg_position)}</span>
                   </div>
                 </div>
 

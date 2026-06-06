@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, RefreshCw, CheckCircle, Circle, Clock } from "lucide-react";
 import Link from "next/link";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface Site {
   id: number;
@@ -186,7 +187,12 @@ export default function ContentPlanPage() {
                     <th className="px-4 py-3 text-center">#</th>
                     <th className="px-4 py-3 text-left">Titre</th>
                     {selectedSite === "all" && <th className="px-4 py-3 text-left">Site</th>}
-                    <th className="px-4 py-3 text-left">Mot-clé cible</th>
+                    <th className="px-4 py-3 text-left">
+                      <span className="inline-flex items-center gap-2">
+                        Mot-clé cible
+                        <CopyKeywordsButton keywords={filtered.map((item) => item.target_keyword)} />
+                      </span>
+                    </th>
                     <th className="px-4 py-3 text-right">Vol.</th>
                     <th className="px-4 py-3 text-center">Difficulté</th>
                     <th className="px-4 py-3 text-right">Score</th>

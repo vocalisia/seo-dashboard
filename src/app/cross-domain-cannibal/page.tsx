@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Loader2, ChevronLeft, GitMerge, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { formatFixed, toFiniteNumber } from "@/lib/safe-number";
 
 interface SitePerf {
   site_id: number; site_name: string; page: string;
@@ -31,7 +32,7 @@ export default function CrossDomainCannibalPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const totalImp = rows.reduce((s, r) => s + r.total_impressions, 0);
+  const totalImp = rows.reduce((s, r) => s + toFiniteNumber(r.total_impressions), 0);
   const allSites = new Set<string>();
   rows.forEach(r => r.sites.forEach(s => allSites.add(s.site_name)));
 
@@ -121,11 +122,11 @@ export default function CrossDomainCannibalPage() {
                                 {s.page.replace(/^https?:\/\//, "").substring(0, 60)}
                               </a>
                             </td>
-                            <td className={`text-right py-1 ${s.position <= 10 ? "text-green-400" : "text-gray-300"}`}>
-                              {s.position.toFixed(1)}
+                            <td className={`text-right py-1 ${toFiniteNumber(s.position) <= 10 ? "text-green-400" : "text-gray-300"}`}>
+                              {formatFixed(s.position)}
                             </td>
-                            <td className="text-right py-1 text-purple-400">{s.impressions.toLocaleString()}</td>
-                            <td className="text-right py-1 text-blue-400">{s.clicks}</td>
+                            <td className="text-right py-1 text-purple-400">{toFiniteNumber(s.impressions).toLocaleString()}</td>
+                            <td className="text-right py-1 text-blue-400">{toFiniteNumber(s.clicks).toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>

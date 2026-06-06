@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAICached } from "@/lib/ai-cache";
 import { logError } from "@/lib/logger";
+import {
+  buildFallbackClusters,
+  normalizeClusters,
+  normalizePriority,
+  parseAIClusters,
+  type KeywordStats,
+} from "./utils";
 
 export const dynamic = "force-dynamic";
 
@@ -33,14 +40,47 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get("site_id");
     const cached = searchParams.get("cached");
+    const useAI = searchParams.get("ai") === "true";
 
     if (!siteId) {
       return NextResponse.json({ error: "site_id required" }, { status: 400 });
     }
 
-    const siteIdNum = parseInt(siteId, 10);
     const sql = getSQL();
 
+    if (siteId === "all") {
+      const stored = await sql`
+        SELECT
+          kc.site_id,
+          s.name AS site_name,
+          kc.cluster_name,
+          kc.keywords,
+          kc.total_clicks,
+          kc.total_impressions,
+          kc.avg_position,
+          kc.content_suggestion,
+          kc.priority,
+          kc.created_at
+        FROM keyword_clusters kc
+        LEFT JOIN sites s ON s.id = kc.site_id
+        ORDER BY kc.total_impressions DESC
+        LIMIT 200
+      `;
+
+      const clusters = (stored as Record<string, unknown>[]).map((row) => ({
+        ...formatStoredCluster(row),
+        cluster_name: `${String(row.site_name ?? `Site ${row.site_id}`)} - ${String(row.cluster_name ?? "")}`,
+      }));
+
+      return NextResponse.json({
+        clusters,
+        summary: buildSummary(clusters),
+        cached: true,
+        source: "portfolio_cache",
+      });
+    }
+
+    const siteIdNum = parseInt(siteId, 10);
     // Return stored clusters without re-running AI
     if (cached === "true") {
       const stored = await sql`
@@ -78,7 +118,12 @@ export async function GET(req: NextRequest) {
       LIMIT 200
     `;
 
-    const keywordData = kwRows as Record<string, unknown>[];
+    const keywordData = (kwRows as Record<string, unknown>[]).map((row) => ({
+      query: String(row.query ?? ""),
+      total_clicks: Number(row.total_clicks ?? 0),
+      total_impressions: Number(row.total_impressions ?? 0),
+      avg_position: Number(row.avg_position ?? 0),
+    }));
 
     if (keywordData.length === 0) {
       return NextResponse.json(
@@ -87,15 +132,29 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const keywords = keywordData.map((r) => r.query as string);
+    const keywords = keywordData.map((r) => r.query);
 
-    // 2. Ask AI to cluster
+    const fallbackClusters = buildFallbackClusters(keywordData);
+
+    if (!useAI) {
+      const enrichedClusters = enrichClusters(fallbackClusters, keywordData);
+      await replaceStoredClusters(sql, siteIdNum, enrichedClusters);
+
+      return NextResponse.json({
+        clusters: enrichedClusters,
+        summary: buildSummary(enrichedClusters),
+        cached: false,
+        source: "local",
+      });
+    }
+
+    // 2. Optional AI clustering. Disabled by default to avoid hidden API costs.
     const prompt = `Group these keywords into 5-15 semantic topic clusters. Each cluster should represent a coherent topic/theme.
 
 Keywords:
 ${keywords.join("\n")}
 
-RESPOND IN STRICT JSON ONLY:
+RESPOND IN STRICT JSON ONLY. No markdown fences, no prose:
 {
   "clusters": [
     {
@@ -121,38 +180,49 @@ Rules:
       messages: [{ role: "user", content: prompt }],
       model: "cluster",
       maxTokens: 4000,
+      fallback: JSON.stringify({ clusters: fallbackClusters }),
     });
 
-    // 3. Parse AI response
-    const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return NextResponse.json(
-        { error: "AI returned invalid JSON" },
-        { status: 502 }
-      );
-    }
+    // 3. Parse AI response. If the provider returns prose, markdown, or malformed
+    // JSON, keep the tool usable with deterministic clusters from GSC data.
+    const parsed = parseAIClusters(aiResponse) ?? { clusters: fallbackClusters };
+    const enrichedClusters = enrichClusters(normalizeClusters(parsed.clusters, keywordData), keywordData);
 
-    const parsed: AIClustersResponse = JSON.parse(jsonMatch[0]);
+    await replaceStoredClusters(sql, siteIdNum, enrichedClusters);
 
-    if (!parsed.clusters || !Array.isArray(parsed.clusters)) {
-      return NextResponse.json(
-        { error: "AI response missing clusters array" },
-        { status: 502 }
-      );
-    }
+    // 7. Return clusters + summary
+    return NextResponse.json({
+      clusters: enrichedClusters,
+      summary: buildSummary(enrichedClusters),
+      cached: false,
+      source: "ai",
+    });
+  } catch (err) {
+    logError("keyword-clusters", err);
+    const message =
+      process.env.NODE_ENV === "development" && err instanceof Error
+        ? err.message
+        : "Internal server error";
+    return NextResponse.json(
+      { error: message },
+      { status: 500 }
+    );
+  }
+}
 
-    // 4. Build lookup map for GSC data enrichment
+function enrichClusters(clusters: Cluster[], keywordData: KeywordStats[]): ClusterWithStats[] {
+  // Build lookup map for GSC data enrichment
     const kwMap = new Map<string, { clicks: number; impressions: number; position: number }>();
     for (const row of keywordData) {
-      kwMap.set(row.query as string, {
-        clicks: Number(row.total_clicks),
-        impressions: Number(row.total_impressions),
-        position: Number(row.avg_position),
+      kwMap.set(row.query, {
+        clicks: row.total_clicks,
+        impressions: row.total_impressions,
+        position: row.avg_position,
       });
     }
 
-    // Enrich each cluster with actual GSC data
-    const enrichedClusters: ClusterWithStats[] = parsed.clusters.map((c) => {
+  // Enrich each cluster with actual GSC data
+  return clusters.map((c) => {
       let totalClicks = 0;
       let totalImpressions = 0;
       let positionSum = 0;
@@ -179,11 +249,17 @@ Rules:
         total_impressions: totalImpressions,
         avg_position: avgPos,
         content_suggestion: c.content_suggestion,
-        priority: c.priority,
+        priority: normalizePriority(c.priority),
       };
     });
+}
 
-    // 5. Create table if not exists
+async function replaceStoredClusters(
+  sql: ReturnType<typeof getSQL>,
+  siteIdNum: number,
+  enrichedClusters: ClusterWithStats[],
+): Promise<void> {
+  // Create table if not exists
     await sql`
       CREATE TABLE IF NOT EXISTS keyword_clusters (
         id SERIAL PRIMARY KEY,
@@ -199,7 +275,7 @@ Rules:
       )
     `;
 
-    // 6. Clear old clusters for this site, then insert new ones
+  // Clear old clusters for this site, then insert new ones
     await sql`DELETE FROM keyword_clusters WHERE site_id = ${siteIdNum}`;
 
     for (const cluster of enrichedClusters) {
@@ -218,35 +294,18 @@ Rules:
         )
       `;
     }
-
-    // 7. Return clusters + summary
-    return NextResponse.json({
-      clusters: enrichedClusters,
-      summary: buildSummary(enrichedClusters),
-      cached: false,
-    });
-  } catch (err) {
-    logError("keyword-clusters", err);
-    const message =
-      process.env.NODE_ENV === "development" && err instanceof Error
-        ? err.message
-        : "Internal server error";
-    return NextResponse.json(
-      { error: message },
-      { status: 500 }
-    );
-  }
 }
 
 function formatStoredCluster(row: Record<string, unknown>): ClusterWithStats {
+  const rawKeywords = row.keywords;
   return {
     cluster_name: row.cluster_name as string,
-    keywords: row.keywords as string[],
+    keywords: Array.isArray(rawKeywords) ? rawKeywords.map(String) : [],
     total_clicks: Number(row.total_clicks),
     total_impressions: Number(row.total_impressions),
     avg_position: Number(row.avg_position),
     content_suggestion: row.content_suggestion as string,
-    priority: row.priority as string,
+    priority: normalizePriority(row.priority),
   };
 }
 

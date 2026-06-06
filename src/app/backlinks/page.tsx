@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Link2, Loader2, Globe, BarChart2, Shield } from "lucide-react";
+import { ArrowLeft, Link2, Loader2, Globe, BarChart2, Shield, Activity } from "lucide-react";
 import Link from "next/link";
 
 interface Site {
@@ -11,6 +11,7 @@ interface Site {
 }
 
 interface BacklinkEntry {
+  site_name?: string;
   linking_domain: string;
   target_page: string;
   link_count: number;
@@ -32,10 +33,12 @@ export default function BacklinksPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacklinksResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastTiming, setLastTiming] = useState<{ label: string; ms: number; server?: string | null } | null>(null);
 
   const selectedSite = typeof selectedSiteId === "number"
     ? sites.find((site) => site.id === selectedSiteId) ?? null
     : null;
+  const canLoad = selectedSiteId === "all" || !!selectedSite;
 
   useEffect(() => {
     fetch("/api/sites")
@@ -51,12 +54,18 @@ export default function BacklinksPage() {
   }, []);
 
   async function loadBacklinks() {
-    if (!selectedSite) return;
+    if (!canLoad) return;
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const res = await fetch(`/api/gsc-links?site_id=${selectedSite.id}`);
+      const started = performance.now();
+      const res = await fetch(`/api/gsc-links?site_id=${selectedSiteId === "all" ? "all" : selectedSite?.id}`);
+      setLastTiming({
+        label: "Backlinks",
+        ms: performance.now() - started,
+        server: res.headers.get("X-Response-Time"),
+      });
       const data = await res.json() as BacklinksResult & { error?: string };
       if (data.error) { setError(data.error); return; }
       setResult(data);
@@ -76,6 +85,10 @@ export default function BacklinksPage() {
         <Link2 className="w-6 h-6 text-blue-400" />
         <h1 className="text-xl font-bold">Backlinks &amp; Autorité</h1>
         <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full">GSC</span>
+        <div className="ml-auto flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400">
+          <Activity className="w-3.5 h-3.5 text-cyan-400" />
+          {lastTiming ? `${lastTiming.label}: ${lastTiming.ms >= 1000 ? `${(lastTiming.ms / 1000).toFixed(1)}s` : `${Math.round(lastTiming.ms)}ms`}${lastTiming.server ? ` serveur ${lastTiming.server}` : ""}` : "vitesse en attente"}
+        </div>
       </header>
 
       <div className="px-6 py-6 max-w-5xl mx-auto">
@@ -96,7 +109,7 @@ export default function BacklinksPage() {
 
           <button
             onClick={loadBacklinks}
-            disabled={loading || !selectedSite}
+            disabled={loading || !canLoad}
             className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-5 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
@@ -155,6 +168,7 @@ export default function BacklinksPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-gray-500 text-xs uppercase border-b border-gray-800">
+                      {selectedSiteId === "all" && <th className="py-3 px-4 text-left">Site</th>}
                       <th className="py-3 px-4 text-left">Domaine référent</th>
                       <th className="py-3 px-4 text-left">Page cible</th>
                       <th className="py-3 px-4 text-right">Nb liens</th>
@@ -163,6 +177,7 @@ export default function BacklinksPage() {
                   <tbody>
                     {result.links.map((link, i) => (
                       <tr key={i} className="border-b border-gray-800/60 hover:bg-gray-800/30 transition">
+                        {selectedSiteId === "all" && <td className="py-3 px-4 text-gray-300">{link.site_name ?? "—"}</td>}
                         <td className="py-3 px-4 text-blue-400 font-medium">{link.linking_domain}</td>
                         <td className="py-3 px-4 text-gray-400 text-xs max-w-xs truncate">{link.target_page}</td>
                         <td className="py-3 px-4 text-right text-gray-300">{link.link_count.toLocaleString()}</td>

@@ -128,9 +128,11 @@ export async function POST(req: NextRequest) {
     } catch (aiErr) {
       // AI call failed — return graceful fallback (instead of raw error)
       const msg = aiErr instanceof AIProviderError ? aiErr.message : (aiErr instanceof Error ? aiErr.message : "AI unavailable");
-      const friendly = msg.includes("Crédit") || msg.includes("ExceededBudget") || msg.includes("budget")
-        ? `**Crédit AI épuisé.** Cette analyse n'est pas encore en cache. Régénère via Claude Code: \`node _kw-verify/refresh-ai-widget.mjs\` ou recharge un provider (Perplexity Pro / Anthropic).`
-        : `**Erreur AI temporaire**: ${msg}. Réessaie dans quelques secondes ou utilise un autre provider.`;
+      const friendly = msg.includes("fallback is disabled")
+        ? "**Fallback IA local/cache.** Le dashboard privilegie Gemini/Perplexity et le cache. Aucun appel Anthropic/OpenAI n'est lance par defaut."
+        : msg.includes("Crédit") || msg.includes("ExceededBudget") || msg.includes("budget")
+          ? "**Credit AI epuise.** Cette analyse n'est pas encore en cache. Relance via cache local ou change de provider seulement si necessaire."
+          : `**Erreur AI temporaire**: ${msg}. Reessaie dans quelques secondes ou utilise un autre provider.`;
       return NextResponse.json({
         success: true,
         reply: friendly,

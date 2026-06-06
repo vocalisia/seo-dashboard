@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, TrendingUp, TrendingDown, Globe, CheckCircle, XCircle, Minus, ExternalLink } from "lucide-react";
 import Link from "next/link";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
+import { formatFixed, toFiniteNumber } from "@/lib/safe-number";
 
 interface Site {
   id: number;
@@ -89,7 +91,7 @@ export default function RoiPage() {
     }
   }, [selectedSite]);
 
-  const totalImprovement = roi.reduce((s, a) => s + a.improvement, 0);
+  const totalImprovement = roi.reduce((s, a) => s + toFiniteNumber(a.improvement), 0);
   const indexedCount = indexation.filter((a) => a.indexed).length;
 
   return (
@@ -138,7 +140,7 @@ export default function RoiPage() {
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
             <div className="text-sm text-gray-400">Gain position moyen</div>
             <div className={`text-3xl font-bold mt-1 ${totalImprovement > 0 ? "text-emerald-400" : totalImprovement < 0 ? "text-red-400" : "text-gray-400"}`}>
-              {roi.length > 0 ? (totalImprovement / roi.length).toFixed(1) : "—"}
+              {roi.length > 0 ? formatFixed(totalImprovement / roi.length) : "—"}
             </div>
           </div>
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -171,7 +173,12 @@ export default function RoiPage() {
                 <thead>
                   <tr className="text-xs text-gray-400 border-b border-gray-800">
                     <th className="px-5 py-3 text-left">Lang</th>
-                    <th className="px-5 py-3 text-left">Mot-clé</th>
+                    <th className="px-5 py-3 text-left">
+                      <span className="inline-flex items-center gap-2">
+                        Mot-clé
+                        <CopyKeywordsButton keywords={roi.map((a) => a.keyword)} />
+                      </span>
+                    </th>
                     <th className="px-5 py-3 text-right">Pos. avant</th>
                     <th className="px-5 py-3 text-right">Pos. +7j</th>
                     <th className="px-5 py-3 text-right">Pos. +30j</th>
@@ -184,18 +191,18 @@ export default function RoiPage() {
                     <tr key={a.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                       <td className="px-5 py-3">{LANG_FLAG[a.language] ?? a.language}</td>
                       <td className="px-5 py-3 font-medium text-white">{a.keyword}</td>
-                      <td className="px-5 py-3 text-right text-gray-400">{a.before.position > 0 ? a.before.position.toFixed(1) : "—"}</td>
-                      <td className="px-5 py-3 text-right text-gray-400">{a.after_7d.position > 0 ? a.after_7d.position.toFixed(1) : "—"}</td>
-                      <td className="px-5 py-3 text-right text-gray-400">{a.after_30d.position > 0 ? a.after_30d.position.toFixed(1) : "—"}</td>
+                      <td className="px-5 py-3 text-right text-gray-400">{toFiniteNumber(a.before.position) > 0 ? formatFixed(a.before.position) : "—"}</td>
+                      <td className="px-5 py-3 text-right text-gray-400">{toFiniteNumber(a.after_7d.position) > 0 ? formatFixed(a.after_7d.position) : "—"}</td>
+                      <td className="px-5 py-3 text-right text-gray-400">{toFiniteNumber(a.after_30d.position) > 0 ? formatFixed(a.after_30d.position) : "—"}</td>
                       <td className="px-5 py-3 text-right">
                         <span className={`flex items-center justify-end gap-1 ${
-                          a.improvement > 0 ? "text-emerald-400" : a.improvement < 0 ? "text-red-400" : "text-gray-500"
+                          toFiniteNumber(a.improvement) > 0 ? "text-emerald-400" : toFiniteNumber(a.improvement) < 0 ? "text-red-400" : "text-gray-500"
                         }`}>
-                          {a.improvement > 0 ? <TrendingUp className="w-3.5 h-3.5" /> : a.improvement < 0 ? <TrendingDown className="w-3.5 h-3.5" /> : <Minus className="w-3.5 h-3.5" />}
-                          {a.improvement > 0 ? "+" : ""}{a.improvement.toFixed(1)}
+                          {toFiniteNumber(a.improvement) > 0 ? <TrendingUp className="w-3.5 h-3.5" /> : toFiniteNumber(a.improvement) < 0 ? <TrendingDown className="w-3.5 h-3.5" /> : <Minus className="w-3.5 h-3.5" />}
+                          {toFiniteNumber(a.improvement) > 0 ? "+" : ""}{formatFixed(a.improvement)}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-right text-blue-400">{a.after_30d.clicks}</td>
+                      <td className="px-5 py-3 text-right text-blue-400">{toFiniteNumber(a.after_30d.clicks).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -226,7 +233,12 @@ export default function RoiPage() {
                 <thead>
                   <tr className="text-xs text-gray-400 border-b border-gray-800">
                     <th className="px-5 py-3 text-left">Lang</th>
-                    <th className="px-5 py-3 text-left">Mot-clé</th>
+                    <th className="px-5 py-3 text-left">
+                      <span className="inline-flex items-center gap-2">
+                        Mot-clé
+                        <CopyKeywordsButton keywords={indexation.map((a) => a.keyword)} />
+                      </span>
+                    </th>
                     <th className="px-5 py-3 text-left">URL</th>
                     <th className="px-5 py-3 text-center">Indexé</th>
                   </tr>

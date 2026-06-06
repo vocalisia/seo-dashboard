@@ -343,13 +343,13 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
             </div>
           )}
 
-          {/* E-E-A-T tab — Perplexity research → Sonnet writing pipeline */}
+          {/* E-E-A-T tab: Perplexity research, Gemini writing */}
           {activeTab === "eeat" && (
             <div className="space-y-3">
               <div className="bg-yellow-900/30 border border-yellow-700/40 rounded p-2 text-xs text-yellow-200">
                 🏆 <strong>Pipeline E-E-A-T 2 phases</strong>:<br />
                 1️⃣ Perplexity → recherche sources réelles 2026<br />
-                2️⃣ Sonnet 4.6 → rédaction avec citations<br />
+                2️⃣ Gemini → rédaction avec citations<br />
                 ⏱️ ~60-90s · Article 1500-2500 mots avec sources URL
               </div>
               <label className="text-xs text-gray-400">Sujet de l&apos;article</label>
