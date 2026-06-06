@@ -18,6 +18,8 @@ interface KeywordRow {
   position: number;
   volume: number;
   volume_source?: string | null;
+  volume_ch?: number | null;
+  volume_fr?: number | null;
   difficulty: "easy" | "medium" | "hard" | "unknown";
   intent: string;
   site_name?: string;

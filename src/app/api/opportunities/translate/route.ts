@@ -15,6 +15,44 @@ interface TranslatableFields {
   business_model_how_to_monetize?: string;
 }
 
+function translateTextFallback(input: string): string {
+  let out = input || "";
+  const replacements: Array<[RegExp, string]> = [
+    [/\bmonthly impressions detected in GSC-like demand\b/gi, "impressions mensuelles detectees via un signal proche GSC"],
+    [/\bmomentum over the previous 30-day window\b/gi, "de momentum sur les 30 derniers jours"],
+    [/\bfast-rising demand\b/gi, "demande en forte hausse"],
+    [/\bSERP gap remains accessible\b/gi, "la SERP semble encore attaquable"],
+    [/\bfar from existing portfolio\b/gi, "eloigne du portefeuille actuel"],
+    [/\bstrong informational demand\b/gi, "forte demande informationnelle"],
+    [/\bmagazine focused on informational demand\b/gi, "magazine oriente demande informationnelle"],
+    [/\bBuild a content moat around\b/gi, "Construire un moat de contenu autour de"],
+    [/\band monetize through ads\b/gi, "et monetiser via la publicite"],
+    [/\bads\b/gi, "publicite"],
+    [/\blongtail\b/gi, "longue traine"],
+    [/\bemerging\b/gi, "emergent"],
+    [/\bblog\b/gi, "blog"],
+    [/\bmagazine\b/gi, "magazine"],
+    [/\bdirectory\b/gi, "annuaire"],
+    [/\bsaas\b/gi, "SaaS"],
+    [/\be-commerce\b/gi, "e-commerce"],
+  ];
+  for (const [from, to] of replacements) out = out.replace(from, to);
+  return out.trim();
+}
+
+function fallbackTranslation(payload: TranslatableFields): TranslatableFields {
+  return {
+    niche: translateTextFallback(payload.niche),
+    reason: translateTextFallback(payload.reason),
+    seed_articles: payload.seed_articles.map(translateTextFallback),
+    sample_queries: payload.sample_queries.map(translateTextFallback),
+    business_model_type: payload.business_model_type ? translateTextFallback(payload.business_model_type) : undefined,
+    business_model_how_to_monetize: payload.business_model_how_to_monetize
+      ? translateTextFallback(payload.business_model_how_to_monetize)
+      : undefined,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const authState = await requireApiSession();
   if (authState.unauthorized) return authState.unauthorized;
@@ -93,18 +131,26 @@ RÉPONSE en JSON strict avec EXACTEMENT les mêmes clés:
   "business_model_how_to_monetize": "..."
 }`;
 
-    const { reply: raw } = await askAICached({
-      cacheKey: `opp-translate:${oppId}:${target}`,
-      messages: [{ role: "user", content: prompt }],
-      model: "fast",
-      maxTokens: 1200,
-    });
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    const translated = JSON.parse(cleaned) as Partial<TranslatableFields>;
+    let translated: Partial<TranslatableFields>;
+    let fallback = false;
+    try {
+      const { reply: raw } = await askAICached({
+        cacheKey: `opp-translate:${oppId}:${target}`,
+        messages: [{ role: "user", content: prompt }],
+        model: "fast",
+        maxTokens: 1200,
+      });
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      translated = JSON.parse(cleaned) as Partial<TranslatableFields>;
+    } catch {
+      translated = fallbackTranslation(payload);
+      fallback = true;
+    }
 
     return NextResponse.json({
       success: true,
       target,
+      fallback,
       original: {
         niche: payload.niche,
         reason: payload.reason,

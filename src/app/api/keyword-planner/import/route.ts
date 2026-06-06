@@ -25,6 +25,7 @@ import { getSQL } from "@/lib/db";
 import { ensureSchema } from "@/lib/db";
 import { requireApiSession } from "@/lib/api-auth";
 import { parseCsv, parseVolume, parseDecimal } from "@/lib/csv";
+import { primaryKeywordMarket } from "@/lib/site-country";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -39,7 +40,10 @@ interface ImportSummary {
   errors: string[];
   preview: Array<{
     keyword: string;
+    market: string;
     volume_market: number | null;
+    volume_fr: number | null;
+    volume_ch: number | null;
     competition: string | null;
     cpc_low: number | null;
     cpc_high: number | null;
@@ -69,18 +73,26 @@ function normalizeCompetition(raw: string | undefined): string | null {
   return null;
 }
 
+function normalizeMarket(raw: unknown, fallback: string): string {
+  const value = typeof raw === "string" ? raw.trim().toUpperCase() : "";
+  if (["FR", "CH", "BE", "CA", "DE", "IT", "GB", "US"].includes(value)) return value;
+  return fallback;
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const authState = await requireApiSession();
   if (authState.unauthorized) return authState.unauthorized;
 
   let siteIdRaw: string | number | null = null;
   let csvText: string | null = null;
+  let marketRaw: unknown = null;
 
   const contentType = req.headers.get("content-type") ?? "";
   try {
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
       siteIdRaw = form.get("site_id") as string | null;
+      marketRaw = form.get("market");
       const file = form.get("file");
       if (file && typeof file !== "string") {
         csvText = await file.text();
@@ -91,6 +103,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const body = (await req.json()) as { site_id?: number | string; csv?: string };
       siteIdRaw = body.site_id ?? null;
       csvText = body.csv ?? null;
+      marketRaw = (body as { market?: unknown }).market ?? null;
     }
   } catch {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
@@ -128,13 +141,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   await ensureSchema();
   const sql = getSQL();
 
-  const siteRow = (await sql`SELECT id FROM sites WHERE id = ${siteId}`) as Array<{ id: number }>;
+  const siteRow = (await sql`SELECT id, url FROM sites WHERE id = ${siteId}`) as Array<{ id: number; url: string | null }>;
   if (siteRow.length === 0) {
     return NextResponse.json({ error: `site_id ${siteId} not found` }, { status: 404 });
   }
+  const market = normalizeMarket(marketRaw, primaryKeywordMarket(siteRow[0]?.url));
 
   const today = new Date().toISOString().slice(0, 10);
-  const source = `google_kp_csv_${today}`;
+  const source = `google_kp_csv_${market.toLowerCase()}_${today}`;
 
   const summary: ImportSummary = {
     success: true,
@@ -155,6 +169,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       continue;
     }
     const volume = volCol ? parseVolume(row[volCol]) : null;
+    const volumeFr = market === "FR" ? volume : null;
+    const volumeCh = market === "CH" ? volume : null;
     const competition = normalizeCompetition(compCol ? row[compCol] : undefined);
     const cpcLow = cpcLowCol ? parseDecimal(row[cpcLowCol]) : null;
     const cpcHigh = cpcHighCol ? parseDecimal(row[cpcHighCol]) : null;
@@ -162,14 +178,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     try {
       const result = (await sql`
         INSERT INTO tracked_keywords (
-          site_id, keyword, volume_market, volume_source, confidence,
+          site_id, keyword, market, volume_market, volume_fr, volume_ch, volume_source, confidence,
           competition, cpc_low, cpc_high, volume_updated_at, is_active
         ) VALUES (
-          ${siteId}, ${keyword}, ${volume}, ${source}, 0.95,
+          ${siteId}, ${keyword}, ${market}, ${volume}, ${volumeFr}, ${volumeCh}, ${source}, 0.95,
           ${competition}, ${cpcLow}, ${cpcHigh}, NOW(), TRUE
         )
         ON CONFLICT (site_id, (LOWER(keyword))) DO UPDATE SET
-          volume_market = EXCLUDED.volume_market,
+          market = EXCLUDED.market,
+          volume_fr = COALESCE(EXCLUDED.volume_fr, tracked_keywords.volume_fr),
+          volume_ch = COALESCE(EXCLUDED.volume_ch, tracked_keywords.volume_ch),
+          volume_market = CASE
+            WHEN EXCLUDED.market = 'CH' THEN EXCLUDED.volume_market
+            WHEN tracked_keywords.market IS NULL OR tracked_keywords.market <> 'CH' THEN EXCLUDED.volume_market
+            ELSE tracked_keywords.volume_market
+          END,
           volume_source = EXCLUDED.volume_source,
           confidence = EXCLUDED.confidence,
           competition = COALESCE(EXCLUDED.competition, tracked_keywords.competition),
@@ -186,7 +209,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (summary.preview.length < 20) {
         summary.preview.push({
           keyword,
+          market,
           volume_market: volume,
+          volume_fr: volumeFr,
+          volume_ch: volumeCh,
           competition,
           cpc_low: cpcLow,
           cpc_high: cpcHigh,

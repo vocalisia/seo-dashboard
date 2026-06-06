@@ -172,6 +172,7 @@ export default function ScannerPage() {
     strategy_recommendation: string;
   }>>({});
   const [deployMsg, setDeployMsg] = useState<string | null>(null);
+  const [scanMsg, setScanMsg] = useState<string | null>(null);
   const [loadCompetitorsMsg, setLoadCompetitorsMsg] = useState<string | null>(null);
   const [translateMsg, setTranslateMsg] = useState<string | null>(null);
   const [autoLoadProgress, setAutoLoadProgress] = useState<{ current: number; total: number } | null>(null);
@@ -181,6 +182,7 @@ export default function ScannerPage() {
   const [categories, setCategories] = useState<string[]>(["ALL"]);
 
   function toggleCountry(code: string) {
+    clearScannerResults();
     setCountries((prev) => {
       if (code === "GLOBAL") return ["GLOBAL"];
       const without = prev.filter((c) => c !== "GLOBAL");
@@ -193,6 +195,7 @@ export default function ScannerPage() {
   }
 
   function toggleCategory(code: string) {
+    clearScannerResults();
     setCategories((prev) => {
       if (code === "ALL") return ["ALL"];
       const without = prev.filter((c) => c !== "ALL");
@@ -215,6 +218,16 @@ export default function ScannerPage() {
   const [loadingDeepResearch, setLoadingDeepResearch] = useState<number | null>(null);
   const [launching, setLaunching] = useState<number | null>(null);
   const [launchResults, setLaunchResults] = useState<Record<number, { site_url: string; planned_articles: number; seeded_keywords: number; message: string }>>({});
+
+  function clearScannerResults() {
+    setOpportunities([]);
+    setCompetitorsCache({});
+    setTranslations({});
+    setValidationResults({});
+    setDeepResearch({});
+    setLaunchResults({});
+    setScanMsg("Filtre change: relance le scan pour obtenir une nouvelle liste.");
+  }
 
   function toggleExpand(id: number) {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -314,6 +327,7 @@ export default function ScannerPage() {
       const d = await res.json();
       if (d.success && d.translated) {
         setTranslations((prev) => ({ ...prev, [oppId]: d.translated }));
+        setTranslateMsg(d.fallback ? "Traduction locale appliquee: l'IA n'a pas repondu proprement." : null);
       } else {
         setTranslateMsg("La traduction a échoué.");
       }
@@ -327,6 +341,65 @@ export default function ScannerPage() {
   function isVolumeEstimated(opp: Opportunity): boolean {
     const src = opp.signal_source ?? "";
     return src.includes("global-discovery") || src.includes("portfolio+global");
+  }
+
+  function evidenceInfo(opp: Opportunity): { label: string; className: string; detail: string } {
+    const src = (opp.signal_source ?? "").toLowerCase();
+    const hasSerp = Boolean(
+      (opp.competitors && opp.competitors.length > 0) ||
+      (opp.serp_evidence?.resultTitles?.length ?? 0) > 0
+    );
+    const hasGsc = src.includes("gsc");
+    if (hasGsc && hasSerp) {
+      return {
+        label: "verifie partiel",
+        className: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+        detail: "Signal GSC + preuves SERP/concurrents. Les projections restent estimees.",
+      };
+    }
+    if (hasGsc) {
+      return {
+        label: "signal GSC",
+        className: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+        detail: "Base sur impressions/requetes GSC ou proches GSC. Pas un volume Keyword Planner exact.",
+      };
+    }
+    return {
+      label: "estimation",
+      className: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+      detail: "Prediction issue de signaux externes et heuristiques. A valider avec SERP et concurrents.",
+    };
+  }
+
+  function formatHost(value: string): string {
+    try {
+      return new URL(value.startsWith("http") ? value : `https://${value}`).hostname.replace(/^www\./, "");
+    } catch {
+      return value.replace(/^https?:\/\//, "").split("/")[0];
+    }
+  }
+
+  function exampleSites(opp: Opportunity, competitors: { url: string; name: string }[]): Array<{ label: string; url: string; kind: string }> {
+    const rows: Array<{ label: string; url: string; kind: string }> = [];
+    for (const c of competitors.slice(0, 4)) rows.push({ label: c.name || formatHost(c.url), url: c.url, kind: "concurrent SERP" });
+    for (const d of (opp.suggested_domains ?? []).slice(0, 3)) {
+      rows.push({ label: d, url: `https://www.namecheap.com/domains/registration/results/?domain=${encodeURIComponent(d)}`, kind: "idee domaine" });
+    }
+    return rows.slice(0, 6);
+  }
+
+  function sourceLabel(opp: Opportunity): string {
+    const src = opp.signal_source ?? "";
+    const parts: string[] = [];
+    if (src.includes("portfolio")) parts.push("portfolio");
+    if (src.includes("global")) parts.push("discovery externe");
+    if (src.includes("gsc")) parts.push("GSC");
+    if (src.includes("cat-")) {
+      const category = src.match(/cat-([^:]+)/)?.[1];
+      if (category) parts.push(`type ${category}`);
+    }
+    if (src.includes("scan-")) parts.push("filtre courant");
+    return parts.length ? Array.from(new Set(parts)).join(" + ") : "signal interne";
   }
 
   function googleSerpUrl(opp: Opportunity): string {
@@ -379,14 +452,21 @@ export default function ScannerPage() {
     try {
       const res = await fetch("/api/opportunities/scan");
       if (!res.ok) return;
-      const d = await res.json() as { opportunities?: Opportunity[] };
+      const d = await res.json() as { opportunities?: Opportunity[]; message?: string };
       setOpportunities(d.opportunities ?? []);
+      setScanMsg(d.message ?? null);
     } catch { /* ignore */ }
   }
 
   async function runScan() {
     setLoading(true);
     setDeployMsg(null);
+    setScanMsg(null);
+    setTranslateMsg(null);
+    setLoadCompetitorsMsg(null);
+    setOpportunities([]);
+    setCompetitorsCache({});
+    setTranslations({});
     try {
       const res = await fetch("/api/opportunities/scan", {
         method: "POST",
@@ -397,8 +477,9 @@ export default function ScannerPage() {
         setDeployMsg("Le scan a échoué.");
         return;
       }
-      const d = await res.json() as { opportunities?: Opportunity[] };
+      const d = await res.json() as { opportunities?: Opportunity[]; message?: string };
       setOpportunities(d.opportunities ?? []);
+      setScanMsg(d.message ?? null);
     } catch {
       setDeployMsg("Erreur réseau pendant le scan.");
     } finally {
@@ -550,7 +631,7 @@ export default function ScannerPage() {
                   <button
                     key={mode}
                     type="button"
-                    onClick={() => setDiscoveryMode(mode)}
+                    onClick={() => { clearScannerResults(); setDiscoveryMode(mode); }}
                     className={`rounded-xl border px-4 py-3 text-left transition ${
                       active
                         ? "border-cyan-500 bg-cyan-500/10"
@@ -612,6 +693,11 @@ export default function ScannerPage() {
             {deployMsg}
           </div>
         )}
+        {scanMsg && (
+          <div className="bg-cyan-900/30 border border-cyan-800 rounded-lg px-4 py-3 text-sm text-cyan-200">
+            {scanMsg}
+          </div>
+        )}
         {loadCompetitorsMsg && (
           <div className="bg-orange-900/30 border border-orange-800 rounded-lg px-4 py-3 text-sm text-orange-300">
             {loadCompetitorsMsg}
@@ -644,6 +730,15 @@ export default function ScannerPage() {
                       )}
                     </div>
                     <p className="text-sm text-gray-400">{translations[opp.id]?.reason ?? opp.reason}</p>
+                    {(() => {
+                      const evidence = evidenceInfo(opp);
+                      return (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                          <span className={`rounded border px-2 py-0.5 ${evidence.className}`}>{evidence.label}</span>
+                          <span className="text-gray-500">{evidence.detail}</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div className="flex items-center gap-2 ml-3">
                     <div className="flex flex-col gap-1.5">
@@ -704,7 +799,7 @@ export default function ScannerPage() {
                 <div className="grid grid-cols-3 gap-3 mb-4">
                   <div className="bg-gray-800/40 rounded-lg px-3 py-2">
                     <div className="text-xs text-gray-400">Signal source</div>
-                    <div className="text-sm font-semibold text-cyan-300 mt-1">{opp.signal_source ?? "gsc"}</div>
+                    <div className="text-sm font-semibold text-cyan-300 mt-1" title={opp.signal_source ?? ""}>{sourceLabel(opp)}</div>
                   </div>
                   <div className="bg-gray-800/40 rounded-lg px-3 py-2">
                     <div className="text-xs text-gray-400">Momentum</div>
@@ -958,6 +1053,31 @@ export default function ScannerPage() {
                         {loadingCompetitors === opp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <span>🌐</span>}
                         {competitors.length > 0 ? "↻ Actualiser" : "Charger"}
                       </button>
+                    </div>
+                  );
+                })()}
+
+                {(() => {
+                  const competitors = competitorsCache[opp.id] ?? opp.competitors ?? [];
+                  const examples = exampleSites(opp, competitors);
+                  if (examples.length === 0) return null;
+                  return (
+                    <div className="mb-3 rounded-lg border border-gray-800 bg-gray-950/40 px-3 py-2">
+                      <div className="mb-1 text-[10px] uppercase tracking-wider text-gray-500">Exemples a verifier</div>
+                      <div className="flex flex-wrap gap-1.5 text-xs">
+                        {examples.map((item, i) => (
+                          <a
+                            key={`${item.url}-${i}`}
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded border border-gray-700 bg-gray-800/60 px-2 py-1 text-gray-200 hover:border-cyan-500/60 hover:text-cyan-200"
+                            title={item.kind}
+                          >
+                            {item.label} <span className="text-gray-500">({item.kind})</span>
+                          </a>
+                        ))}
+                      </div>
                     </div>
                   );
                 })()}
@@ -1254,7 +1374,7 @@ export default function ScannerPage() {
                     title="Crée un stub site + content_plan + tracked_keywords (pas de GitHub repo)"
                   >
                     {launching === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                    {launching === opp.id ? "Stub en cours..." : "Launch this niche"}
+                    {launching === opp.id ? "Preparation..." : "Preparer le plan"}
                   </button>
                 </div>
 
@@ -1268,7 +1388,7 @@ export default function ScannerPage() {
                       className="px-4 py-2 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-700 text-yellow-400 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
                     >
                       {validating === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>🔍</span>}
-                      {validating === opp.id ? "Analyse SERP..." : "Valider la niche"}
+                      {validating === opp.id ? "Analyse SERP..." : "Valider SERP"}
                     </button>
                   )}
 

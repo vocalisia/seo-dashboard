@@ -152,6 +152,7 @@ export async function ensureSchema(): Promise<void> {
   // tracked_keywords — columns referenced by Keyword Planner import + tracker UI
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS market VARCHAR(8)`;
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_fr INTEGER`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_ch INTEGER`;
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_market INTEGER`;
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_source VARCHAR(60)`;
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS confidence DECIMAL(4,3)`;
@@ -308,6 +309,7 @@ export async function ensureOpportunitySchema() {
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS success_rate INTEGER`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS revenue_timeline JSONB`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS signal_source VARCHAR(50)`;
+  await sql`ALTER TABLE market_opportunities ALTER COLUMN signal_source TYPE VARCHAR(200)`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS momentum_pct DECIMAL(8,2)`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS average_position DECIMAL(8,2)`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS opportunity_type VARCHAR(50)`;

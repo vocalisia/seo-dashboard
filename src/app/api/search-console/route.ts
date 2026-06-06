@@ -79,7 +79,9 @@ export async function GET(request: NextRequest) {
                 q.first_seen,
                 tk.volume_market,
                 tk.volume_fr,
-                tk.market
+                tk.volume_ch,
+                tk.market,
+                tk.volume_source
               FROM (
                 SELECT query,
                   SUM(clicks) as total_clicks,
@@ -125,7 +127,7 @@ export async function GET(request: NextRequest) {
                 AVG(position) as avg_position,
                 AVG(position) AS page_weighted_position,
                 NULL AS first_seen,
-                NULL::int AS volume_market, NULL::int AS volume_fr, NULL::varchar AS market
+                NULL::int AS volume_market, NULL::int AS volume_fr, NULL::int AS volume_ch, NULL::varchar AS market, NULL::varchar AS volume_source
               FROM search_console_data d
               WHERE site_id = ${id}
                 AND date >= (CURRENT_DATE - 30)::date
@@ -146,7 +148,7 @@ export async function GET(request: NextRequest) {
                 NULLIF(tk.current_position::float8, 0) AS avg_position,
                 NULLIF(tk.current_position::float8, 0) AS page_weighted_position,
                 NULL::date AS first_seen,
-                tk.volume_market::int, tk.volume_fr::int, tk.market::varchar
+                tk.volume_market::int, tk.volume_fr::int, tk.volume_ch::int, tk.market::varchar, tk.volume_source::varchar
               FROM tracked_keywords tk
               WHERE tk.site_id = ${id} AND tk.is_active = TRUE
                 AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(tk.keyword))
@@ -169,7 +171,9 @@ export async function GET(request: NextRequest) {
               q.first_seen,
               tk.volume_market,
               tk.volume_fr,
-              tk.market
+              tk.volume_ch,
+              tk.market,
+              tk.volume_source
             FROM (
               SELECT query,
                 SUM(clicks) as total_clicks,
@@ -211,7 +215,7 @@ export async function GET(request: NextRequest) {
             const gsc30 = (await sql`
               SELECT query, SUM(clicks) AS total_clicks, SUM(impressions) AS total_impressions,
                 AVG(ctr) AS avg_ctr, AVG(position) AS avg_position, AVG(position) AS page_weighted_position,
-                NULL AS first_seen, NULL::int AS volume_market, NULL::int AS volume_fr, NULL::varchar AS market
+                NULL AS first_seen, NULL::int AS volume_market, NULL::int AS volume_fr, NULL::int AS volume_ch, NULL::varchar AS market, NULL::varchar AS volume_source
               FROM search_console_data
               WHERE site_id=${id} AND date >= (CURRENT_DATE-30)::date
                 AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
@@ -224,7 +228,7 @@ export async function GET(request: NextRequest) {
                 0::float8 AS avg_ctr,
                 NULLIF(current_position::float8, 0) AS avg_position,
                 NULLIF(current_position::float8, 0) AS page_weighted_position,
-                NULL::date AS first_seen, volume_market::int, volume_fr::int, market::varchar
+                NULL::date AS first_seen, volume_market::int, volume_fr::int, volume_ch::int, market::varchar, volume_source::varchar
               FROM tracked_keywords WHERE site_id=${id} AND is_active=true
             `) as Record<string, unknown>[];
             const extra = [...gsc30, ...trackedOnly]
@@ -318,7 +322,9 @@ export async function GET(request: NextRequest) {
               (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen,
               tk.volume_market,
               tk.volume_fr,
-              tk.market
+              tk.volume_ch,
+              tk.market,
+              tk.volume_source
             FROM w0
             LEFT JOIN w1 ON w1.query = w0.query
             LEFT JOIN w2 ON w2.query = w0.query
@@ -404,7 +410,9 @@ export async function GET(request: NextRequest) {
               (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen,
               tk.volume_market,
               tk.volume_fr,
-              tk.market
+              tk.volume_ch,
+              tk.market,
+              tk.volume_source
             FROM w0
             LEFT JOIN w1 ON w1.query = w0.query
             LEFT JOIN w2 ON w2.query = w0.query

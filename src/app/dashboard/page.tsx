@@ -19,7 +19,7 @@ interface QueryData {
   query: string; total_clicks: number; total_impressions: number;
   avg_ctr: number; avg_position: number; first_seen?: string | null;
   // From tracked_keywords JOIN
-  volume_market?: number | null; volume_fr?: number | null; market?: string | null; volume_source?: string | null;
+  volume_market?: number | null; volume_fr?: number | null; volume_ch?: number | null; market?: string | null; volume_source?: string | null;
 }
 
 interface GainData {
@@ -32,7 +32,7 @@ interface GainData {
   impressions_now: number;
   first_seen?: string | null;
   // From tracked_keywords JOIN
-  volume_market?: number | null; volume_fr?: number | null; market?: string | null; volume_source?: string | null;
+  volume_market?: number | null; volume_fr?: number | null; volume_ch?: number | null; market?: string | null; volume_source?: string | null;
 }
 
 interface GainLabels { w0: string; w1: string; w2: string; w3: string; w4: string }
@@ -64,15 +64,18 @@ interface AnalyticsDay {
   bounce_rate: number; avg_session_duration: number;
 }
 
-// Prefer DB-stored real volume (DataForSEO / Ahrefs / Keyword Planner via sync)
-// only. GSC impressions are not a monthly search volume, so we do not fabricate
-// a volume when no trusted source is available.
-function resolveVolume(
+// Prefer DB-stored real volume (DataForSEO / Ahrefs / Keyword Planner via sync).
+// When it is missing, use a clearly labeled GSC estimate so new keywords still
+// get a sortable demand signal.
+function resolveSourceVolume(
   volMarket: number | null | undefined,
   volFr: number | null | undefined,
+  volCh?: number | null | undefined,
 ): number {
   const m = Number(volMarket ?? 0);
   if (m > 1) return m;
+  const ch = Number(volCh ?? 0);
+  if (ch > 1) return ch;
   const f = Number(volFr ?? 0);
   if (f > 1) return f;
   return 0;
@@ -84,6 +87,57 @@ function volLabel(vol: number): { label: string; color: string } {
   if (vol >= 1000) return { label: `⚡ ${vol.toLocaleString()}`, color: "text-yellow-400" };
   if (vol >= 100) return { label: `📈 ${vol.toLocaleString()}`, color: "text-blue-400" };
   return { label: `${vol.toLocaleString()}`, color: "text-gray-400" };
+}
+
+type VolumeSignal = {
+  value: number;
+  kind: "source" | "gsc_estimate" | "none";
+};
+
+function estimateMonthlyFromGsc(impressions: number | null | undefined, periodDays: number): number {
+  const impr = Number(impressions ?? 0);
+  const days = Number(periodDays) > 0 ? Number(periodDays) : 7;
+  if (!Number.isFinite(impr) || impr <= 0) return 0;
+  return Math.max(1, Math.round(impr * (30 / days)));
+}
+
+function resolveVolumeSignal(
+  volMarket: number | null | undefined,
+  volFr: number | null | undefined,
+  impressions: number | null | undefined,
+  periodDays: number,
+  volCh?: number | null | undefined,
+): VolumeSignal {
+  const source = resolveSourceVolume(volMarket, volFr, volCh);
+  if (source > 1) return { value: source, kind: "source" };
+  const estimate = estimateMonthlyFromGsc(impressions, periodDays);
+  if (estimate > 1) return { value: estimate, kind: "gsc_estimate" };
+  return { value: 0, kind: "none" };
+}
+
+function volumeSignalLabel(signal: VolumeSignal): { label: string; color: string; title: string } {
+  const base = volLabel(signal.value);
+  if (signal.kind === "gsc_estimate" && signal.value > 1) {
+    return {
+      label: base.label.replace(signal.value.toLocaleString(), `~${signal.value.toLocaleString()} GSC`),
+      color: base.color === "text-gray-400" ? "text-sky-300" : base.color,
+      title: "Estimation mensuelle basee sur les impressions Google Search Console de la periode.",
+    };
+  }
+  if (signal.kind === "source") {
+    return { ...base, title: "Volume mensuel importe depuis une source externe." };
+  }
+  return { ...base, title: "Aucun volume source ni estimation GSC disponible." };
+}
+
+function volumeSignalBadge(signal: VolumeSignal): { label: string; className: string } {
+  if (signal.kind === "source") {
+    return { label: "source importee", className: "bg-green-500/15 text-green-300 border-green-500/30" };
+  }
+  if (signal.kind === "gsc_estimate") {
+    return { label: "GSC estime", className: "bg-sky-500/15 text-sky-300 border-sky-500/30" };
+  }
+  return { label: "volume manquant", className: "bg-gray-700/40 text-gray-400 border-gray-600/40" };
 }
 
 // CTR moyen Google par position (basé sur Sistrix 2024)
@@ -876,7 +930,10 @@ export default function DashboardPage() {
               if (sortCol === "position") { va = Number(a.avg_position); vb = Number(b.avg_position); }
               else if (sortCol === "impressions") { va = Number(a.total_impressions); vb = Number(b.total_impressions); }
               else if (sortCol === "ctr") { va = Number(a.avg_ctr); vb = Number(b.avg_ctr); }
-              else if (sortCol === "volume") { va = resolveVolume(a.volume_market, a.volume_fr); vb = resolveVolume(b.volume_market, b.volume_fr); }
+              else if (sortCol === "volume") {
+                va = resolveVolumeSignal(a.volume_market, a.volume_fr, a.total_impressions, Number(period), a.volume_ch).value;
+                vb = resolveVolumeSignal(b.volume_market, b.volume_fr, b.total_impressions, Number(period), b.volume_ch).value;
+              }
               else { va = Number(a.total_clicks); vb = Number(b.total_clicks); }
               return sortDir === "asc" ? va - vb : vb - va;
             });
@@ -884,12 +941,8 @@ export default function DashboardPage() {
             .filter(g => !search || g.query.toLowerCase().includes(search.toLowerCase()))
             .sort((a, b) => {
               let va = 0, vb = 0;
-              const volEst = (g: GainData) => {
-                const impr = Number(g.impressions_now) || 0;
-                const pos = Number(g.position_now) || 0;
-                const monthlyImpr = impr * (30 / 7);
-                return resolveVolume(g.volume_market, g.volume_fr);
-              };
+              const volEst = (g: GainData) =>
+                resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch).value;
               const oppEst = (g: GainData) => opportunityScore(volEst(g), Number(g.position_now) || 0);
               if (gainSortCol === "position_now") { va = Number(a.position_now); vb = Number(b.position_now); }
               else if (gainSortCol === "clicks_gain") { va = Number(a.clicks_gain); vb = Number(b.clicks_gain); }
@@ -899,6 +952,12 @@ export default function DashboardPage() {
               return gainSortDir === "asc" ? va - vb : vb - va;
             });
           const top10 = kws.filter(k => Number(k.avg_position) <= 10).length;
+          const keywordSourceVolumeCount = kws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1).length;
+          const keywordGscSignalCount = kws.filter(k => resolveVolumeSignal(k.volume_market, k.volume_fr, k.total_impressions, Number(period), k.volume_ch).kind === "gsc_estimate").length;
+          const gainsSourceVolumeCount = gainList.filter(g => resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) > 1).length;
+          const gainsGscSignalCount = gainList.filter(g => resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch).kind === "gsc_estimate").length;
+          const sourceVolumeCount = keywordSourceVolumeCount + gainsSourceVolumeCount;
+          const gscSignalCount = keywordGscSignalCount + gainsGscSignalCount;
 
           return (
             <div key={site.id} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -977,6 +1036,25 @@ export default function DashboardPage() {
                           {f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
                         </button>
                       ))}
+                    </div>
+                  )}
+
+                  {(tab === "keywords" || tab === "gains") && (
+                    <div className="px-4 py-2 border-t border-gray-800 bg-gray-950/40">
+                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                        <span className="px-2 py-1 rounded border border-green-500/25 bg-green-500/10 text-green-300">
+                          {sourceVolumeCount} volume(s) source
+                        </span>
+                        <span className="px-2 py-1 rounded border border-sky-500/25 bg-sky-500/10 text-sky-300">
+                          {gscSignalCount} signal(s) GSC
+                        </span>
+                        <span className="text-gray-400">
+                          Les volumes reels viennent de Keyword Planner/DataForSEO. Si absent, le dashboard affiche un signal GSC estime pour prioriser sans inventer un volume.
+                        </span>
+                        <Link href="/keyword-planner-import" className="text-blue-300 hover:text-blue-200 underline underline-offset-2">
+                          Importer FR/CH
+                        </Link>
+                      </div>
                     </div>
                   )}
                   {/* High Vol Discovery Panel */}
@@ -1129,7 +1207,7 @@ export default function DashboardPage() {
                                 <th className="text-right py-2 px-3 cursor-pointer select-none"
                                   onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir("desc"); } }}>
                                   <span className={`inline-flex items-center justify-end gap-1 ${active ? "text-white" : "hover:text-gray-300"}`}>
-                                    Volume source
+                                    Volume reel / signal
                                     <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
                                       <span className={active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}>▲</span>
                                       <span className={active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}>▼</span>
@@ -1192,9 +1270,15 @@ export default function DashboardPage() {
                               </td>
                               <td className="text-right py-2 px-3">
                                 {(() => {
-                                  const vol = resolveVolume(kw.volume_market, kw.volume_fr);
-                                  const { label, color } = volLabel(vol);
-                                  return <span className={`text-xs font-medium ${color}`}>{label}</span>;
+                                  const signal = resolveVolumeSignal(kw.volume_market, kw.volume_fr, kw.total_impressions, Number(period), kw.volume_ch);
+                                  const { label, color, title } = volumeSignalLabel(signal);
+                                  const badge = volumeSignalBadge(signal);
+                                  return (
+                                    <div className="inline-flex flex-col items-end gap-0.5" title={title}>
+                                      <span className={`text-xs font-medium ${color}`}>{label}</span>
+                                      <span className={`text-[9px] leading-none px-1.5 py-0.5 rounded border ${badge.className}`}>{badge.label}</span>
+                                    </div>
+                                  );
                                 })()}
                               </td>
                               <td className="py-2 px-5 text-xs text-gray-400">{solution(Number(kw.avg_position))}</td>
@@ -1253,10 +1337,10 @@ export default function DashboardPage() {
                               <span className={gainSortCol === "clicks_gain" ? "text-white" : "hover:text-gray-300"}>Clics +/- {gainSortCol === "clicks_gain" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
                             </th>
                             <th className="text-right py-2 px-3 cursor-pointer select-none"
-                              title="Volume importé depuis une source externe fiable. Vide si aucune source volume n'est disponible."
+                              title="Volume source si importe; sinon estimation mensuelle GSC basee sur les impressions."
                               onClick={() => { if (gainSortCol === "volume") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("volume"); setGainSortDir("desc"); } }}>
                               <span className={gainSortCol === "volume" ? "text-white" : "text-gray-400 hover:text-gray-300"}>
-                                Volume source {gainSortCol === "volume" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
+                                Volume reel / signal {gainSortCol === "volume" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
                               </span>
                             </th>
                             <th className="text-right py-2 px-3 cursor-pointer select-none"
@@ -1321,20 +1405,22 @@ export default function DashboardPage() {
                                 </td>
                                 <td className="text-right py-2 px-3">
                                   {(() => {
-                                    const impr = Number(g.impressions_now) || 0;
-                                    const pos = Number(g.position_now) || 0;
-                                    const vol = resolveVolume(g.volume_market, g.volume_fr);
-                                    if (vol <= 0) return <span className="text-gray-600 text-xs">—</span>;
-                                    const { label, color } = volLabel(vol);
-                                    return <span className={`text-xs font-semibold ${color}`}>{label}</span>;
+                                    const signal = resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch);
+                                    const { label, color, title } = volumeSignalLabel(signal);
+                                    const badge = volumeSignalBadge(signal);
+                                    return (
+                                      <div className="inline-flex flex-col items-end gap-0.5" title={title}>
+                                        <span className={`text-xs font-semibold ${color}`}>{label}</span>
+                                        <span className={`text-[9px] leading-none px-1.5 py-0.5 rounded border ${badge.className}`}>{badge.label}</span>
+                                      </div>
+                                    );
                                   })()}
                                 </td>
                                 <td className="text-right py-2 px-3">
                                   {(() => {
-                                    const impr = Number(g.impressions_now) || 0;
                                     const pos = Number(g.position_now) || 0;
                                     if (pos <= 0) return <span className="text-gray-600 text-xs">—</span>;
-                                    const monthlyVol = resolveVolume(g.volume_market, g.volume_fr);
+                                    const monthlyVol = resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch).value;
                                     const score = opportunityScore(monthlyVol, pos);
                                     const { label, color, emoji } = oppLabel(score);
                                     return <span className={`text-xs ${color}`} title={`Si tu passes top 3, tu gagnes ~${score} clics/mois`}>{emoji} {label}</span>;
@@ -1342,9 +1428,8 @@ export default function DashboardPage() {
                                 </td>
                                 <td className="py-2 px-3">
                                   {(() => {
-                                    const impr = Number(g.impressions_now) || 0;
                                     const pos = Number(g.position_now) || 0;
-                                    const monthlyVol = pos > 0 ? resolveVolume(g.volume_market, g.volume_fr) : 0;
+                                    const monthlyVol = pos > 0 ? resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch).value : 0;
                                     const action = recommendedAction(pos, monthlyVol);
                                     const btnColor = action.type === "push" ? "bg-orange-500/20 text-orange-300 border-orange-500/40 hover:bg-orange-500/30" :
                                                      action.type === "optimize" ? "bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30" :

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Upload, Loader2, FileText, AlertCircle, CheckCircle2 } from "lucide-react";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface SiteRow {
   id: number;
@@ -11,7 +12,10 @@ interface SiteRow {
 
 interface PreviewRow {
   keyword: string;
+  market: string;
   volume_market: number | null;
+  volume_fr: number | null;
+  volume_ch: number | null;
   competition: string | null;
   cpc_low: number | null;
   cpc_high: number | null;
@@ -32,6 +36,7 @@ interface ImportSummary {
 export default function KeywordPlannerImportPage(): React.ReactElement {
   const [sites, setSites] = useState<SiteRow[]>([]);
   const [siteId, setSiteId] = useState<string>("");
+  const [market, setMarket] = useState<string>("FR");
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<ImportSummary | null>(null);
@@ -57,6 +62,7 @@ export default function KeywordPlannerImportPage(): React.ReactElement {
     try {
       const form = new FormData();
       form.append("site_id", siteId);
+      form.append("market", market);
       form.append("file", file);
       const res = await fetch("/api/keyword-planner/import", { method: "POST", body: form });
       const json = (await res.json()) as ImportSummary | { error: string };
@@ -115,6 +121,23 @@ export default function KeywordPlannerImportPage(): React.ReactElement {
                 </option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-300 mb-1">Marché du CSV</label>
+            <select
+              value={market}
+              onChange={(e) => setMarket(e.target.value)}
+              className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm w-full"
+            >
+              <option value="FR">FR France</option>
+              <option value="CH">CH Suisse</option>
+              <option value="BE">BE Belgique</option>
+              <option value="CA">CA Canada</option>
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Pour un domaine .ch, importe un CSV Suisse en CH puis un CSV France en FR si tu veux les deux volumes.
+            </p>
           </div>
 
           <div>
@@ -197,8 +220,16 @@ export default function KeywordPlannerImportPage(): React.ReactElement {
                   <table className="w-full text-xs">
                     <thead className="bg-gray-800 text-gray-400">
                       <tr>
-                        <th className="px-2 py-2 text-left">Keyword</th>
-                        <th className="px-2 py-2 text-right">Volume</th>
+                        <th className="px-2 py-2 text-left">
+                          <span className="inline-flex items-center gap-2">
+                            Keyword
+                            <CopyKeywordsButton keywords={result.preview.map((r) => r.keyword)} className="h-6 w-6" />
+                          </span>
+                        </th>
+                        <th className="px-2 py-2 text-center">Marché</th>
+                        <th className="px-2 py-2 text-right">Vol FR</th>
+                        <th className="px-2 py-2 text-right">Vol CH</th>
+                        <th className="px-2 py-2 text-right">Vol marché</th>
                         <th className="px-2 py-2 text-center">Competition</th>
                         <th className="px-2 py-2 text-right">CPC low</th>
                         <th className="px-2 py-2 text-right">CPC high</th>
@@ -209,6 +240,13 @@ export default function KeywordPlannerImportPage(): React.ReactElement {
                       {result.preview.map((r, i) => (
                         <tr key={i}>
                           <td className="px-2 py-1.5 text-gray-100">{r.keyword}</td>
+                          <td className="px-2 py-1.5 text-center text-gray-300">{r.market}</td>
+                          <td className="px-2 py-1.5 text-right text-blue-300">
+                            {r.volume_fr?.toLocaleString() ?? "-"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right text-red-300">
+                            {r.volume_ch?.toLocaleString() ?? "-"}
+                          </td>
                           <td className="px-2 py-1.5 text-right text-yellow-300">
                             {r.volume_market?.toLocaleString() ?? "—"}
                           </td>

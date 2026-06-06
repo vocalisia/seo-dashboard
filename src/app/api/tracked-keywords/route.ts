@@ -13,6 +13,7 @@ interface KeywordRow {
   keyword: string;
   market: string | null;
   volume_fr: number | null;
+  volume_ch: number | null;
   volume_market: number | null;
   current_position: number | null;
   current_impressions: number | null;
@@ -38,29 +39,29 @@ export async function GET(req: NextRequest) {
   let rows: KeywordRow[];
   if (siteId && siteId !== "all") {
     rows = (await sql`
-      SELECT k.id, k.keyword, k.market, k.volume_fr, k.volume_market,
+      SELECT k.id, k.keyword, k.market, k.volume_fr, k.volume_ch, k.volume_market,
              k.current_position, k.current_impressions, k.current_clicks,
              k.site_id, s.name AS site_name, s.url AS site_url
       FROM tracked_keywords k
       JOIN sites s ON s.id = k.site_id
       WHERE k.is_active = TRUE
         AND k.site_id = ${parseInt(siteId, 10)}
-        AND COALESCE(k.volume_market, 0) >= ${minVolFilter}
+        AND COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) >= ${minVolFilter}
         AND COALESCE(k.current_position, 100) BETWEEN ${minPos} AND ${maxPos}
-      ORDER BY k.volume_market DESC NULLS LAST, k.current_position ASC NULLS LAST
+      ORDER BY COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) DESC, k.current_position ASC NULLS LAST
       LIMIT 500
     `) as KeywordRow[];
   } else {
     rows = (await sql`
-      SELECT k.id, k.keyword, k.market, k.volume_fr, k.volume_market,
+      SELECT k.id, k.keyword, k.market, k.volume_fr, k.volume_ch, k.volume_market,
              k.current_position, k.current_impressions, k.current_clicks,
              k.site_id, s.name AS site_name, s.url AS site_url
       FROM tracked_keywords k
       JOIN sites s ON s.id = k.site_id
       WHERE k.is_active = TRUE
-        AND COALESCE(k.volume_market, 0) >= ${minVolFilter}
+        AND COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) >= ${minVolFilter}
         AND COALESCE(k.current_position, 100) BETWEEN ${minPos} AND ${maxPos}
-      ORDER BY k.volume_market DESC NULLS LAST, k.current_position ASC NULLS LAST
+      ORDER BY COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) DESC, k.current_position ASC NULLS LAST
       LIMIT 500
     `) as KeywordRow[];
   }

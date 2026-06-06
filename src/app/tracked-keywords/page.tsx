@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Filter, TrendingUp, BarChart3 } from "lucide-react";
 import { Sparkline } from "@/components/Sparkline";
+import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 
 interface SiteRow {
   id: number;
@@ -16,6 +17,7 @@ interface KeywordRow {
   keyword: string;
   market: string | null;
   volume_fr: number | null;
+  volume_ch: number | null;
   volume_market: number | null;
   current_position: number | null;
   current_impressions: number | null;
@@ -31,6 +33,16 @@ function positionColor(pos: number | null): string {
   if (pos <= 10) return "text-yellow-400";
   if (pos <= 20) return "text-orange-400";
   return "text-red-400";
+}
+
+function toNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toNumber(value: unknown): number {
+  return toNumberOrNull(value) ?? 0;
 }
 
 function marketBadge(mkt: string | null): string {
@@ -109,9 +121,9 @@ export default function TrackedKeywordsPage() {
   }
 
   const totals = useMemo(() => {
-    const totalVol = keywords.reduce((a, k) => a + (k.volume_market || 0), 0);
-    const totalClicks = keywords.reduce((a, k) => a + (k.current_clicks || 0), 0);
-    const totalImpr = keywords.reduce((a, k) => a + (k.current_impressions || 0), 0);
+    const totalVol = keywords.reduce((a, k) => a + toNumber(k.volume_market ?? k.volume_ch ?? k.volume_fr), 0);
+    const totalClicks = keywords.reduce((a, k) => a + toNumber(k.current_clicks), 0);
+    const totalImpr = keywords.reduce((a, k) => a + toNumber(k.current_impressions), 0);
     return { totalVol, totalClicks, totalImpr };
   }, [keywords]);
 
@@ -207,11 +219,17 @@ export default function TrackedKeywordsPage() {
                 <tr>
                   <th className="px-4 py-3 text-left">Site</th>
                   <th className="px-2 py-3 text-center">Mkt</th>
-                  <th className="px-4 py-3 text-left">Keyword</th>
+                  <th className="px-4 py-3 text-left">
+                    <span className="inline-flex items-center gap-2">
+                      Keyword
+                      <CopyKeywordsButton keywords={keywords.map((k) => k.keyword)} />
+                    </span>
+                  </th>
                   <th className="px-3 py-3 text-right">Position</th>
                   <th className="px-3 py-3 text-right">Impr</th>
                   <th className="px-3 py-3 text-right">Clicks</th>
                   <th className="px-3 py-3 text-right">Vol FR</th>
+                  <th className="px-3 py-3 text-right">Vol CH</th>
                   <th className="px-3 py-3 text-right">Vol Market</th>
                   <th className="px-3 py-3 text-left">Trend 12m</th>
                 </tr>
@@ -226,16 +244,19 @@ export default function TrackedKeywordsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-2 text-gray-100">{k.keyword}</td>
-                    <td className={`px-3 py-2 text-right ${positionColor(k.current_position)}`}>
-                      {k.current_position?.toFixed(1) || "-"}
+                    <td className={`px-3 py-2 text-right ${positionColor(toNumberOrNull(k.current_position))}`}>
+                      {toNumberOrNull(k.current_position) !== null ? toNumberOrNull(k.current_position)?.toFixed(1) : "-"}
                     </td>
-                    <td className="px-3 py-2 text-right text-gray-400">{k.current_impressions ?? 0}</td>
-                    <td className="px-3 py-2 text-right text-gray-200">{k.current_clicks ?? 0}</td>
+                    <td className="px-3 py-2 text-right text-gray-400">{toNumber(k.current_impressions).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right text-gray-200">{toNumber(k.current_clicks).toLocaleString()}</td>
                     <td className="px-3 py-2 text-right text-gray-400">
-                      {k.volume_fr ? k.volume_fr.toLocaleString() : "-"}
+                      {toNumberOrNull(k.volume_fr) !== null ? toNumber(k.volume_fr).toLocaleString() : "-"}
+                    </td>
+                    <td className="px-3 py-2 text-right text-red-300">
+                      {toNumberOrNull(k.volume_ch) !== null ? toNumber(k.volume_ch).toLocaleString() : "-"}
                     </td>
                     <td className="px-3 py-2 text-right text-yellow-300 font-medium">
-                      {k.volume_market ? k.volume_market.toLocaleString() : "-"}
+                      {toNumberOrNull(k.volume_market ?? k.volume_ch ?? k.volume_fr) !== null ? toNumber(k.volume_market ?? k.volume_ch ?? k.volume_fr).toLocaleString() : "-"}
                     </td>
                     <td className="px-3 py-2">
                       {(() => {

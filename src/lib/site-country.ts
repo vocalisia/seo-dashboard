@@ -42,3 +42,20 @@ export function siteCountryCode(siteUrl: string | null | undefined): string {
 export function siteCountryFilter(siteUrl: string | null | undefined): string {
   return siteCountryCode(siteUrl);
 }
+
+/**
+ * Keyword-volume markets to keep for a site.
+ * .ch projects need Swiss demand plus French demand because French keywords can
+ * exist in both markets with very different volumes.
+ */
+export function siteKeywordMarkets(siteUrl: string | null | undefined): string[] {
+  const country = siteCountryCode(siteUrl);
+  if (country === "CHE") return ["CH", "FR"];
+  if (country === "BEL") return ["BE", "FR"];
+  if (country === "CAN") return ["CA", "FR"];
+  return ["FR"];
+}
+
+export function primaryKeywordMarket(siteUrl: string | null | undefined): string {
+  return siteKeywordMarkets(siteUrl)[0] ?? "FR";
+}

@@ -44,6 +44,7 @@ export async function GET(req: NextRequest) {
         (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) AS position,
         MAX(tk.volume_market)::int AS volume_market,
         MAX(tk.volume_fr)::int AS volume_fr,
+        MAX(tk.volume_ch)::int AS volume_ch,
         MAX(tk.volume_source)::varchar AS volume_source
       FROM search_console_query_data scq
       JOIN sites s ON s.id = scq.site_id
@@ -68,6 +69,7 @@ export async function GET(req: NextRequest) {
         (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) AS position,
         MAX(tk.volume_market)::int AS volume_market,
         MAX(tk.volume_fr)::int AS volume_fr,
+        MAX(tk.volume_ch)::int AS volume_ch,
         MAX(tk.volume_source)::varchar AS volume_source
       FROM search_console_query_data scq
       LEFT JOIN tracked_keywords tk
@@ -84,10 +86,10 @@ export async function GET(req: NextRequest) {
         AND (SUM(scq.impressions * scq.position)::float / NULLIF(SUM(scq.impressions), 0)) BETWEEN ${posMin} AND ${posMax}
       ORDER BY SUM(scq.clicks) DESC
       LIMIT 500
-    `) as { keyword: string; clicks: number; impressions: number; position: number; site_name?: string; volume_market?: number | null; volume_fr?: number | null; volume_source?: string | null }[];
+    `) as { keyword: string; clicks: number; impressions: number; position: number; site_name?: string; volume_market?: number | null; volume_fr?: number | null; volume_ch?: number | null; volume_source?: string | null }[];
 
     const enriched = rows.map((r) => {
-      const rawVolume = Number(r.volume_market ?? r.volume_fr ?? 0);
+      const rawVolume = Number(r.volume_market ?? r.volume_ch ?? r.volume_fr ?? 0);
       const source = r.volume_source ?? null;
       const volume = source?.includes("niche_skip") || rawVolume <= 1 ? 0 : rawVolume;
       const difficulty =

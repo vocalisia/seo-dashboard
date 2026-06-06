@@ -6,7 +6,7 @@ import { getSQL, initDB } from "@/lib/db";
 import { createHash } from "crypto";
 import { askAICached } from "@/lib/ai-cache";
 import { buildOpportunityCandidates, type OpportunityCandidate, type OpportunityKeywordRow } from "@/lib/opportunity-engine";
-import { buildExternalSignalRows, fetchGoogleSerpSnapshot } from "@/lib/opportunity-sources";
+import { buildExternalSignalRows, COUNTRY_PROFILES, fetchGoogleSerpSnapshot } from "@/lib/opportunity-sources";
 import { requireApiSession } from "@/lib/api-auth";
 import {
   buildLaunchPlan,
@@ -108,6 +108,83 @@ const GLOBAL_DISCOVERY_SEEDS = [
   "creator economy tool",
   "senior wellness",
 ];
+
+const CATEGORY_DISCOVERY_SEEDS: Record<string, string[]> = {
+  "e-commerce": [
+    "best selling product",
+    "amazon rising product",
+    "eco product",
+    "home gadget",
+    "beauty device",
+    "pet accessory",
+  ],
+  saas: [
+    "ai automation software",
+    "small business software",
+    "workflow tool",
+    "crm automation",
+    "analytics dashboard",
+    "no code app",
+  ],
+  blog: [
+    "how to guide",
+    "beginner tutorial",
+    "question answer niche",
+    "comparison guide",
+    "practical advice",
+  ],
+  magazine: [
+    "industry news",
+    "trend report",
+    "consumer guide",
+    "market analysis",
+    "expert review",
+  ],
+  directory: [
+    "best agencies",
+    "service providers",
+    "local directory",
+    "compare providers",
+    "find expert",
+  ],
+  course: [
+    "online course",
+    "certification",
+    "training program",
+    "coaching niche",
+    "learn skills",
+  ],
+  marketplace: [
+    "marketplace platform",
+    "freelance marketplace",
+    "supplier marketplace",
+    "two sided platform",
+  ],
+};
+
+const COUNTRY_TO_ISO3: Record<string, string> = {
+  FR: "FRA",
+  CH: "CHE",
+  BE: "BEL",
+  CA: "CAN",
+  GB: "GBR",
+  DE: "DEU",
+  ES: "ESP",
+  IT: "ITA",
+  BR: "BRA",
+  JP: "JPN",
+  GLOBAL: "USA",
+};
+
+const CATEGORY_DEFAULTS: Record<string, { site_type: string; monetization: string }> = {
+  "e-commerce": { site_type: "e-commerce", monetization: "e-commerce" },
+  saas: { site_type: "saas", monetization: "subscription" },
+  blog: { site_type: "blog", monetization: "ads" },
+  magazine: { site_type: "magazine", monetization: "ads" },
+  directory: { site_type: "directory", monetization: "lead-gen" },
+  course: { site_type: "blog", monetization: "affiliate" },
+  marketplace: { site_type: "directory", monetization: "lead-gen" },
+};
 
 function toNumber(value: string | number | null | undefined): number {
   if (typeof value === "number") return value;
@@ -326,7 +403,8 @@ function isHighQualityOpportunity(opp: StoredOpportunity): boolean {
 
 async function enrichCandidatesWithAI(
   candidates: OpportunityCandidate[],
-  preferredCategories: string[] = []
+  preferredCategories: string[] = [],
+  contextKey = "global"
 ): Promise<StoredOpportunity[] | null> {
   const shortlist = candidates.map((candidate, index) => ({
     id: index + 1,
@@ -415,7 +493,7 @@ Tout le contenu texte doit être en FRANÇAIS si les signaux sont francophones, 
   const today = new Date().toISOString().slice(0, 10);
   const shortlistHash = createHash("sha256").update(JSON.stringify(shortlist.slice(0, 5))).digest("hex").slice(0, 16);
   const { reply: aiResponse } = await askAICached({
-    cacheKey: `opp-scan:${today}:${shortlistHash}:${preferredCategories.join(",")}`,
+    cacheKey: `opp-scan:${today}:${contextKey}:${shortlistHash}:${preferredCategories.join(",")}`,
     messages: [{ role: "user", content: prompt }],
     model: "search",
     maxTokens: 3200,
@@ -426,6 +504,39 @@ Tout le contenu texte doit être en FRANÇAIS si les signaux sont francophones, 
   }
   const parsed = JSON.parse(cleaned) as { opportunities?: StoredOpportunity[] };
   return parsed.opportunities?.length ? parsed.opportunities : null;
+}
+
+function applyRequestedMarketAndCategory(
+  opp: StoredOpportunity,
+  requestedCountries: string[],
+  requestedCategories: string[]
+): StoredOpportunity {
+  const selectedCountries = requestedCountries.includes("GLOBAL")
+    ? ["FRA", "CHE", "BEL"]
+    : requestedCountries.map((country) => COUNTRY_TO_ISO3[country] ?? country).slice(0, 5);
+  const selectedLanguages = requestedCountries.includes("GLOBAL")
+    ? ["fr", "en"]
+    : Array.from(new Set(requestedCountries.map((country) => COUNTRY_PROFILES[country]?.hl ?? "fr"))).slice(0, 3);
+
+  if (requestedCategories.length === 0) {
+    return {
+      ...opp,
+      target_countries: selectedCountries.length > 0 ? selectedCountries : opp.target_countries,
+      target_languages: selectedLanguages.length > 0 ? selectedLanguages : opp.target_languages,
+    };
+  }
+
+  const primary = requestedCategories[0]!;
+  const defaults = CATEGORY_DEFAULTS[primary] ?? { site_type: primary, monetization: opp.monetization };
+
+  return {
+    ...opp,
+    site_type: defaults.site_type,
+    monetization: defaults.monetization,
+    target_countries: selectedCountries.length > 0 ? selectedCountries : opp.target_countries,
+    target_languages: selectedLanguages.length > 0 ? selectedLanguages : opp.target_languages,
+    signal_source: `${opp.signal_source ?? "gsc"}:cat-${primary}`,
+  };
 }
 
 async function enrichCandidatesWithFreeSerpContext(candidates: OpportunityCandidate[]): Promise<OpportunityCandidate[]> {
@@ -648,6 +759,11 @@ export async function POST(request: NextRequest) {
       requestedMode = "B";
     }
     const modeConfig = buildModeConfig(requestedMode);
+    const scanContextKey = [
+      requestedMode,
+      requestedCountries.slice().sort().join("-"),
+      requestedCategories.slice().sort().join("-") || "all",
+    ].join(":");
 
     await initDB();
 
@@ -705,12 +821,18 @@ export async function POST(request: NextRequest) {
       .sort((a, b) => b.impressions_30d - a.impressions_30d)
       .slice(0, 12)
       .map((row) => row.query);
+    const countrySeeds = requestedCountries
+      .flatMap((country) => COUNTRY_PROFILES[country]?.trendingExtraSeeds ?? [])
+      .filter(Boolean);
+    const categorySeeds = requestedCategories
+      .flatMap((category) => CATEGORY_DISCOVERY_SEEDS[category] ?? [])
+      .filter(Boolean);
     const externalSeedPool =
       modeConfig.externalSeedMode === "portfolio"
-        ? portfolioSeeds
+        ? [...categorySeeds, ...countrySeeds, ...portfolioSeeds]
         : modeConfig.externalSeedMode === "global"
-          ? GLOBAL_DISCOVERY_SEEDS
-          : [...portfolioSeeds.slice(0, 6), ...GLOBAL_DISCOVERY_SEEDS.slice(0, 6)];
+          ? [...categorySeeds, ...countrySeeds, ...GLOBAL_DISCOVERY_SEEDS]
+          : [...categorySeeds, ...countrySeeds, ...portfolioSeeds.slice(0, 6), ...GLOBAL_DISCOVERY_SEEDS.slice(0, 6)];
     const safeExternalSeedPool = externalSeedPool.length
       ? externalSeedPool
       : PORTFOLIO_HINTS.slice(0, 8);
@@ -733,12 +855,15 @@ export async function POST(request: NextRequest) {
         externalRows.push(row);
       }
     }
+    const shouldPrioritizeLocalized = !requestedCountries.includes("GLOBAL") || requestedCategories.length > 0;
     const mergedRows =
       modeConfig.keywordRowsMode === "portfolio"
         ? (keywordRows.length > 0 ? keywordRows : externalRows)
         : modeConfig.keywordRowsMode === "external-only"
           ? externalRows
-          : [...keywordRows, ...externalRows];
+          : shouldPrioritizeLocalized
+            ? [...externalRows, ...keywordRows.slice(0, 120)]
+            : [...keywordRows, ...externalRows];
 
     const candidates = await enrichCandidatesWithFreeSerpContext(
       buildOpportunityCandidates(mergedRows, {
@@ -769,7 +894,7 @@ export async function POST(request: NextRequest) {
       });
 
     try {
-      const enriched = await enrichCandidatesWithAI(candidates, requestedCategories);
+      const enriched = await enrichCandidatesWithAI(candidates, requestedCategories, scanContextKey);
       if (enriched?.length) {
         const aiOpps = enriched
           .slice(0, candidates.length)
@@ -793,6 +918,14 @@ export async function POST(request: NextRequest) {
       console.error("Opportunity enrichment failed:", err);
       opportunities = opportunities.filter((opp) => !looksLikeRedditFragment(opp.niche));
     }
+
+    opportunities = opportunities.map((opp) => {
+      const scoped = applyRequestedMarketAndCategory(opp, requestedCountries, requestedCategories);
+      return {
+        ...scoped,
+        signal_source: `${scoped.signal_source ?? "gsc"}:scan-${scanContextKey}`,
+      };
+    });
 
     opportunities = opportunities.map((opp, index) => {
       if ((opp.competitors ?? []).length > 0) return opp;
@@ -910,6 +1043,7 @@ export async function POST(request: NextRequest) {
     const persistedRows = await sql`
       SELECT *
       FROM market_opportunities
+      WHERE signal_source LIKE ${`%:scan-${scanContextKey}%`}
       ORDER BY confidence_score DESC, created_at DESC
       LIMIT 100
     `;
