@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getSQL } from "@/lib/db";
+import { ensureSchemaOnce, getSQL } from "@/lib/db";
 
 function classifyIntent(keyword: string): string {
   const kw = keyword.toLowerCase();
@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  await ensureSchemaOnce();
   const sql = getSQL();
   const isAll = siteId === "all";
 

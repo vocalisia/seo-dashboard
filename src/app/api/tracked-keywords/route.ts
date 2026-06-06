@@ -4,7 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getSQL } from "@/lib/db";
+import { ensureSchemaOnce, getSQL } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +24,7 @@ interface KeywordRow {
 }
 
 export async function GET(req: NextRequest) {
+  await ensureSchemaOnce();
   const sql = getSQL();
   const { searchParams } = new URL(req.url);
   const siteId = searchParams.get("siteId");

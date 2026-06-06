@@ -1,4 +1,4 @@
-import { getSQL } from "@/lib/db";
+import { ensureSchemaOnce, getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { GSC_LAG_DAYS } from "@/lib/gsc-window";
 import { siteCountryCode } from "@/lib/site-country";
@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    await ensureSchemaOnce();
     const sql = getSQL();
 
     // Resolve filter: explicit country > language mapping > null (all countries).

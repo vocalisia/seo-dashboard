@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getSQL } from "@/lib/db";
+import { ensureSchemaOnce, getSQL } from "@/lib/db";
 import { requireApiSession } from "@/lib/api-auth";
 
 /**
@@ -32,6 +32,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "site_id required" }, { status: 400 });
   }
 
+  await ensureSchemaOnce();
   const sql = getSQL();
   const results: DiscoveredKw[] = [];
 
@@ -80,12 +81,12 @@ export async function GET(req: NextRequest) {
   // 2. Tracked keywords with real Google KP volumes (reference for comparison)
   const tkRows = (await sql`
     SELECT keyword,
-      COALESCE(volume_market, volume_fr, 0) AS vol
+      COALESCE(volume_market, volume_ch, volume_fr, 0) AS vol
     FROM tracked_keywords
     WHERE site_id = ${siteId} AND is_active = true
-      AND COALESCE(volume_market, volume_fr, 0) >= 100
+      AND COALESCE(volume_market, volume_ch, volume_fr, 0) >= 100
       AND volume_source LIKE 'google_kp_real%'
-    ORDER BY COALESCE(volume_market, volume_fr, 0) DESC
+    ORDER BY COALESCE(volume_market, volume_ch, volume_fr, 0) DESC
     LIMIT 20
   `) as { keyword: string; vol: number }[];
 
@@ -134,6 +135,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, added: 0 });
   }
 
+  await ensureSchemaOnce();
   const sql = getSQL();
 
   const siteRows = (await sql`SELECT url FROM sites WHERE id = ${siteId} LIMIT 1`) as { url: string }[];

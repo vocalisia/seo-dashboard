@@ -8,6 +8,16 @@ export function getSQL() {
   return neon(process.env.DATABASE_URL!);
 }
 
+let schemaReady: Promise<void> | null = null;
+
+export function ensureSchemaOnce(): Promise<void> {
+  schemaReady ??= ensureSchema().catch((error) => {
+    schemaReady = null;
+    throw error;
+  });
+  return schemaReady;
+}
+
 export async function initDB() {
   const sql = getSQL();
 
