@@ -20,6 +20,7 @@ interface QueryData {
   avg_ctr: number; avg_position: number; first_seen?: string | null;
   // From tracked_keywords JOIN
   volume_market?: number | null; volume_fr?: number | null; volume_ch?: number | null; market?: string | null; volume_source?: string | null;
+  row_source?: "current" | "recent_30d" | "tracked";
 }
 
 interface GainData {
@@ -65,8 +66,8 @@ interface AnalyticsDay {
 }
 
 // Prefer DB-stored real volume (DataForSEO / Ahrefs / Keyword Planner via sync).
-// When it is missing, use a clearly labeled GSC estimate so new keywords still
-// get a sortable demand signal.
+// GSC impressions are a visibility signal, not a market volume: do not use them
+// to rank opportunity or trigger action recommendations.
 function resolveSourceVolume(
   volMarket: number | null | undefined,
   volFr: number | null | undefined,
@@ -91,51 +92,32 @@ function volLabel(vol: number): { label: string; color: string } {
 
 type VolumeSignal = {
   value: number;
-  kind: "source" | "gsc_estimate" | "none";
+  kind: "source" | "none";
 };
-
-function estimateMonthlyFromGsc(impressions: number | null | undefined, periodDays: number): number {
-  const impr = Number(impressions ?? 0);
-  const days = Number(periodDays) > 0 ? Number(periodDays) : 7;
-  if (!Number.isFinite(impr) || impr <= 0) return 0;
-  return Math.max(1, Math.round(impr * (30 / days)));
-}
 
 function resolveVolumeSignal(
   volMarket: number | null | undefined,
   volFr: number | null | undefined,
-  impressions: number | null | undefined,
-  periodDays: number,
+  _impressions: number | null | undefined,
+  _periodDays: number,
   volCh?: number | null | undefined,
 ): VolumeSignal {
   const source = resolveSourceVolume(volMarket, volFr, volCh);
   if (source > 1) return { value: source, kind: "source" };
-  const estimate = estimateMonthlyFromGsc(impressions, periodDays);
-  if (estimate > 1) return { value: estimate, kind: "gsc_estimate" };
   return { value: 0, kind: "none" };
 }
 
 function volumeSignalLabel(signal: VolumeSignal): { label: string; color: string; title: string } {
   const base = volLabel(signal.value);
-  if (signal.kind === "gsc_estimate" && signal.value > 1) {
-    return {
-      label: base.label.replace(signal.value.toLocaleString(), `~${signal.value.toLocaleString()} GSC`),
-      color: base.color === "text-gray-400" ? "text-sky-300" : base.color,
-      title: "Estimation mensuelle basee sur les impressions Google Search Console de la periode.",
-    };
-  }
   if (signal.kind === "source") {
     return { ...base, title: "Volume mensuel importe depuis une source externe." };
   }
-  return { ...base, title: "Aucun volume source ni estimation GSC disponible." };
+  return { ...base, title: "Aucun volume source disponible." };
 }
 
 function volumeSignalBadge(signal: VolumeSignal): { label: string; className: string } {
   if (signal.kind === "source") {
     return { label: "source importee", className: "bg-green-500/15 text-green-300 border-green-500/30" };
-  }
-  if (signal.kind === "gsc_estimate") {
-    return { label: "GSC estime", className: "bg-sky-500/15 text-sky-300 border-sky-500/30" };
   }
   return { label: "volume manquant", className: "bg-gray-700/40 text-gray-400 border-gray-600/40" };
 }
@@ -371,7 +353,7 @@ export default function DashboardPage() {
     setKwLoadingIds(prev => new Set(prev).add(siteId));
     try {
       const langQs = langFilter ? `&language=${langFilter}` : "";
-      const res = await timedFetch("Mots-cles site", `/api/search-console?siteId=${siteId}&type=queries&days=${p}&limit=300${langQs}`);
+      const res = await timedFetch("Mots-cles site", `/api/search-console?siteId=${siteId}&type=queries&days=${p}&limit=300&strict=1${langQs}`);
       const data = await res.json();
       if (Array.isArray(data)) setKeywords(prev => ({ ...prev, [key]: data }));
     } catch { /* ignore */ }
@@ -410,7 +392,7 @@ export default function DashboardPage() {
     for (const expandedId of expandedIds) {
       setKwLoadingIds(prev => new Set(prev).add(expandedId));
       try {
-        const res = await timedFetch("Mots-cles filtre", `/api/search-console?siteId=${expandedId}&type=queries&days=${p}&limit=300${langQs}`);
+        const res = await timedFetch("Mots-cles filtre", `/api/search-console?siteId=${expandedId}&type=queries&days=${p}&limit=300&strict=1${langQs}`);
         const data = await res.json();
         if (Array.isArray(data)) {
           const key = `${expandedId}-${p}-${lang || "all"}`;
@@ -495,8 +477,8 @@ export default function DashboardPage() {
       if (d.success && d.keywords) {
         const untracked = d.keywords.filter(k => !k.already_tracked).slice(0, 40);
         setHighVolKws(untracked);
-        // Auto-select all by default so user can see what will be added
-        setHighVolSelected(new Set(untracked.map(k => k.keyword)));
+        // Keep discovery read-only by default. The user chooses what to track.
+        setHighVolSelected(new Set());
       }
     } catch { /* ignore */ }
     setHighVolPanelLoading(false);
@@ -931,8 +913,8 @@ export default function DashboardPage() {
               else if (sortCol === "impressions") { va = Number(a.total_impressions); vb = Number(b.total_impressions); }
               else if (sortCol === "ctr") { va = Number(a.avg_ctr); vb = Number(b.avg_ctr); }
               else if (sortCol === "volume") {
-                va = resolveVolumeSignal(a.volume_market, a.volume_fr, a.total_impressions, Number(period), a.volume_ch).value;
-                vb = resolveVolumeSignal(b.volume_market, b.volume_fr, b.total_impressions, Number(period), b.volume_ch).value;
+                va = resolveSourceVolume(a.volume_market, a.volume_fr, a.volume_ch);
+                vb = resolveSourceVolume(b.volume_market, b.volume_fr, b.volume_ch);
               }
               else { va = Number(a.total_clicks); vb = Number(b.total_clicks); }
               return sortDir === "asc" ? va - vb : vb - va;
@@ -941,23 +923,19 @@ export default function DashboardPage() {
             .filter(g => !search || g.query.toLowerCase().includes(search.toLowerCase()))
             .sort((a, b) => {
               let va = 0, vb = 0;
-              const volEst = (g: GainData) =>
-                resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch).value;
-              const oppEst = (g: GainData) => opportunityScore(volEst(g), Number(g.position_now) || 0);
+              const sourceVol = (g: GainData) => resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch);
+              const oppEst = (g: GainData) => opportunityScore(sourceVol(g), Number(g.position_now) || 0);
               if (gainSortCol === "position_now") { va = Number(a.position_now); vb = Number(b.position_now); }
               else if (gainSortCol === "clicks_gain") { va = Number(a.clicks_gain); vb = Number(b.clicks_gain); }
-              else if (gainSortCol === "volume") { va = volEst(a); vb = volEst(b); }
+              else if (gainSortCol === "volume") { va = sourceVol(a); vb = sourceVol(b); }
               else if (gainSortCol === "opportunity") { va = oppEst(a); vb = oppEst(b); }
               else { va = Number(a.gain); vb = Number(b.gain); }
               return gainSortDir === "asc" ? va - vb : vb - va;
             });
           const top10 = kws.filter(k => Number(k.avg_position) <= 10).length;
           const keywordSourceVolumeCount = kws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1).length;
-          const keywordGscSignalCount = kws.filter(k => resolveVolumeSignal(k.volume_market, k.volume_fr, k.total_impressions, Number(period), k.volume_ch).kind === "gsc_estimate").length;
           const gainsSourceVolumeCount = gainList.filter(g => resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) > 1).length;
-          const gainsGscSignalCount = gainList.filter(g => resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch).kind === "gsc_estimate").length;
           const sourceVolumeCount = keywordSourceVolumeCount + gainsSourceVolumeCount;
-          const gscSignalCount = keywordGscSignalCount + gainsGscSignalCount;
 
           return (
             <div key={site.id} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -1045,11 +1023,8 @@ export default function DashboardPage() {
                         <span className="px-2 py-1 rounded border border-green-500/25 bg-green-500/10 text-green-300">
                           {sourceVolumeCount} volume(s) source
                         </span>
-                        <span className="px-2 py-1 rounded border border-sky-500/25 bg-sky-500/10 text-sky-300">
-                          {gscSignalCount} signal(s) GSC
-                        </span>
                         <span className="text-gray-400">
-                          Les volumes reels viennent de Keyword Planner/DataForSEO. Si absent, le dashboard affiche un signal GSC estime pour prioriser sans inventer un volume.
+                          Liste stricte GSC: vrais mots-cles positionnes, vrais clics/impressions, volumes source uniquement.
                         </span>
                         <Link href="/keyword-planner-import" className="text-blue-300 hover:text-blue-200 underline underline-offset-2">
                           Importer FR/CH
@@ -1207,7 +1182,7 @@ export default function DashboardPage() {
                                 <th className="text-right py-2 px-3 cursor-pointer select-none"
                                   onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir("desc"); } }}>
                                   <span className={`inline-flex items-center justify-end gap-1 ${active ? "text-white" : "hover:text-gray-300"}`}>
-                                    Volume reel / signal
+                                    Volume source
                                     <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
                                       <span className={active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}>▲</span>
                                       <span className={active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}>▼</span>
@@ -1337,10 +1312,10 @@ export default function DashboardPage() {
                               <span className={gainSortCol === "clicks_gain" ? "text-white" : "hover:text-gray-300"}>Clics +/- {gainSortCol === "clicks_gain" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
                             </th>
                             <th className="text-right py-2 px-3 cursor-pointer select-none"
-                              title="Volume source si importe; sinon estimation mensuelle GSC basee sur les impressions."
+                              title="Tri sur volume source uniquement. Le signal GSC reste informatif."
                               onClick={() => { if (gainSortCol === "volume") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("volume"); setGainSortDir("desc"); } }}>
                               <span className={gainSortCol === "volume" ? "text-white" : "text-gray-400 hover:text-gray-300"}>
-                                Volume reel / signal {gainSortCol === "volume" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
+                                Volume source {gainSortCol === "volume" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
                               </span>
                             </th>
                             <th className="text-right py-2 px-3 cursor-pointer select-none"
@@ -1420,7 +1395,10 @@ export default function DashboardPage() {
                                   {(() => {
                                     const pos = Number(g.position_now) || 0;
                                     if (pos <= 0) return <span className="text-gray-600 text-xs">—</span>;
-                                    const monthlyVol = resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch).value;
+                                    const monthlyVol = resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch);
+                                    if (monthlyVol <= 1) {
+                                      return <span className="text-gray-600 text-xs" title="Importe un volume source pour calculer l'opportunite">—</span>;
+                                    }
                                     const score = opportunityScore(monthlyVol, pos);
                                     const { label, color, emoji } = oppLabel(score);
                                     return <span className={`text-xs ${color}`} title={`Si tu passes top 3, tu gagnes ~${score} clics/mois`}>{emoji} {label}</span>;
@@ -1429,7 +1407,7 @@ export default function DashboardPage() {
                                 <td className="py-2 px-3">
                                   {(() => {
                                     const pos = Number(g.position_now) || 0;
-                                    const monthlyVol = pos > 0 ? resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch).value : 0;
+                                    const monthlyVol = pos > 0 ? resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) : 0;
                                     const action = recommendedAction(pos, monthlyVol);
                                     const btnColor = action.type === "push" ? "bg-orange-500/20 text-orange-300 border-orange-500/40 hover:bg-orange-500/30" :
                                                      action.type === "optimize" ? "bg-blue-500/20 text-blue-300 border-blue-500/40 hover:bg-blue-500/30" :

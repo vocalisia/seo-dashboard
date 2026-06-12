@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
 
-// Language → target countries (ISO-3)
+// Language -> target countries (ISO-3)
 const LANG_COUNTRIES: Record<string, string[]> = {
   fr: ["FRA","BEL","CHE","LUX","MCO","CAN"],
   en: ["GBR","USA","IRL","AUS","NZL","CAN"],
@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
   const limit = parseInt(request.nextUrl.searchParams.get("limit") || "200", 10);
   const country = request.nextUrl.searchParams.get("country"); // ISO-3 or null
   const language = request.nextUrl.searchParams.get("language"); // fr/en/de/... or null
+  const strictPositioned = request.nextUrl.searchParams.get("strict") === "1";
 
   if (!siteId) return NextResponse.json({ error: "siteId required" }, { status: 400 });
 
@@ -62,7 +63,7 @@ export async function GET(request: NextRequest) {
 
     if (type === "queries") {
       // Bug B fix: use query-level position from search_console_query_data (no page split,
-      // matches what GSC UI displays). search_console_data is page-level → SUM(imp×pos)/
+      // matches what GSC UI displays). search_console_data is page-level -> SUM(imp*pos)/
       // SUM(imp) is impressions-weighted across pages and gets dragged down by deep pages.
       // Fall back to page-level aggregation if query-level row not yet synced.
       // ALWAYS include tracked_keywords even if 0 impressions in the period.
@@ -82,7 +83,8 @@ export async function GET(request: NextRequest) {
                 tk.volume_fr,
                 tk.volume_ch,
                 tk.market,
-                tk.volume_source
+                tk.volume_source,
+                'current'::varchar AS row_source
               FROM (
                 SELECT query,
                   SUM(clicks) as total_clicks,
@@ -128,7 +130,8 @@ export async function GET(request: NextRequest) {
                 AVG(position) as avg_position,
                 AVG(position) AS page_weighted_position,
                 NULL AS first_seen,
-                NULL::int AS volume_market, NULL::int AS volume_fr, NULL::int AS volume_ch, NULL::varchar AS market, NULL::varchar AS volume_source
+                NULL::int AS volume_market, NULL::int AS volume_fr, NULL::int AS volume_ch, NULL::varchar AS market, NULL::varchar AS volume_source,
+                'recent_30d'::varchar AS row_source
               FROM search_console_data d
               WHERE site_id = ${id}
                 AND date >= (CURRENT_DATE - 30)::date
@@ -149,7 +152,8 @@ export async function GET(request: NextRequest) {
                 NULLIF(tk.current_position::float8, 0) AS avg_position,
                 NULLIF(tk.current_position::float8, 0) AS page_weighted_position,
                 NULL::date AS first_seen,
-                tk.volume_market::int, tk.volume_fr::int, tk.volume_ch::int, tk.market::varchar, tk.volume_source::varchar
+                tk.volume_market::int, tk.volume_fr::int, tk.volume_ch::int, tk.market::varchar, tk.volume_source::varchar,
+                'tracked'::varchar AS row_source
               FROM tracked_keywords tk
               WHERE tk.site_id = ${id} AND tk.is_active = TRUE
                 AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(tk.keyword))
@@ -174,7 +178,8 @@ export async function GET(request: NextRequest) {
               tk.volume_fr,
               tk.volume_ch,
               tk.market,
-              tk.volume_source
+              tk.volume_source,
+              'current'::varchar AS row_source
             FROM (
               SELECT query,
                 SUM(clicks) as total_clicks,
@@ -216,7 +221,8 @@ export async function GET(request: NextRequest) {
             const gsc30 = (await sql`
               SELECT query, SUM(clicks) AS total_clicks, SUM(impressions) AS total_impressions,
                 AVG(ctr) AS avg_ctr, AVG(position) AS avg_position, AVG(position) AS page_weighted_position,
-                NULL AS first_seen, NULL::int AS volume_market, NULL::int AS volume_fr, NULL::int AS volume_ch, NULL::varchar AS market, NULL::varchar AS volume_source
+                NULL AS first_seen, NULL::int AS volume_market, NULL::int AS volume_fr, NULL::int AS volume_ch, NULL::varchar AS market, NULL::varchar AS volume_source,
+                'recent_30d'::varchar AS row_source
               FROM search_console_data
               WHERE site_id=${id} AND date >= (CURRENT_DATE-30)::date
                 AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
@@ -229,7 +235,8 @@ export async function GET(request: NextRequest) {
                 0::float8 AS avg_ctr,
                 NULLIF(current_position::float8, 0) AS avg_position,
                 NULLIF(current_position::float8, 0) AS page_weighted_position,
-                NULL::date AS first_seen, volume_market::int, volume_fr::int, volume_ch::int, market::varchar, volume_source::varchar
+                NULL::date AS first_seen, volume_market::int, volume_fr::int, volume_ch::int, market::varchar, volume_source::varchar,
+                'tracked'::varchar AS row_source
               FROM tracked_keywords WHERE site_id=${id} AND is_active=true
             `) as Record<string, unknown>[];
             const extra = [...gsc30, ...trackedOnly]
@@ -245,62 +252,77 @@ export async function GET(request: NextRequest) {
               (Number(b.total_impressions) || 0) - (Number(a.total_impressions) || 0)
             );
           });
-      return NextResponse.json(rows);
+      const visibleRows = strictPositioned
+        ? (rows as Record<string, unknown>[]).filter((row) => row.row_source === "current")
+        : rows;
+      return NextResponse.json(visibleRows);
     }
 
     if (type === "gains") {
-      // 5 buckets hebdo : W0 (cette sem.) → W4 (il y a 4 sem.) + dates
+      // 5 complete weekly buckets, excluding the GSC lag window.
       const rows = countryFilter
         ? await sql`
             WITH w0 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks, SUM(impressions) AS impressions
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks,
+                SUM(impressions) AS impressions
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '7 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (6 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             ),
             w1 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '14 days'
-                AND date <  NOW() - INTERVAL '7 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (13 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (7 + ${GSC_LAG_DAYS}))::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             ),
             w2 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '21 days'
-                AND date <  NOW() - INTERVAL '14 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (20 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (14 + ${GSC_LAG_DAYS}))::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             ),
             w3 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '28 days'
-                AND date <  NOW() - INTERVAL '21 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (27 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (21 + ${GSC_LAG_DAYS}))::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
               GROUP BY query
             ),
             w4 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '35 days'
-                AND date <  NOW() - INTERVAL '28 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (34 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (28 + ${GSC_LAG_DAYS}))::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
@@ -320,7 +342,7 @@ export async function GET(request: NextRequest) {
               w0.clicks AS clicks_now, w0.impressions AS impressions_now,
               w1.clicks AS clicks_prev,
               (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain,
-              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen,
+              (SELECT MIN(date) FROM search_console_query_data WHERE site_id = ${id} AND query = w0.query) AS first_seen,
               tk.volume_market,
               tk.volume_fr,
               tk.volume_ch,
@@ -341,54 +363,66 @@ export async function GET(request: NextRequest) {
           `
         : await sql`
             WITH w0 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks, SUM(impressions) AS impressions
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks,
+                SUM(impressions) AS impressions
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '7 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (6 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w1 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '14 days'
-                AND date <  NOW() - INTERVAL '7 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (13 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (7 + ${GSC_LAG_DAYS}))::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w2 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '21 days'
-                AND date <  NOW() - INTERVAL '14 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (20 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (14 + ${GSC_LAG_DAYS}))::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w3 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '28 days'
-                AND date <  NOW() - INTERVAL '21 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (27 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (21 + ${GSC_LAG_DAYS}))::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w4 AS (
-              SELECT query, AVG(position) AS pos, SUM(clicks) AS clicks
-              FROM search_console_data
+              SELECT query,
+                SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
+                SUM(clicks) AS clicks
+              FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= NOW() - INTERVAL '35 days'
-                AND date <  NOW() - INTERVAL '28 days'
+                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (34 + ${GSC_LAG_DAYS}))::date
+                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (28 + ${GSC_LAG_DAYS}))::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '')
@@ -408,7 +442,7 @@ export async function GET(request: NextRequest) {
               w0.clicks AS clicks_now, w0.impressions AS impressions_now,
               w1.clicks AS clicks_prev,
               (w0.clicks - COALESCE(w1.clicks, 0)) AS clicks_gain,
-              (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = w0.query) AS first_seen,
+              (SELECT MIN(date) FROM search_console_query_data WHERE site_id = ${id} AND query = w0.query) AS first_seen,
               tk.volume_market,
               tk.volume_fr,
               tk.volume_ch,
@@ -428,19 +462,20 @@ export async function GET(request: NextRequest) {
             LIMIT ${limit}
           `;
 
-      // Date labels (TZ serveur — affichage frontend)
+      // Date labels for the same complete GSC windows used above.
       const today = new Date();
       const fmt = (offset: number) => {
         const d = new Date(today);
         d.setDate(d.getDate() - offset);
         return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
       };
+      const lag = GSC_LAG_DAYS;
       const labels = {
-        w0: `${fmt(7)}–${fmt(0)}`,
-        w1: `${fmt(14)}–${fmt(8)}`,
-        w2: `${fmt(21)}–${fmt(15)}`,
-        w3: `${fmt(28)}–${fmt(22)}`,
-        w4: `${fmt(35)}–${fmt(29)}`,
+        w0: `${fmt(lag + 6)}-${fmt(lag)}`,
+        w1: `${fmt(lag + 13)}-${fmt(lag + 7)}`,
+        w2: `${fmt(lag + 20)}-${fmt(lag + 14)}`,
+        w3: `${fmt(lag + 27)}-${fmt(lag + 21)}`,
+        w4: `${fmt(lag + 34)}-${fmt(lag + 28)}`,
       };
 
       return NextResponse.json({ rows, labels });
