@@ -83,11 +83,11 @@ function resolveSourceVolume(
 }
 
 function volLabel(vol: number): { label: string; color: string } {
-  if (!vol || vol <= 1) return { label: "—", color: "text-gray-600" }; // 1 = niche_skip marker
-  if (vol >= 10000) return { label: `🔥 ${vol.toLocaleString()}`, color: "text-orange-400" };
-  if (vol >= 1000) return { label: `⚡ ${vol.toLocaleString()}`, color: "text-yellow-400" };
-  if (vol >= 100) return { label: `📈 ${vol.toLocaleString()}`, color: "text-blue-400" };
-  return { label: `${vol.toLocaleString()}`, color: "text-gray-400" };
+  if (!vol || vol <= 1) return { label: "-", color: "text-gray-600" }; // 1 = niche_skip marker
+  if (vol >= 10000) return { label: vol.toLocaleString(), color: "text-orange-400" };
+  if (vol >= 1000) return { label: vol.toLocaleString(), color: "text-yellow-400" };
+  if (vol >= 100) return { label: vol.toLocaleString(), color: "text-blue-400" };
+  return { label: vol.toLocaleString(), color: "text-gray-400" };
 }
 
 type VolumeSignal = {
@@ -117,12 +117,10 @@ function volumeSignalLabel(signal: VolumeSignal): { label: string; color: string
 
 function volumeSignalBadge(signal: VolumeSignal): { label: string; className: string } {
   if (signal.kind === "source") {
-    return { label: "source importee", className: "bg-green-500/15 text-green-300 border-green-500/30" };
+    return { label: "volume importe", className: "bg-green-500/15 text-green-300 border-green-500/30" };
   }
-  return { label: "volume manquant", className: "bg-gray-700/40 text-gray-400 border-gray-600/40" };
+  return { label: "non importe", className: "bg-gray-700/40 text-gray-400 border-gray-600/40" };
 }
-
-// CTR moyen Google par position (basé sur Sistrix 2024)
 function ctrAtPosition(pos: number): number {
   if (pos <= 1) return 0.32;
   if (pos <= 2) return 0.18;
@@ -147,34 +145,31 @@ function opportunityScore(monthlyVolume: number, currentPos: number): number {
   return Math.max(0, Math.round(gain));
 }
 
-function oppLabel(score: number): { label: string; color: string; emoji: string } {
-  if (score >= 500) return { label: `+${score.toLocaleString()} clics/mois`, color: "text-orange-400 font-bold", emoji: "🎯" };
-  if (score >= 100) return { label: `+${score.toLocaleString()} clics/mois`, color: "text-yellow-400 font-semibold", emoji: "💎" };
-  if (score >= 20) return { label: `+${score.toLocaleString()}`, color: "text-blue-400", emoji: "📈" };
-  if (score > 0) return { label: `+${score}`, color: "text-gray-400", emoji: "" };
-  return { label: "—", color: "text-gray-600", emoji: "" };
+function oppLabel(score: number): { label: string; color: string } {
+  if (score >= 500) return { label: `+${score.toLocaleString()} clics/mois`, color: "text-orange-400 font-bold" };
+  if (score >= 100) return { label: `+${score.toLocaleString()} clics/mois`, color: "text-yellow-400 font-semibold" };
+  if (score >= 20) return { label: `+${score.toLocaleString()} clics/mois`, color: "text-blue-400" };
+  if (score > 0) return { label: `+${score} clics/mois`, color: "text-gray-400" };
+  return { label: "-", color: "text-gray-600" };
 }
-
-// Action recommandée selon position + volume
 function recommendedAction(position: number, monthlyVolume: number): { label: string; cta: string; type: "push" | "optimize" | "maintain" | "create" } {
-  if (position <= 0) return { label: "Pas de data", cta: "—", type: "create" };
-  if (position <= 3) return { label: "🏆 Maintenir top 3", cta: "Track", type: "maintain" };
-  if (position <= 10) return { label: "✨ Optimiser meta + CTR", cta: "Optimiser", type: "optimize" };
-  if (position <= 20 && monthlyVolume >= 100) return { label: "🚀 Pousser top 10", cta: "Pousser", type: "push" };
-  if (position <= 30 && monthlyVolume >= 500) return { label: "📝 Renforcer contenu + backlinks", cta: "Renforcer", type: "push" };
-  if (monthlyVolume >= 1000) return { label: "🔨 Créer article dédié", cta: "Créer", type: "create" };
-  return { label: "💤 Faible priorité", cta: "—", type: "maintain" };
+  if (position <= 0) return { label: "Pas de position GSC", cta: "-", type: "create" };
+  if (position <= 3) return { label: "Maintenir top 3", cta: "Suivre", type: "maintain" };
+  if (position <= 10) return { label: "Optimiser CTR", cta: "Optimiser", type: "optimize" };
+  if (monthlyVolume <= 1) return { label: "Importer volume avant action", cta: "-", type: "maintain" };
+  if (position <= 20 && monthlyVolume >= 100) return { label: "Pousser top 10", cta: "Pousser", type: "push" };
+  if (position <= 30 && monthlyVolume >= 500) return { label: "Renforcer contenu", cta: "Renforcer", type: "push" };
+  if (monthlyVolume >= 1000) return { label: "Creer article dedie", cta: "Creer", type: "create" };
+  return { label: "Faible priorite", cta: "-", type: "maintain" };
 }
-
 function solution(pos: number): string {
   if (!pos || pos === 0) return ""; // No position data = no advice
-  if (pos <= 3) return "🏆 Top 3 — maintenir";
-  if (pos <= 10) return "✅ Page 1 — optimise CTR (meta title/description)";
-  if (pos <= 15) return "⚡ Quasi page 1 — améliore le contenu + maillage interne";
-  if (pos <= 30) return "📝 Page 2-3 — renforce l'article, ajoute des backlinks";
-  return "🔨 Loin — créer du contenu dédié sur ce mot clé";
+  if (pos <= 3) return "Top 3 - maintenir";
+  if (pos <= 10) return "Page 1 - optimiser CTR";
+  if (pos <= 15) return "Quasi page 1 - contenu + maillage";
+  if (pos <= 30) return "Page 2-3 - renforcer la page";
+  return "Loin - contenu dedie si volume importe";
 }
-
 function formatMs(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "-";
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
@@ -994,16 +989,6 @@ export default function DashboardPage() {
                       className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "device" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <Smartphone className="w-3 h-3" /> Devices
                     </button>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); void openHighVolPanel(site.id); }}
-                      disabled={highVolLoading.has(site.id)}
-                      title="Découvrir les mots-clés à fort volume du secteur"
-                      className={`flex items-center gap-1 px-3 py-1.5 rounded-t text-xs font-semibold border-b-2 transition ml-2 ${highVolPanel === site.id ? "bg-yellow-500/60 border-yellow-400 text-yellow-100" : "bg-yellow-500/30 border-yellow-400/60 text-yellow-200 hover:bg-yellow-500/60"}`}
-                    >
-                      {highVolLoading.has(site.id) ? <Loader2 className="w-3 h-3 animate-spin" /> : <TrendingUp className="w-3 h-3" />}
-                      {highVolResult[site.id] ? `✓ +${highVolResult[site.id].added} trackés` : "⚡ Découvrir mots-clés"}
-                    </button>
                   </div>
 
                   {tab === "keywords" && (
@@ -1400,8 +1385,8 @@ export default function DashboardPage() {
                                       return <span className="text-gray-600 text-xs" title="Importe un volume source pour calculer l'opportunite">—</span>;
                                     }
                                     const score = opportunityScore(monthlyVol, pos);
-                                    const { label, color, emoji } = oppLabel(score);
-                                    return <span className={`text-xs ${color}`} title={`Si tu passes top 3, tu gagnes ~${score} clics/mois`}>{emoji} {label}</span>;
+                                    const { label, color } = oppLabel(score);
+                                    return <span className={`text-xs ${color}`} title={`Si tu passes top 3, tu gagnes ~${score} clics/mois`}>{label}</span>;
                                   })()}
                                 </td>
                                 <td className="py-2 px-3">
@@ -1416,14 +1401,14 @@ export default function DashboardPage() {
                                     return (
                                       <div className="flex flex-col gap-1">
                                         <span className="text-[11px] text-gray-300">{action.label}</span>
-                                        {action.cta !== "—" && (
+                                        {action.cta !== "-" && (
                                           <button
                                             type="button"
                                             onClick={() => askAiAgent(site.id, g.query, pos, monthlyVol, action.type)}
                                             className={`text-[10px] px-2 py-0.5 rounded border ${btnColor} transition w-fit`}
                                             title="Demander à l'IA un plan d'action détaillé"
                                           >
-                                            🤖 IA : {action.cta}
+                                            IA : {action.cta}
                                           </button>
                                         )}
                                       </div>
