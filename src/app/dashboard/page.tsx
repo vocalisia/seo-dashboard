@@ -939,9 +939,10 @@ export default function DashboardPage() {
           const top10 = rawKws.filter(k => Number(k.avg_position) > 0 && Number(k.avg_position) <= 10).length;
           const keywordSourceVolumeCount = rawKws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1).length;
           const gainsSourceVolumeCount = gainList.filter(g => resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) > 1).length;
-          const sourceVolumeCount = keywordSourceVolumeCount + gainsSourceVolumeCount;
+          const sourceVolumeCount = tab === "gains" ? gainsSourceVolumeCount : keywordSourceVolumeCount;
           const missingVolumeKeywords = rawKws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) <= 1);
           const missingVolumeCount = missingVolumeKeywords.length;
+          const displayedMetricCount = tab === "gains" ? gainList.length : rawKws.length;
 
           return (
             <div key={site.id} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -1024,7 +1025,7 @@ export default function DashboardPage() {
                         <span className="px-2 py-1 rounded border border-green-500/25 bg-green-500/10 text-green-300">
                           {sourceVolumeCount} volume(s) source
                         </span>
-                        {missingVolumeCount > 0 && (
+                        {tab === "keywords" && missingVolumeCount > 0 && (
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded border border-yellow-500/25 bg-yellow-500/10 text-yellow-200">
                             {missingVolumeCount} volume(s) a importer
                             <CopyKeywordsButton
@@ -1035,7 +1036,7 @@ export default function DashboardPage() {
                           </span>
                         )}
                         <span className="text-gray-400">
-                          {rawKws.length} mot(s)-cle(s) GSC charge(s): vraies positions, vrais clics/impressions, volumes importes uniquement.
+                          {displayedMetricCount} ligne(s) affichee(s): positions/clics/impressions GSC quand disponibles, volumes importes uniquement.
                         </span>
                         <Link href="/keyword-planner-import" className="text-blue-300 hover:text-blue-200 underline underline-offset-2">
                           Importer FR/CH
