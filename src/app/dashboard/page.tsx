@@ -895,13 +895,16 @@ export default function DashboardPage() {
           const tab = activeTab[site.id] || "keywords";
           const kwKey = `${site.id}-${period}-${langFilter || "all"}`;
           const QUESTION_WORDS = ["comment","pourquoi","quand","quel","quelle","quels","quelles","qu'est","qu est","how","what","why","when","which","where","who","is","are","does","do","can","best","top"];
-          const kws = (keywords[kwKey] || [])
-            .filter(k => !search || k.query.toLowerCase().includes(search.toLowerCase()))
+          const rawKws = keywords[kwKey] || [];
+          const searchedKws = rawKws.filter(k => !search || k.query.toLowerCase().includes(search.toLowerCase()));
+          const filteredKws = searchedKws
             .filter(k => {
               if (kwTypeFilter === "longtail") return k.query.trim().split(/\s+/).length >= 4;
               if (kwTypeFilter === "questions") return QUESTION_WORDS.some(w => k.query.toLowerCase().startsWith(w + " ") || k.query.toLowerCase().includes(" " + w + " "));
               return true;
-            })
+            });
+          const filterHiddenAllRows = searchedKws.length > 0 && filteredKws.length === 0 && kwTypeFilter !== "all";
+          const kws = (filterHiddenAllRows ? searchedKws : filteredKws)
             .sort((a, b) => {
               let va = 0, vb = 0;
               if (sortCol === "position") { va = Number(a.avg_position); vb = Number(b.avg_position); }
@@ -927,8 +930,8 @@ export default function DashboardPage() {
               else { va = Number(a.gain); vb = Number(b.gain); }
               return gainSortDir === "asc" ? va - vb : vb - va;
             });
-          const top10 = kws.filter(k => Number(k.avg_position) <= 10).length;
-          const keywordSourceVolumeCount = kws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1).length;
+          const top10 = rawKws.filter(k => Number(k.avg_position) > 0 && Number(k.avg_position) <= 10).length;
+          const keywordSourceVolumeCount = rawKws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1).length;
           const gainsSourceVolumeCount = gainList.filter(g => resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) > 1).length;
           const sourceVolumeCount = keywordSourceVolumeCount + gainsSourceVolumeCount;
 
@@ -999,6 +1002,11 @@ export default function DashboardPage() {
                           {f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
                         </button>
                       ))}
+                      {filterHiddenAllRows && (
+                        <span className="ml-2 text-[11px] text-yellow-300">
+                          Filtre sans resultat: affichage de tous les mots cles GSC disponibles.
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -1009,7 +1017,7 @@ export default function DashboardPage() {
                           {sourceVolumeCount} volume(s) source
                         </span>
                         <span className="text-gray-400">
-                          Liste stricte GSC: vrais mots-cles positionnes, vrais clics/impressions, volumes source uniquement.
+                          {rawKws.length} mot(s)-cle(s) GSC charge(s): vraies positions, vrais clics/impressions, volumes importes uniquement.
                         </span>
                         <Link href="/keyword-planner-import" className="text-blue-300 hover:text-blue-200 underline underline-offset-2">
                           Importer FR/CH
@@ -1128,7 +1136,7 @@ export default function DashboardPage() {
                   {kwLoadingIds.has(site.id) ? (
                     <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                   ) : tab === "keywords" ? (
-                    kws.length === 0 ? (
+                    rawKws.length === 0 ? (
                       <div className="py-6 text-center text-gray-400 text-sm">
                         Aucune requête GSC pour ce site avec le filtre actuel
                         {langFilter ? " (pays/langue trop restrictif possible)" : ""}.
