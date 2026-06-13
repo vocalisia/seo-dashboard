@@ -74,9 +74,6 @@ function checkBasicAuth(req: NextRequest): NextResponse | null {
 
 export default auth((req) => {
   // 1. Basic Auth check (also lets valid cron-secret through)
-  const basicDenied = checkBasicAuth(req);
-  if (basicDenied) return basicDenied;
-
   const { pathname } = req.nextUrl;
 
   // Truly public routes — no session/cron secret needed
@@ -84,11 +81,27 @@ export default auth((req) => {
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth");
 
+  if (isPublic) {
+    return NextResponse.next();
+  }
+
+  // Basic Auth stays as a fallback outer gate for unauthenticated requests.
+  // A valid NextAuth session must not be blocked a second time.
+  if (!req.auth) {
+    const basicDenied = checkBasicAuth(req);
+    if (basicDenied) return basicDenied;
+  }
+
   // Routes that require CRON_SECRET (cron jobs, internal automation)
   const isCronProtected =
     pathname.startsWith("/api/cron") ||
     pathname.startsWith("/api/alerts/check") ||
     pathname.startsWith("/api/sync") ||
+    pathname.startsWith("/api/reports/generate") ||
+    pathname.startsWith("/api/autopilot/weekly") ||
+    pathname.startsWith("/api/autopilot/verify-urls") ||
+    pathname.startsWith("/api/competitors/weekly") ||
+    pathname.startsWith("/api/pagespeed/weekly") ||
     pathname.startsWith("/api/autopilot/run") ||
     pathname.startsWith("/api/weekly-actions");
 
