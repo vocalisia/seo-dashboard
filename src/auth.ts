@@ -13,7 +13,7 @@ function cleanEnvValue(value: string | undefined): string {
 }
 
 const localDevPassword = cleanEnvValue(process.env.LOCAL_DEV_PASSWORD);
-const localDevEmail = cleanEnvValue(process.env.LOCAL_DEV_EMAIL) || "admin@localhost";
+const localDevEmail = cleanEnvValue(process.env.LOCAL_DEV_EMAIL) || "1983";
 const nextAuthSecret = process.env.NEXTAUTH_SECRET?.trim();
 
 if (isProd && !nextAuthSecret) {
@@ -63,6 +63,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
               const password = String(credentials?.password ?? "").trim();
               const allowedCredentials = [
                 { email: localDevEmail, password: localDevPassword },
+                { email: "1983", password: localDevPassword },
                 ...(isDev || isLocalRuntime ? [{ email: "1983", password: "1983" }] : []),
               ].filter((c) => c.email && c.password);
 
