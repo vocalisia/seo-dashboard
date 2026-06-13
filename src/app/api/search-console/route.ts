@@ -270,8 +270,12 @@ export async function GET(request: NextRequest) {
               (Number(b.total_impressions) || 0) - (Number(a.total_impressions) || 0)
             );
           });
+      const allRows = rows as Record<string, unknown>[];
+      const currentRows = allRows.filter((row) => row.row_source === "current");
       const visibleRows = strictPositioned
-        ? (rows as Record<string, unknown>[]).filter((row) => row.row_source === "current")
+        ? currentRows.length > 0
+          ? currentRows
+          : allRows.filter((row) => row.row_source === "tracked" && Number(row.volume_market ?? row.volume_ch ?? row.volume_fr ?? 0) > 1)
         : rows;
       return NextResponse.json(visibleRows);
     }
