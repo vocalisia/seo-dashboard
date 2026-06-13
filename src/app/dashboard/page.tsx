@@ -162,13 +162,19 @@ function recommendedAction(position: number, monthlyVolume: number): { label: st
   if (monthlyVolume >= 1000) return { label: "Creer article dedie", cta: "Creer", type: "create" };
   return { label: "Faible priorite", cta: "-", type: "maintain" };
 }
-function solution(pos: number): string {
-  if (!pos || pos === 0) return ""; // No position data = no advice
+function keywordSolution(kw: QueryData): string {
+  const pos = Number(kw.avg_position) || 0;
+  const sourceVolume = resolveSourceVolume(kw.volume_market, kw.volume_fr, kw.volume_ch);
+  const impressions = Number(kw.total_impressions) || 0;
+
+  if (!pos || pos === 0) return "Pas de position GSC";
+  if (sourceVolume <= 1 && pos > 10) return impressions >= 20 ? "Importer volume KP - signal GSC" : "Importer volume KP";
+  if (sourceVolume <= 1) return "Page 1 - CTR/meta, volume a importer";
   if (pos <= 3) return "Top 3 - maintenir";
   if (pos <= 10) return "Page 1 - optimiser CTR";
   if (pos <= 15) return "Quasi page 1 - contenu + maillage";
   if (pos <= 30) return "Page 2-3 - renforcer la page";
-  return "Loin - contenu dedie si volume importe";
+  return sourceVolume >= 100 ? "Creer contenu dedie" : "Faible priorite";
 }
 function formatMs(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "-";
@@ -934,6 +940,8 @@ export default function DashboardPage() {
           const keywordSourceVolumeCount = rawKws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1).length;
           const gainsSourceVolumeCount = gainList.filter(g => resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) > 1).length;
           const sourceVolumeCount = keywordSourceVolumeCount + gainsSourceVolumeCount;
+          const missingVolumeKeywords = rawKws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) <= 1);
+          const missingVolumeCount = missingVolumeKeywords.length;
 
           return (
             <div key={site.id} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -1016,6 +1024,16 @@ export default function DashboardPage() {
                         <span className="px-2 py-1 rounded border border-green-500/25 bg-green-500/10 text-green-300">
                           {sourceVolumeCount} volume(s) source
                         </span>
+                        {missingVolumeCount > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded border border-yellow-500/25 bg-yellow-500/10 text-yellow-200">
+                            {missingVolumeCount} volume(s) a importer
+                            <CopyKeywordsButton
+                              keywords={missingVolumeKeywords.slice(0, 200).map((kw) => kw.query)}
+                              label="Copier les mots-cles sans volume"
+                              className="h-5 w-5 border-yellow-500/40 bg-yellow-500/10 text-yellow-200 hover:border-yellow-400 hover:bg-yellow-500/20"
+                            />
+                          </span>
+                        )}
                         <span className="text-gray-400">
                           {rawKws.length} mot(s)-cle(s) GSC charge(s): vraies positions, vrais clics/impressions, volumes importes uniquement.
                         </span>
@@ -1249,7 +1267,7 @@ export default function DashboardPage() {
                                   );
                                 })()}
                               </td>
-                              <td className="py-2 px-5 text-xs text-gray-400">{solution(Number(kw.avg_position))}</td>
+                              <td className="py-2 px-5 text-xs text-gray-400">{keywordSolution(kw)}</td>
                             </tr>
                           ))}
                         </tbody>

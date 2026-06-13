@@ -123,25 +123,33 @@ export async function GET(request: NextRequest) {
             -- Recent 30d GSC data: keywords active last 30d but not in current period
             -- This prevents keywords disappearing when switching to short periods (7j/3j)
             gsc_30d AS (
-              SELECT query,
-                SUM(clicks) as total_clicks,
-                SUM(impressions) as total_impressions,
-                AVG(ctr) as avg_ctr,
-                AVG(position) as avg_position,
-                AVG(position) AS page_weighted_position,
-                NULL AS first_seen,
-                NULL::int AS volume_market, NULL::int AS volume_fr, NULL::int AS volume_ch, NULL::varchar AS market, NULL::varchar AS volume_source,
+              SELECT d.query,
+                SUM(d.clicks) as total_clicks,
+                SUM(d.impressions) as total_impressions,
+                AVG(d.ctr) as avg_ctr,
+                AVG(d.position) as avg_position,
+                AVG(d.position) AS page_weighted_position,
+                NULL::date AS first_seen,
+                tk.volume_market,
+                tk.volume_fr,
+                tk.volume_ch,
+                tk.market,
+                tk.volume_source,
                 'recent_30d'::varchar AS row_source
               FROM search_console_data d
-              WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - 30)::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                AND query IS NOT NULL
-                AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
+              LEFT JOIN tracked_keywords tk
+                ON tk.site_id = ${id}
+               AND LOWER(tk.keyword) = LOWER(d.query)
+               AND tk.is_active = TRUE
+              WHERE d.site_id = ${id}
+                AND d.date >= (CURRENT_DATE - 30)::date
+                AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND d.query IS NOT NULL
+                AND d.position BETWEEN 1 AND 200
+                AND (d.country IS NULL OR d.country = '' OR d.country = ANY(${countryFilter}))
                 AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(d.query))
-              GROUP BY query
-              HAVING SUM(impressions) >= 5
+              GROUP BY d.query, tk.volume_market, tk.volume_fr, tk.volume_ch, tk.market, tk.volume_source
+              HAVING SUM(d.impressions) >= 5
             ),
             tracked_only AS (
               -- Tracked keywords NOT in GSC for this period OR last 30d
@@ -219,16 +227,26 @@ export async function GET(request: NextRequest) {
           .then(async (baseRows: Record<string, unknown>[]) => {
             const seen = new Set(baseRows.map(r => String(r.query ?? "").toLowerCase()));
             const gsc30 = (await sql`
-              SELECT query, SUM(clicks) AS total_clicks, SUM(impressions) AS total_impressions,
-                AVG(ctr) AS avg_ctr, AVG(position) AS avg_position, AVG(position) AS page_weighted_position,
-                NULL AS first_seen, NULL::int AS volume_market, NULL::int AS volume_fr, NULL::int AS volume_ch, NULL::varchar AS market, NULL::varchar AS volume_source,
+              SELECT d.query, SUM(d.clicks) AS total_clicks, SUM(d.impressions) AS total_impressions,
+                AVG(d.ctr) AS avg_ctr, AVG(d.position) AS avg_position, AVG(d.position) AS page_weighted_position,
+                NULL::date AS first_seen,
+                tk.volume_market,
+                tk.volume_fr,
+                tk.volume_ch,
+                tk.market,
+                tk.volume_source,
                 'recent_30d'::varchar AS row_source
-              FROM search_console_data
-              WHERE site_id=${id} AND date >= (CURRENT_DATE-30)::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                AND query IS NOT NULL AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '')
-              GROUP BY query HAVING SUM(impressions) >= 5
+              FROM search_console_data d
+              LEFT JOIN tracked_keywords tk
+                ON tk.site_id = ${id}
+               AND LOWER(tk.keyword) = LOWER(d.query)
+               AND tk.is_active = TRUE
+              WHERE d.site_id=${id} AND d.date >= (CURRENT_DATE-30)::date
+                AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND d.query IS NOT NULL AND d.position BETWEEN 1 AND 200
+                AND (d.country IS NULL OR d.country = '')
+              GROUP BY d.query, tk.volume_market, tk.volume_fr, tk.volume_ch, tk.market, tk.volume_source
+              HAVING SUM(d.impressions) >= 5
             `) as Record<string, unknown>[];
             const trackedOnly = (await sql`
               SELECT keyword AS query, 0 AS total_clicks, 0 AS total_impressions,
