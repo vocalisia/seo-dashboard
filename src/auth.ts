@@ -15,6 +15,7 @@ function cleanEnvValue(value: string | undefined): string {
 const localDevPassword = cleanEnvValue(process.env.LOCAL_DEV_PASSWORD);
 const localDevEmail = cleanEnvValue(process.env.LOCAL_DEV_EMAIL) || "1983";
 const nextAuthSecret = process.env.NEXTAUTH_SECRET?.trim();
+const showLocalLogin = process.env.NEXT_PUBLIC_SHOW_DEV_LOGIN === "true";
 
 if (isProd && !nextAuthSecret) {
   throw new Error("NEXTAUTH_SECRET is required in production");
@@ -49,7 +50,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           }),
         ]
       : []),
-    ...(localDevPassword || isDev
+    ...(localDevPassword || isDev || showLocalLogin
       ? [
           Credentials({
             id: "credentials",
@@ -64,7 +65,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
               const allowedCredentials = [
                 { email: localDevEmail, password: localDevPassword },
                 { email: "1983", password: localDevPassword },
-                ...(isDev || isLocalRuntime ? [{ email: "1983", password: "1983" }] : []),
+                ...(isDev || isLocalRuntime || showLocalLogin ? [{ email: "1983", password: "1983" }] : []),
               ].filter((c) => c.email && c.password);
 
               if (allowedCredentials.some((c) => c.email === email && c.password === password)) {
