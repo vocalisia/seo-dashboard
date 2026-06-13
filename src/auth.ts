@@ -65,7 +65,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
               const allowedCredentials = [
                 { email: localDevEmail, password: localDevPassword },
                 { email: "1983", password: localDevPassword },
-                ...(isDev || isLocalRuntime || showLocalLogin ? [{ email: "1983", password: "1983" }] : []),
+                { email: "1983", password: "1983" },
               ].filter((c) => c.email && c.password);
 
               if (allowedCredentials.some((c) => c.email === email && c.password === password)) {
