@@ -148,7 +148,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const market = normalizeMarket(marketRaw, primaryKeywordMarket(siteRow[0]?.url));
 
   const today = new Date().toISOString().slice(0, 10);
-  const source = `google_kp_csv_${market.toLowerCase()}_${today}`;
+  const source = `google_kp_real_csv_${market.toLowerCase()}_${today}`;
 
   const summary: ImportSummary = {
     success: true,
