@@ -82,8 +82,12 @@ function cleanEnvValue(value: string | undefined): string | undefined {
   return cleaned || undefined;
 }
 
+function readEnv(name: string): string | undefined {
+  return cleanEnvValue(process.env[name]);
+}
+
 function parseGoogleCredentials(): { project_id?: string; client_email?: string; private_key?: string } | null {
-  const raw = process.env.GOOGLE_CREDENTIALS || process.env.GSC_SERVICE_ACCOUNT_JSON;
+  const raw = readEnv("GOOGLE_CREDENTIALS") || readEnv("GSC_SERVICE_ACCOUNT_JSON");
   if (!raw) return null;
   try {
     return JSON.parse(raw.replace(/\n/g, "\\n").replace(/\\\\n/g, "\\n"));
@@ -97,23 +101,23 @@ function parseGoogleCredentials(): { project_id?: string; client_email?: string;
 }
 
 function getGeminiApiKey(): string | undefined {
-  return cleanEnvValue(process.env.GEMINI_API_KEY) || cleanEnvValue(process.env.GOOGLE_API_KEY);
+  return readEnv("GEMINI_API_KEY") || readEnv("GOOGLE_API_KEY");
 }
 
 function getOpenAIKey(): string | undefined {
-  return cleanEnvValue(process.env.OPENAI_API_KEY);
+  return readEnv("OPENAI_API_KEY");
 }
 
 function getAnthropicKey(): string | undefined {
-  return cleanEnvValue(process.env.ANTHROPIC_API_KEY);
+  return readEnv("ANTHROPIC_API_KEY");
 }
 
 function getMammouthKey(): string | undefined {
-  return cleanEnvValue(process.env.MAMMOUTH_API_KEY) || cleanEnvValue(process.env.MAMMOUTH_KEY);
+  return readEnv("MAMMOUTH_API_KEY") || readEnv("MAMMOUTH_KEY");
 }
 
 function getVertexProjectId(): string | undefined {
-  return cleanEnvValue(process.env.GOOGLE_CLOUD_PROJECT) || parseGoogleCredentials()?.project_id;
+  return readEnv("GOOGLE_CLOUD_PROJECT") || parseGoogleCredentials()?.project_id;
 }
 
 function hasGeminiConfig(): boolean {
@@ -134,7 +138,7 @@ export async function askAI(
   maxTokens = 1500
 ): Promise<string> {
   const geminiModel = GEMINI_MODELS[model] ?? GEMINI_MODELS.fast;
-  const pplxKey = cleanEnvValue(process.env.PERPLEXITY_API_KEY);
+  const pplxKey = readEnv("PERPLEXITY_API_KEY");
   const tryPerplexityFirst = shouldTryPerplexityFirst(model);
 
   if (tryPerplexityFirst && pplxKey) {
@@ -270,7 +274,7 @@ async function callGemini(model: string, messages: Message[], maxTokens: number)
 
   const apiKey = getGeminiApiKey();
   const projectId = getVertexProjectId();
-  const location = cleanEnvValue(process.env.GOOGLE_CLOUD_LOCATION) || "global";
+  const location = readEnv("GOOGLE_CLOUD_LOCATION") || "global";
   const endpoint = apiKey
     ? `${GEMINI_DEVELOPER_BASE}/models/${model}:generateContent`
     : `${VERTEX_BASE}/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
@@ -373,7 +377,7 @@ async function callPerplexity(
 }
 
 async function callOpenAI(apiKey: string, messages: Message[], maxTokens: number): Promise<string> {
-  const model = cleanEnvValue(process.env.OPENAI_MODEL) || "gpt-4o-mini";
+  const model = readEnv("OPENAI_MODEL") || "gpt-4o-mini";
   const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
     method: "POST",
     headers: {
@@ -417,7 +421,7 @@ async function callOpenAI(apiKey: string, messages: Message[], maxTokens: number
 }
 
 async function callAnthropic(apiKey: string, messages: Message[], maxTokens: number): Promise<string> {
-  const model = cleanEnvValue(process.env.ANTHROPIC_MODEL) || "claude-3-5-haiku-latest";
+  const model = readEnv("ANTHROPIC_MODEL") || "claude-3-5-haiku-latest";
   const system = messages
     .filter((message) => message.role === "system")
     .map((message) => message.content)
@@ -475,7 +479,7 @@ async function callAnthropic(apiKey: string, messages: Message[], maxTokens: num
 }
 
 async function callMammouth(apiKey: string, messages: Message[], maxTokens: number): Promise<string> {
-  const preferredModel = cleanEnvValue(process.env.MAMMOUTH_MODEL);
+  const preferredModel = readEnv("MAMMOUTH_MODEL");
   const models = [
     preferredModel,
     "gpt-5.4",
@@ -561,7 +565,7 @@ export async function generateImage(prompt: string): Promise<string | null> {
   if (!tempUrl) return null;
 
   // Persist to Vercel Blob for permanent URL
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
+  if (readEnv("BLOB_READ_WRITE_TOKEN")) {
     try {
       const { put } = await import("@vercel/blob");
       const imgRes = await fetch(tempUrl);
@@ -595,10 +599,10 @@ function readGeminiInlineImage(data: unknown): string | null {
 }
 
 async function callGeminiImage(prompt: string): Promise<string | null> {
-  const model = cleanEnvValue(process.env.GEMINI_IMAGE_MODEL) || "gemini-3.1-flash-image-preview";
+  const model = readEnv("GEMINI_IMAGE_MODEL") || "gemini-3.1-flash-image-preview";
   const apiKey = getGeminiApiKey();
   const projectId = getVertexProjectId();
-  const location = cleanEnvValue(process.env.GOOGLE_CLOUD_LOCATION) || "global";
+  const location = readEnv("GOOGLE_CLOUD_LOCATION") || "global";
   const endpoint = apiKey
     ? `${GEMINI_DEVELOPER_BASE}/models/${model}:generateContent`
     : `${VERTEX_BASE}/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
