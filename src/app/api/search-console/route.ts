@@ -18,6 +18,36 @@ const LANG_COUNTRIES: Record<string, string[]> = {
   ch: ["CHE"],
 };
 
+function isPollutedSearchQuery(value: unknown): boolean {
+  const query = String(value ?? "").trim();
+  if (!query) return true;
+  const lower = query.toLowerCase();
+  const commaCount = (query.match(/,/g) ?? []).length;
+
+  if (/[\r\n]/.test(query)) return true;
+  if (/(^|\s)(site|inurl|intitle|intext|cache|related|allinurl|allintitle|allintext|filetype):/i.test(query)) {
+    return true;
+  }
+  if (/https?:\/\//i.test(query) || /\bwww\.[a-z0-9.-]+\.[a-z]{2,}\b/i.test(lower)) {
+    return true;
+  }
+
+  // Bad CSV imports can leak whole rows into the query field:
+  // "agence lead gen,92,0.01301,organic,https://...,8,..."
+  if (commaCount >= 4) return true;
+  if (commaCount >= 2 && /\b(organic|paid|cpc|ctr|position|impression|click)\b/i.test(query)) {
+    return true;
+  }
+  if (commaCount >= 2 && /\d+\.\d{3,}/.test(query)) return true;
+  if (query.length > 160 && commaCount >= 1) return true;
+
+  return false;
+}
+
+function filterPollutedRows<T extends Record<string, unknown>>(rows: T[]): T[] {
+  return rows.filter((row) => !isPollutedSearchQuery(row.query));
+}
+
 export async function GET(request: NextRequest) {
   const siteId = request.nextUrl.searchParams.get("siteId");
   const type = request.nextUrl.searchParams.get("type") || "queries";
@@ -274,7 +304,7 @@ export async function GET(request: NextRequest) {
           ? currentRows
           : allRows.filter((row) => row.row_source === "tracked" && Number(row.volume_market ?? row.volume_ch ?? row.volume_fr ?? 0) > 1)
         : rows;
-      return NextResponse.json(visibleRows);
+      return NextResponse.json(filterPollutedRows(visibleRows as Record<string, unknown>[]));
     }
 
     if (type === "gains") {
@@ -507,7 +537,7 @@ export async function GET(request: NextRequest) {
         w4: `${fmt(lag + 34)}-${fmt(lag + 28)}`,
       };
 
-      return NextResponse.json({ rows, labels });
+      return NextResponse.json({ rows: filterPollutedRows(rows as Record<string, unknown>[]), labels });
     }
 
     if (type === "pages") {
