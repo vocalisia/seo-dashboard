@@ -92,8 +92,13 @@ function volLabel(vol: number): { label: string; color: string } {
 
 type VolumeSignal = {
   value: number;
-  kind: "source" | "none";
+  kind: "source" | "source_empty" | "none";
 };
+
+function hasImportedVolumeSource(source: string | null | undefined): boolean {
+  const s = String(source ?? "").toLowerCase();
+  return s.startsWith("google_kp_real_plan") || s.includes("keyword_planner") || s.includes("dataforseo") || s.includes("ahrefs");
+}
 
 function resolveVolumeSignal(
   volMarket: number | null | undefined,
@@ -101,9 +106,11 @@ function resolveVolumeSignal(
   _impressions: number | null | undefined,
   _periodDays: number,
   volCh?: number | null | undefined,
+  volumeSource?: string | null | undefined,
 ): VolumeSignal {
   const source = resolveSourceVolume(volMarket, volFr, volCh);
   if (source > 1) return { value: source, kind: "source" };
+  if (hasImportedVolumeSource(volumeSource)) return { value: 0, kind: "source_empty" };
   return { value: 0, kind: "none" };
 }
 
@@ -112,12 +119,18 @@ function volumeSignalLabel(signal: VolumeSignal): { label: string; color: string
   if (signal.kind === "source") {
     return { ...base, title: "Volume mensuel importe depuis une source externe." };
   }
+  if (signal.kind === "source_empty") {
+    return { label: "0", color: "text-gray-500", title: "Keyword Planner importe, mais Google ne donne pas de volume exploitable pour ce mot-cle." };
+  }
   return { ...base, title: "Aucun volume source disponible." };
 }
 
 function volumeSignalBadge(signal: VolumeSignal): { label: string; className: string } {
   if (signal.kind === "source") {
     return { label: "volume importe", className: "bg-green-500/15 text-green-300 border-green-500/30" };
+  }
+  if (signal.kind === "source_empty") {
+    return { label: "0 KP", className: "bg-slate-700/40 text-slate-300 border-slate-600/40" };
   }
   return { label: "non importe", className: "bg-gray-700/40 text-gray-400 border-gray-600/40" };
 }
@@ -165,9 +178,11 @@ function recommendedAction(position: number, monthlyVolume: number): { label: st
 function keywordSolution(kw: QueryData): string {
   const pos = Number(kw.avg_position) || 0;
   const sourceVolume = resolveSourceVolume(kw.volume_market, kw.volume_fr, kw.volume_ch);
+  const hasSource = hasImportedVolumeSource(kw.volume_source);
   const impressions = Number(kw.total_impressions) || 0;
 
   if (!pos || pos === 0) return "Pas de position GSC";
+  if (sourceVolume <= 1 && hasSource) return pos <= 10 ? "Page 1 - CTR/meta, KP sans volume" : "KP sans volume - prioriser GSC";
   if (sourceVolume <= 1 && pos > 10) return impressions >= 20 ? "Importer volume KP - signal GSC" : "Importer volume KP";
   if (sourceVolume <= 1) return "Page 1 - CTR/meta, volume a importer";
   if (pos <= 3) return "Top 3 - maintenir";
@@ -938,9 +953,14 @@ export default function DashboardPage() {
             });
           const top10 = rawKws.filter(k => Number(k.avg_position) > 0 && Number(k.avg_position) <= 10).length;
           const keywordSourceVolumeCount = rawKws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1).length;
+          const keywordImportedZeroVolumeCount = rawKws.filter(k =>
+            resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) <= 1 && hasImportedVolumeSource(k.volume_source)
+          ).length;
           const gainsSourceVolumeCount = gainList.filter(g => resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) > 1).length;
           const sourceVolumeCount = tab === "gains" ? gainsSourceVolumeCount : keywordSourceVolumeCount;
-          const missingVolumeKeywords = rawKws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) <= 1);
+          const missingVolumeKeywords = rawKws.filter(k =>
+            resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) <= 1 && !hasImportedVolumeSource(k.volume_source)
+          );
           const missingVolumeCount = missingVolumeKeywords.length;
           const displayedMetricCount = tab === "gains" ? gainList.length : rawKws.length;
 
@@ -1025,6 +1045,11 @@ export default function DashboardPage() {
                         <span className="px-2 py-1 rounded border border-green-500/25 bg-green-500/10 text-green-300">
                           {sourceVolumeCount} volume(s) source
                         </span>
+                        {tab === "keywords" && keywordImportedZeroVolumeCount > 0 && (
+                          <span className="px-2 py-1 rounded border border-slate-600/40 bg-slate-700/30 text-slate-300">
+                            {keywordImportedZeroVolumeCount} KP sans volume
+                          </span>
+                        )}
                         {tab === "keywords" && missingVolumeCount > 0 && (
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded border border-yellow-500/25 bg-yellow-500/10 text-yellow-200">
                             {missingVolumeCount} volume(s) a importer
@@ -1257,7 +1282,7 @@ export default function DashboardPage() {
                               </td>
                               <td className="text-right py-2 px-3">
                                 {(() => {
-                                  const signal = resolveVolumeSignal(kw.volume_market, kw.volume_fr, kw.total_impressions, Number(period), kw.volume_ch);
+                                  const signal = resolveVolumeSignal(kw.volume_market, kw.volume_fr, kw.total_impressions, Number(period), kw.volume_ch, kw.volume_source);
                                   const { label, color, title } = volumeSignalLabel(signal);
                                   const badge = volumeSignalBadge(signal);
                                   return (
@@ -1392,7 +1417,7 @@ export default function DashboardPage() {
                                 </td>
                                 <td className="text-right py-2 px-3">
                                   {(() => {
-                                    const signal = resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch);
+                                    const signal = resolveVolumeSignal(g.volume_market, g.volume_fr, g.impressions_now, 7, g.volume_ch, g.volume_source);
                                     const { label, color, title } = volumeSignalLabel(signal);
                                     const badge = volumeSignalBadge(signal);
                                     return (
