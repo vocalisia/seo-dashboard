@@ -153,12 +153,12 @@ export async function GET(request: NextRequest) {
             ),
             tracked_only AS (
               -- Tracked keywords NOT in GSC for this period OR last 30d
-              -- Use current_position from tracked_keywords if set, else NULL (not 0)
+              -- No current GSC row means no current position. Keep volumes, hide stale positions.
               SELECT tk.keyword AS query,
                 0::bigint AS total_clicks, 0::bigint AS total_impressions,
                 0::float8 AS avg_ctr,
-                NULLIF(tk.current_position::float8, 0) AS avg_position,
-                NULLIF(tk.current_position::float8, 0) AS page_weighted_position,
+                NULL::float8 AS avg_position,
+                NULL::float8 AS page_weighted_position,
                 NULL::date AS first_seen,
                 tk.volume_market::int, tk.volume_fr::int, tk.volume_ch::int, tk.market::varchar, tk.volume_source::varchar,
                 'tracked'::varchar AS row_source
@@ -201,8 +201,7 @@ export async function GET(request: NextRequest) {
                 AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '')
-              GROUP BY query
+            GROUP BY query
               ORDER BY total_clicks DESC
               LIMIT ${limit}
             ) q
@@ -216,7 +215,6 @@ export async function GET(request: NextRequest) {
                 AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
                 AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
                 AND query = q.query
-                AND (country IS NULL OR country = '')
             ) ql ON TRUE
             LEFT JOIN tracked_keywords tk
               ON tk.site_id = ${id}
@@ -244,15 +242,14 @@ export async function GET(request: NextRequest) {
               WHERE d.site_id=${id} AND d.date >= (CURRENT_DATE-30)::date
                 AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
                 AND d.query IS NOT NULL AND d.position BETWEEN 1 AND 200
-                AND (d.country IS NULL OR d.country = '')
               GROUP BY d.query, tk.volume_market, tk.volume_fr, tk.volume_ch, tk.market, tk.volume_source
               HAVING SUM(d.impressions) >= 5
             `) as Record<string, unknown>[];
             const trackedOnly = (await sql`
               SELECT keyword AS query, 0 AS total_clicks, 0 AS total_impressions,
                 0::float8 AS avg_ctr,
-                NULLIF(current_position::float8, 0) AS avg_position,
-                NULLIF(current_position::float8, 0) AS page_weighted_position,
+                NULL::float8 AS avg_position,
+                NULL::float8 AS page_weighted_position,
                 NULL::date AS first_seen, volume_market::int, volume_fr::int, volume_ch::int, market::varchar, volume_source::varchar,
                 'tracked'::varchar AS row_source
               FROM tracked_keywords WHERE site_id=${id} AND is_active=true
@@ -284,15 +281,23 @@ export async function GET(request: NextRequest) {
       // 5 complete weekly buckets, excluding the GSC lag window.
       const rows = countryFilter
         ? await sql`
-            WITH w0 AS (
+            WITH anchor AS (
+              SELECT COALESCE(MAX(date), (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date) AS end_date
+              FROM search_console_query_data
+              WHERE site_id = ${id}
+                AND query IS NOT NULL
+                AND position BETWEEN 1 AND 200
+                AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
+            ),
+            w0 AS (
               SELECT query,
                 SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
                 SUM(clicks) AS clicks,
                 SUM(impressions) AS impressions
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (6 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '6 days')::date
+                AND date <= (SELECT end_date FROM anchor)
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
@@ -304,8 +309,8 @@ export async function GET(request: NextRequest) {
                 SUM(clicks) AS clicks
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (13 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (7 + ${GSC_LAG_DAYS}))::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '13 days')::date
+                AND date <= ((SELECT end_date FROM anchor) - INTERVAL '7 days')::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
@@ -317,8 +322,8 @@ export async function GET(request: NextRequest) {
                 SUM(clicks) AS clicks
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (20 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (14 + ${GSC_LAG_DAYS}))::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '20 days')::date
+                AND date <= ((SELECT end_date FROM anchor) - INTERVAL '14 days')::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
@@ -330,8 +335,8 @@ export async function GET(request: NextRequest) {
                 SUM(clicks) AS clicks
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (27 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (21 + ${GSC_LAG_DAYS}))::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '27 days')::date
+                AND date <= ((SELECT end_date FROM anchor) - INTERVAL '21 days')::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
@@ -343,8 +348,8 @@ export async function GET(request: NextRequest) {
                 SUM(clicks) AS clicks
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (34 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (28 + ${GSC_LAG_DAYS}))::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '34 days')::date
+                AND date <= ((SELECT end_date FROM anchor) - INTERVAL '28 days')::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
                 AND (country IS NULL OR country = '' OR country = ANY(${countryFilter}))
@@ -384,18 +389,24 @@ export async function GET(request: NextRequest) {
             LIMIT ${limit}
           `
         : await sql`
-            WITH w0 AS (
+            WITH anchor AS (
+              SELECT COALESCE(MAX(date), (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date) AS end_date
+              FROM search_console_query_data
+              WHERE site_id = ${id}
+                AND query IS NOT NULL
+                AND position BETWEEN 1 AND 200
+            ),
+            w0 AS (
               SELECT query,
                 SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos,
                 SUM(clicks) AS clicks,
                 SUM(impressions) AS impressions
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (6 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '6 days')::date
+                AND date <= (SELECT end_date FROM anchor)
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w1 AS (
@@ -404,11 +415,10 @@ export async function GET(request: NextRequest) {
                 SUM(clicks) AS clicks
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (13 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (7 + ${GSC_LAG_DAYS}))::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '13 days')::date
+                AND date <= ((SELECT end_date FROM anchor) - INTERVAL '7 days')::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w2 AS (
@@ -417,11 +427,10 @@ export async function GET(request: NextRequest) {
                 SUM(clicks) AS clicks
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (20 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (14 + ${GSC_LAG_DAYS}))::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '20 days')::date
+                AND date <= ((SELECT end_date FROM anchor) - INTERVAL '14 days')::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w3 AS (
@@ -430,11 +439,10 @@ export async function GET(request: NextRequest) {
                 SUM(clicks) AS clicks
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (27 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (21 + ${GSC_LAG_DAYS}))::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '27 days')::date
+                AND date <= ((SELECT end_date FROM anchor) - INTERVAL '21 days')::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '')
               GROUP BY query
             ),
             w4 AS (
@@ -443,11 +451,10 @@ export async function GET(request: NextRequest) {
                 SUM(clicks) AS clicks
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (34 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * (28 + ${GSC_LAG_DAYS}))::date
+                AND date >= ((SELECT end_date FROM anchor) - INTERVAL '34 days')::date
+                AND date <= ((SELECT end_date FROM anchor) - INTERVAL '28 days')::date
                 AND query IS NOT NULL
                 AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '')
               GROUP BY query
             )
             SELECT
@@ -536,7 +543,6 @@ export async function GET(request: NextRequest) {
               AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
               AND page IS NOT NULL
               AND position BETWEEN 1 AND 200
-              AND (country IS NULL OR country = '')
             GROUP BY page
             ORDER BY total_clicks DESC
             LIMIT ${limit}
