@@ -9,7 +9,8 @@ import { google } from "googleapis";
 // 1. Gemini via GEMINI_API_KEY/GOOGLE_API_KEY or Google service account + Vertex.
 // 2. Perplexity Sonar for live SERP/search tasks when PERPLEXITY_API_KEY exists.
 // 3. OpenAI / Anthropic fallbacks when configured in Vercel.
-// 4. Cache/local fallbacks handled by callers when all providers are unavailable.
+// 4. Mammouth fallback when MAMMOUTH_API_KEY exists.
+// 5. Cache/local fallbacks handled by callers when all providers are unavailable.
 //
 // When NO provider available → throws AIProviderError(no_key) so caller can
 // fall back to cache or stub data (no "Crédit épuisé" raw error to users).
@@ -19,6 +20,7 @@ const GEMINI_DEVELOPER_BASE = "https://generativelanguage.googleapis.com/v1beta"
 const VERTEX_BASE = "https://aiplatform.googleapis.com/v1";
 const OPENAI_BASE = "https://api.openai.com/v1";
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
+const MAMMOUTH_BASE = "https://api.mammouth.ai/v1";
 
 export const MODELS = {
   // SEO task assignments
@@ -57,7 +59,7 @@ const GEMINI_MODELS: Record<keyof typeof MODELS, string> = {
 };
 
 export class AIProviderError extends Error {
-  public readonly provider: "gemini" | "perplexity" | "openai" | "anthropic" | "none";
+  public readonly provider: "gemini" | "perplexity" | "openai" | "anthropic" | "mammouth" | "none";
   public readonly code: "no_key" | "credit_low" | "rate_limit" | "auth" | "model" | "network" | "unknown";
   public readonly status?: number;
 
@@ -76,7 +78,7 @@ export class AIProviderError extends Error {
 interface Message { role: "user" | "assistant" | "system"; content: string; }
 
 function cleanEnvValue(value: string | undefined): string | undefined {
-  const cleaned = value?.trim().replace(/\\r|\\n/g, "").trim();
+  const cleaned = value?.trim().replace(/\r|\n|\\r|\\n/g, "").trim();
   return cleaned || undefined;
 }
 
@@ -104,6 +106,10 @@ function getOpenAIKey(): string | undefined {
 
 function getAnthropicKey(): string | undefined {
   return cleanEnvValue(process.env.ANTHROPIC_API_KEY);
+}
+
+function getMammouthKey(): string | undefined {
+  return cleanEnvValue(process.env.MAMMOUTH_API_KEY) || cleanEnvValue(process.env.MAMMOUTH_KEY);
 }
 
 function getVertexProjectId(): string | undefined {
@@ -185,8 +191,19 @@ export async function askAI(
     }
   }
 
+  const mammouthKey = getMammouthKey();
+  if (mammouthKey) {
+    try {
+      return await callMammouth(mammouthKey, messages, maxTokens);
+    } catch (err) {
+      if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
+        throw err;
+      }
+    }
+  }
+
   throw new AIProviderError(
-    "No AI provider configured. Set GEMINI_API_KEY/GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT with service account credentials, PERPLEXITY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.",
+    "No AI provider configured. Set GEMINI_API_KEY/GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT with service account credentials, PERPLEXITY_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or MAMMOUTH_API_KEY.",
     { provider: "none", code: "no_key" }
   );
 }
@@ -455,6 +472,63 @@ async function callAnthropic(apiKey: string, messages: Message[], maxTokens: num
     throw new AIProviderError("Anthropic returned an empty response", { provider: "anthropic", code: "unknown" });
   }
   return text;
+}
+
+async function callMammouth(apiKey: string, messages: Message[], maxTokens: number): Promise<string> {
+  const preferredModel = cleanEnvValue(process.env.MAMMOUTH_MODEL);
+  const models = [
+    preferredModel,
+    "gpt-5.4",
+    "Codex-opus-4-6",
+    "gemini-3.1-pro-preview",
+  ].filter((model, index, arr): model is string => Boolean(model) && arr.indexOf(model) === index);
+
+  let lastError: AIProviderError | null = null;
+  for (const model of models) {
+    const res = await fetch(`${MAMMOUTH_BASE}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      let code: AIProviderError["code"] = "unknown";
+      let userMsg = `Mammouth API error ${res.status}`;
+      if (res.status === 401 || res.status === 403) {
+        code = "auth";
+        userMsg = "Mammouth auth failed. Check MAMMOUTH_API_KEY.";
+      } else if (res.status === 429) {
+        code = /credit|quota|billing|insufficient/i.test(err) ? "credit_low" : "rate_limit";
+        userMsg = code === "credit_low" ? "Mammouth quota unavailable." : "Mammouth rate limit. Try again later.";
+      } else if (res.status === 400 || (res.status === 404 && /model/i.test(err))) {
+        code = "model";
+        userMsg = `Mammouth model unavailable: ${model}`;
+      } else if (res.status >= 500) {
+        code = "network";
+        userMsg = `Mammouth unavailable (${res.status}). Try again later.`;
+      }
+      lastError = new AIProviderError(userMsg, { provider: "mammouth", code, status: res.status });
+      if (code === "model" || code === "network" || code === "rate_limit") continue;
+      throw lastError;
+    }
+
+    const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const text = data.choices?.[0]?.message?.content?.trim() ?? "";
+    if (text) return text;
+    lastError = new AIProviderError("Mammouth returned an empty response", { provider: "mammouth", code: "unknown" });
+  }
+
+  throw lastError ?? new AIProviderError("Mammouth returned no usable response", { provider: "mammouth", code: "unknown" });
 }
 
 // Generate image: Gemini first, then free Pollinations. No OpenAI fallback.
