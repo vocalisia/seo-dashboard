@@ -86,8 +86,13 @@ function readEnv(name: string): string | undefined {
   return cleanEnvValue(process.env[name]);
 }
 
+function readRawEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value || undefined;
+}
+
 function parseGoogleCredentials(): { project_id?: string; client_email?: string; private_key?: string } | null {
-  const raw = readEnv("GOOGLE_CREDENTIALS") || readEnv("GSC_SERVICE_ACCOUNT_JSON");
+  const raw = readRawEnv("GOOGLE_CREDENTIALS") || readRawEnv("GSC_SERVICE_ACCOUNT_JSON");
   if (!raw) return null;
   try {
     return JSON.parse(raw.replace(/\n/g, "\\n").replace(/\\\\n/g, "\\n"));
@@ -247,20 +252,28 @@ function readGeminiText(data: unknown): string {
 
 async function getVertexAccessToken(): Promise<string> {
   const creds = parseGoogleCredentials();
-  const auth = new google.auth.GoogleAuth({
-    credentials: creds
-      ? {
-          client_email: creds.client_email,
-          private_key: creds.private_key,
-        }
-      : undefined,
-    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-  });
-  const token = await auth.getAccessToken();
-  if (!token) {
-    throw new AIProviderError("Gemini Vertex auth failed: no access token", { provider: "gemini", code: "auth" });
+  try {
+    const auth = new google.auth.GoogleAuth({
+      credentials: creds
+        ? {
+            client_email: creds.client_email,
+            private_key: creds.private_key,
+          }
+        : undefined,
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+    });
+    const token = await auth.getAccessToken();
+    if (!token) {
+      throw new AIProviderError("Gemini Vertex auth failed: no access token", { provider: "gemini", code: "auth" });
+    }
+    return token;
+  } catch (err) {
+    if (err instanceof AIProviderError) throw err;
+    throw new AIProviderError("Gemini Vertex auth failed. Falling back to another AI provider.", {
+      provider: "gemini",
+      code: "auth",
+    });
   }
-  return token;
 }
 
 async function callGemini(model: string, messages: Message[], maxTokens: number): Promise<string> {
