@@ -299,11 +299,7 @@ export async function GET(request: NextRequest) {
           });
       const allRows = rows as Record<string, unknown>[];
       const currentRows = allRows.filter((row) => row.row_source === "current");
-      const visibleRows = strictPositioned
-        ? currentRows.length > 0
-          ? currentRows
-          : allRows.filter((row) => row.row_source === "tracked" && Number(row.volume_market ?? row.volume_ch ?? row.volume_fr ?? 0) > 1)
-        : rows;
+      const visibleRows = strictPositioned ? currentRows : rows;
       return NextResponse.json(filterPollutedRows(visibleRows as Record<string, unknown>[]));
     }
 
