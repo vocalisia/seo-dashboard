@@ -15,6 +15,8 @@ e2e
 *.test.*
 *.spec.*
 .env.local
+.env*
+!.env.example
 .env.*.local
 README.md
 docs/

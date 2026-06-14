@@ -22,6 +22,25 @@ const OPENAI_BASE = "https://api.openai.com/v1";
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
 const MAMMOUTH_BASE = "https://api.mammouth.ai/v1";
 
+const SERVER_ENV = {
+  AI_OPENAI_API_KEY: process.env.AI_OPENAI_API_KEY,
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+  BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  GEMINI_IMAGE_MODEL: process.env.GEMINI_IMAGE_MODEL,
+  GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+  GOOGLE_CLOUD_LOCATION: process.env.GOOGLE_CLOUD_LOCATION,
+  GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT,
+  GOOGLE_CREDENTIALS: process.env.GOOGLE_CREDENTIALS,
+  GSC_SERVICE_ACCOUNT_JSON: process.env.GSC_SERVICE_ACCOUNT_JSON,
+  MAMMOUTH_API_KEY: process.env.MAMMOUTH_API_KEY,
+  MAMMOUTH_KEY: process.env.MAMMOUTH_KEY,
+  MAMMOUTH_MODEL: process.env.MAMMOUTH_MODEL,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  OPENAI_MODEL: process.env.OPENAI_MODEL,
+  PERPLEXITY_API_KEY: process.env.PERPLEXITY_API_KEY,
+} as const;
+
 export const MODELS = {
   // SEO task assignments
   fast:        "fast",
@@ -83,11 +102,11 @@ function cleanEnvValue(value: string | undefined): string | undefined {
 }
 
 function readEnv(name: string): string | undefined {
-  return cleanEnvValue(process.env[name]);
+  return cleanEnvValue(SERVER_ENV[name as keyof typeof SERVER_ENV] ?? process.env[name]);
 }
 
 function readRawEnv(name: string): string | undefined {
-  const value = process.env[name]?.trim();
+  const value = (SERVER_ENV[name as keyof typeof SERVER_ENV] ?? process.env[name])?.trim();
   return value || undefined;
 }
 
@@ -110,7 +129,7 @@ function getGeminiApiKey(): string | undefined {
 }
 
 function getOpenAIKey(): string | undefined {
-  return readEnv("OPENAI_API_KEY");
+  return readEnv("AI_OPENAI_API_KEY") || readEnv("OPENAI_API_KEY");
 }
 
 function getAnthropicKey(): string | undefined {
