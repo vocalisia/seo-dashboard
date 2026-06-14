@@ -8,7 +8,8 @@ import { google } from "googleapis";
 // Provider priority:
 // 1. Gemini via GEMINI_API_KEY/GOOGLE_API_KEY or Google service account + Vertex.
 // 2. Perplexity Sonar for live SERP/search tasks when PERPLEXITY_API_KEY exists.
-// 3. Cache/local fallbacks handled by callers when both providers are unavailable.
+// 3. OpenAI / Anthropic fallbacks when configured in Vercel.
+// 4. Cache/local fallbacks handled by callers when all providers are unavailable.
 //
 // When NO provider available → throws AIProviderError(no_key) so caller can
 // fall back to cache or stub data (no "Crédit épuisé" raw error to users).
@@ -16,6 +17,8 @@ import { google } from "googleapis";
 const PERPLEXITY_BASE = "https://api.perplexity.ai";
 const GEMINI_DEVELOPER_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const VERTEX_BASE = "https://aiplatform.googleapis.com/v1";
+const OPENAI_BASE = "https://api.openai.com/v1";
+const ANTHROPIC_BASE = "https://api.anthropic.com/v1";
 
 export const MODELS = {
   // SEO task assignments
@@ -54,13 +57,13 @@ const GEMINI_MODELS: Record<keyof typeof MODELS, string> = {
 };
 
 export class AIProviderError extends Error {
-  public readonly provider: "gemini" | "perplexity" | "anthropic" | "none";
+  public readonly provider: "gemini" | "perplexity" | "openai" | "anthropic" | "none";
   public readonly code: "no_key" | "credit_low" | "rate_limit" | "auth" | "model" | "network" | "unknown";
   public readonly status?: number;
 
   constructor(
     message: string,
-    opts: { provider: "gemini" | "perplexity" | "anthropic" | "none"; code: AIProviderError["code"]; status?: number }
+    opts: { provider: AIProviderError["provider"]; code: AIProviderError["code"]; status?: number }
   ) {
     super(message);
     this.name = "AIProviderError";
@@ -93,6 +96,14 @@ function parseGoogleCredentials(): { project_id?: string; client_email?: string;
 
 function getGeminiApiKey(): string | undefined {
   return cleanEnvValue(process.env.GEMINI_API_KEY) || cleanEnvValue(process.env.GOOGLE_API_KEY);
+}
+
+function getOpenAIKey(): string | undefined {
+  return cleanEnvValue(process.env.OPENAI_API_KEY);
+}
+
+function getAnthropicKey(): string | undefined {
+  return cleanEnvValue(process.env.ANTHROPIC_API_KEY);
 }
 
 function getVertexProjectId(): string | undefined {
@@ -152,8 +163,30 @@ export async function askAI(
     }
   }
 
+  const openAIKey = getOpenAIKey();
+  if (openAIKey) {
+    try {
+      return await callOpenAI(openAIKey, messages, maxTokens);
+    } catch (err) {
+      if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
+        throw err;
+      }
+    }
+  }
+
+  const anthropicKey = getAnthropicKey();
+  if (anthropicKey) {
+    try {
+      return await callAnthropic(anthropicKey, messages, maxTokens);
+    } catch (err) {
+      if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
+        throw err;
+      }
+    }
+  }
+
   throw new AIProviderError(
-    "No Gemini/Perplexity provider configured. Set GEMINI_API_KEY/GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT with service account credentials, or PERPLEXITY_API_KEY.",
+    "No AI provider configured. Set GEMINI_API_KEY/GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT with service account credentials, PERPLEXITY_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY.",
     { provider: "none", code: "no_key" }
   );
 }
@@ -320,6 +353,108 @@ async function callPerplexity(
 
   const data = await res.json() as { choices: { message: { content: string } }[] };
   return data.choices?.[0]?.message?.content ?? "";
+}
+
+async function callOpenAI(apiKey: string, messages: Message[], maxTokens: number): Promise<string> {
+  const model = cleanEnvValue(process.env.OPENAI_MODEL) || "gpt-4o-mini";
+  const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      max_tokens: maxTokens,
+      temperature: 0.2,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    let code: AIProviderError["code"] = "unknown";
+    let userMsg = `OpenAI API error ${res.status}`;
+    if (res.status === 401 || res.status === 403) {
+      code = "auth";
+      userMsg = "OpenAI auth failed. Check OPENAI_API_KEY.";
+    } else if (res.status === 429) {
+      code = /quota|billing|insufficient/i.test(err) ? "credit_low" : "rate_limit";
+      userMsg = code === "credit_low" ? "OpenAI quota unavailable." : "OpenAI rate limit. Try again later.";
+    } else if (res.status === 404 && /model/i.test(err)) {
+      code = "model";
+      userMsg = `OpenAI model unavailable: ${model}`;
+    } else if (res.status >= 500) {
+      code = "network";
+      userMsg = `OpenAI unavailable (${res.status}). Try again later.`;
+    }
+    throw new AIProviderError(userMsg, { provider: "openai", code, status: res.status });
+  }
+
+  const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const text = data.choices?.[0]?.message?.content?.trim() ?? "";
+  if (!text) {
+    throw new AIProviderError("OpenAI returned an empty response", { provider: "openai", code: "unknown" });
+  }
+  return text;
+}
+
+async function callAnthropic(apiKey: string, messages: Message[], maxTokens: number): Promise<string> {
+  const model = cleanEnvValue(process.env.ANTHROPIC_MODEL) || "claude-3-5-haiku-latest";
+  const system = messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n")
+    .trim();
+  const anthropicMessages = messages
+    .filter((message) => message.role !== "system")
+    .map((message) => ({
+      role: message.role === "assistant" ? "assistant" : "user",
+      content: message.content,
+    }));
+
+  const res = await fetch(`${ANTHROPIC_BASE}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: maxTokens,
+      temperature: 0.2,
+      ...(system ? { system } : {}),
+      messages: anthropicMessages.length > 0 ? anthropicMessages : [{ role: "user", content: "" }],
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    let code: AIProviderError["code"] = "unknown";
+    let userMsg = `Anthropic API error ${res.status}`;
+    if (res.status === 401 || res.status === 403) {
+      code = "auth";
+      userMsg = "Anthropic auth failed. Check ANTHROPIC_API_KEY.";
+    } else if (res.status === 429) {
+      code = /credit|quota|billing/i.test(err) ? "credit_low" : "rate_limit";
+      userMsg = code === "credit_low" ? "Anthropic quota unavailable." : "Anthropic rate limit. Try again later.";
+    } else if (res.status === 404 && /model/i.test(err)) {
+      code = "model";
+      userMsg = `Anthropic model unavailable: ${model}`;
+    } else if (res.status >= 500) {
+      code = "network";
+      userMsg = `Anthropic unavailable (${res.status}). Try again later.`;
+    }
+    throw new AIProviderError(userMsg, { provider: "anthropic", code, status: res.status });
+  }
+
+  const data = await res.json() as { content?: Array<{ type?: string; text?: string }> };
+  const text = data.content?.map((part) => part.text ?? "").join("").trim() ?? "";
+  if (!text) {
+    throw new AIProviderError("Anthropic returned an empty response", { provider: "anthropic", code: "unknown" });
+  }
+  return text;
 }
 
 // Generate image: Gemini first, then free Pollinations. No OpenAI fallback.
