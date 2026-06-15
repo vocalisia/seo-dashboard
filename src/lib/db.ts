@@ -172,6 +172,7 @@ export async function ensureSchema(): Promise<void> {
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS current_position DECIMAL(6,2)`;
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS current_impressions INTEGER`;
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS current_clicks INTEGER`;
+  await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`;
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS position_history JSONB DEFAULT '[]'::jsonb`;
   await sql`ALTER TABLE tracked_keywords ADD COLUMN IF NOT EXISTS volume_updated_at TIMESTAMP`;
 

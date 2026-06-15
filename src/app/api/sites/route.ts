@@ -1,8 +1,6 @@
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { requireApiSession } from "@/lib/api-auth";
 import { isLocalDevDemoMode, LOCAL_DEMO_SITES } from "@/lib/local-dev";
-import { GSC_LAG_DAYS } from "@/lib/gsc-window";
-import { siteCountryCode } from "@/lib/site-country";
 import { NextRequest, NextResponse } from "next/server";
 
 // In-memory cache (per-instance) — TTL 5 minutes. Saves ~200ms / heavy SQL on Neon.
@@ -101,7 +99,7 @@ export async function GET(request: NextRequest) {
     // If language is explicit, override with the language-mapped country list.
     const siteCountryMap: Record<number, string[]> = {};
     for (const s of siteList) {
-      siteCountryMap[s.id] = countryFilter ?? [siteCountryCode(s.url)];
+      siteCountryMap[s.id] = countryFilter ?? [];
     }
 
     // Aggregate analytics_daily (no country dim)
@@ -124,98 +122,68 @@ export async function GET(request: NextRequest) {
     // clicks/impressions stay on search_console_data (page-level totals identical).
     const gscMap = new Map<number, { total_clicks: number; total_impressions: number; avg_position: number }>();
     if (!countryFilter) {
-      const totalsRows = (await sql`
-        SELECT site_id,
+      const gscRows = (await sql`
+        WITH anchor AS (
+          SELECT site_id, MAX(date) AS end_date
+          FROM search_console_query_data
+          WHERE position BETWEEN 1 AND 200
+          GROUP BY site_id
+        )
+        SELECT qd.site_id,
           COALESCE(SUM(clicks), 0) as total_clicks,
-          COALESCE(SUM(impressions), 0) as total_impressions
-        FROM search_console_data
-        WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-          AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-          AND (country IS NULL OR country = '')
-        GROUP BY site_id
-      `) as Array<Record<string, unknown>>;
-      const posRows = (await sql`
-        SELECT site_id,
+          COALESCE(SUM(impressions), 0) as total_impressions,
           COALESCE(
             SUM(impressions * position)::float / NULLIF(SUM(impressions), 0),
             0
           ) as avg_position
-        FROM search_console_query_data
-        WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-          AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-        GROUP BY site_id
+        FROM search_console_query_data qd
+        JOIN anchor a ON a.site_id = qd.site_id
+        WHERE qd.date >= (a.end_date - INTERVAL '1 day' * (${days} - 1))::date
+          AND qd.date <= a.end_date
+          AND qd.position BETWEEN 1 AND 200
+        GROUP BY qd.site_id
       `) as Array<Record<string, unknown>>;
 
-      const totalsMap = new Map<number, Record<string, unknown>>();
-      const posMap = new Map<number, number>();
-      for (const row of totalsRows) totalsMap.set(Number(row.site_id), row);
-      for (const row of posRows) posMap.set(Number(row.site_id), Number(row.avg_position ?? 0));
-
-      const missingPositionIds = siteList.map((s) => s.id).filter((id) => !posMap.get(id));
-      if (missingPositionIds.length > 0) {
-        const fallbackRows = (await sql`
-          SELECT site_id, COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
-          FROM search_console_data
-          WHERE site_id = ANY(${missingPositionIds})
-            AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-            AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-            AND (country IS NULL OR country = '')
-          GROUP BY site_id
-        `) as Array<Record<string, unknown>>;
-        for (const row of fallbackRows) posMap.set(Number(row.site_id), Number(row.avg_position ?? 0));
-      }
-
+      const rowsMap = new Map<number, Record<string, unknown>>();
+      for (const row of gscRows) rowsMap.set(Number(row.site_id), row);
       for (const s of siteList) {
-        const t = totalsMap.get(s.id) ?? {};
+        const t = rowsMap.get(s.id) ?? {};
         gscMap.set(s.id, {
           total_clicks: Number(t.total_clicks ?? 0),
           total_impressions: Number(t.total_impressions ?? 0),
-          avg_position: Number(posMap.get(s.id) ?? 0),
+          avg_position: Number(t.avg_position ?? 0),
         });
       }
     } else {
       for (const s of siteList) {
         const wanted = siteCountryMap[s.id];
-        const totalsRow = (await sql`
+        const gscRow = (await sql`
+          WITH anchor AS (
+            SELECT MAX(date) AS end_date
+            FROM search_console_query_data
+            WHERE site_id = ${s.id}
+              AND position BETWEEN 1 AND 200
+              AND country = ANY(${wanted})
+          )
           SELECT
             COALESCE(SUM(clicks), 0) as total_clicks,
-            COALESCE(SUM(impressions), 0) as total_impressions
-          FROM search_console_data
-          WHERE site_id = ${s.id}
-            AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-            AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-            AND country = ANY(${wanted})
-        `) as Array<Record<string, unknown>>;
-        const posRow = (await sql`
-          SELECT
+            COALESCE(SUM(impressions), 0) as total_impressions,
             COALESCE(
               SUM(impressions * position)::float / NULLIF(SUM(impressions), 0),
               0
             ) as avg_position
           FROM search_console_query_data
           WHERE site_id = ${s.id}
-            AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-            AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+            AND date >= ((SELECT end_date FROM anchor) - INTERVAL '1 day' * (${days} - 1))::date
+            AND date <= (SELECT end_date FROM anchor)
             AND country = ANY(${wanted})
+            AND position BETWEEN 1 AND 200
         `) as Array<Record<string, unknown>>;
-        const t = totalsRow[0] ?? {};
-        const p = posRow[0] ?? {};
-        let avg = Number(p.avg_position ?? 0);
-        if (avg === 0) {
-          const fallback = (await sql`
-            SELECT COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
-            FROM search_console_data
-            WHERE site_id = ${s.id}
-              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-              AND country = ANY(${wanted})
-          `) as Array<Record<string, unknown>>;
-          avg = Number(fallback[0]?.avg_position ?? 0);
-        }
+        const t = gscRow[0] ?? {};
         gscMap.set(s.id, {
           total_clicks: Number(t.total_clicks ?? 0),
           total_impressions: Number(t.total_impressions ?? 0),
-          avg_position: avg,
+          avg_position: Number(t.avg_position ?? 0),
         });
       }
     }

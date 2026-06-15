@@ -14,19 +14,29 @@ export async function GET() {
 
   const rows = await sql`
     WITH q AS (
+      WITH anchor AS (
+        SELECT site_id, MAX(date) AS latest_gsc_date
+        FROM search_console_query_data
+        WHERE position BETWEEN 1 AND 200
+        GROUP BY site_id
+      )
       SELECT
-        site_id,
-        MAX(date) AS latest_gsc_date,
-        COUNT(DISTINCT query) FILTER (
-          WHERE date >= (CURRENT_DATE - INTERVAL '30 days')::date
-            AND position BETWEEN 1 AND 200
+        a.site_id,
+        a.latest_gsc_date,
+        COUNT(DISTINCT qd.query) FILTER (
+          WHERE qd.date >= (a.latest_gsc_date - INTERVAL '29 days')::date
+            AND qd.position BETWEEN 1 AND 200
         ) AS positioned_keywords_30d,
-        COUNT(DISTINCT query) FILTER (
-          WHERE date >= (CURRENT_DATE - INTERVAL '7 days')::date
-            AND position BETWEEN 1 AND 10
+        COUNT(DISTINCT qd.query) FILTER (
+          WHERE qd.date >= (a.latest_gsc_date - INTERVAL '6 days')::date
+            AND qd.position BETWEEN 1 AND 10
         ) AS top10_keywords_7d
-      FROM search_console_query_data
-      GROUP BY site_id
+      FROM anchor a
+      LEFT JOIN search_console_query_data qd
+        ON qd.site_id = a.site_id
+       AND qd.date >= (a.latest_gsc_date - INTERVAL '29 days')::date
+       AND qd.date <= a.latest_gsc_date
+      GROUP BY a.site_id, a.latest_gsc_date
     ),
     tk AS (
       SELECT
@@ -48,26 +58,33 @@ export async function GET() {
       SELECT site_id, COUNT(*) AS gain_candidates
       FROM (
         SELECT
-          site_id,
-          query,
+          qd.site_id,
+          qd.query,
           SUM(impressions * position) FILTER (
-            WHERE date >= (CURRENT_DATE - INTERVAL '8 days')::date
-              AND date <= (CURRENT_DATE - INTERVAL '2 days')::date
+            WHERE date >= (a.latest_gsc_date - INTERVAL '6 days')::date
+              AND date <= a.latest_gsc_date
           )::float / NULLIF(SUM(impressions) FILTER (
-            WHERE date >= (CURRENT_DATE - INTERVAL '8 days')::date
-              AND date <= (CURRENT_DATE - INTERVAL '2 days')::date
+            WHERE date >= (a.latest_gsc_date - INTERVAL '6 days')::date
+              AND date <= a.latest_gsc_date
           ), 0) AS pos_now,
           SUM(impressions * position) FILTER (
-            WHERE date >= (CURRENT_DATE - INTERVAL '15 days')::date
-              AND date <= (CURRENT_DATE - INTERVAL '9 days')::date
+            WHERE date >= (a.latest_gsc_date - INTERVAL '13 days')::date
+              AND date <= (a.latest_gsc_date - INTERVAL '7 days')::date
           )::float / NULLIF(SUM(impressions) FILTER (
-            WHERE date >= (CURRENT_DATE - INTERVAL '15 days')::date
-              AND date <= (CURRENT_DATE - INTERVAL '9 days')::date
+            WHERE date >= (a.latest_gsc_date - INTERVAL '13 days')::date
+              AND date <= (a.latest_gsc_date - INTERVAL '7 days')::date
           ), 0) AS pos_prev
-        FROM search_console_query_data
-        WHERE date >= (CURRENT_DATE - INTERVAL '15 days')::date
-          AND position BETWEEN 1 AND 200
-        GROUP BY site_id, query
+        FROM search_console_query_data qd
+        JOIN (
+          SELECT site_id, MAX(date) AS latest_gsc_date
+          FROM search_console_query_data
+          WHERE position BETWEEN 1 AND 200
+          GROUP BY site_id
+        ) a ON a.site_id = qd.site_id
+        WHERE qd.date >= (a.latest_gsc_date - INTERVAL '13 days')::date
+          AND qd.date <= a.latest_gsc_date
+          AND qd.position BETWEEN 1 AND 200
+        GROUP BY qd.site_id, qd.query
       ) x
       WHERE pos_now IS NOT NULL
         AND pos_prev IS NOT NULL

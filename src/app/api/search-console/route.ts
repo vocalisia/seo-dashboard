@@ -489,20 +489,35 @@ export async function GET(request: NextRequest) {
             LIMIT ${limit}
           `;
 
-      // Date labels for the same complete GSC windows used above.
-      const today = new Date();
+      // Date labels for the same imported GSC windows used above.
+      const anchorRows = countryFilter
+        ? await sql`
+            SELECT MAX(date)::text AS end_date
+            FROM search_console_query_data
+            WHERE site_id = ${id}
+              AND query IS NOT NULL
+              AND position BETWEEN 1 AND 200
+              AND country = ANY(${countryFilter})
+          `
+        : await sql`
+            SELECT MAX(date)::text AS end_date
+            FROM search_console_query_data
+            WHERE site_id = ${id}
+              AND query IS NOT NULL
+              AND position BETWEEN 1 AND 200
+          `;
+      const labelAnchor = anchorRows[0]?.end_date ? new Date(String(anchorRows[0].end_date)) : new Date();
       const fmt = (offset: number) => {
-        const d = new Date(today);
+        const d = new Date(labelAnchor);
         d.setDate(d.getDate() - offset);
         return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`;
       };
-      const lag = GSC_LAG_DAYS;
       const labels = {
-        w0: `${fmt(lag + 6)}-${fmt(lag)}`,
-        w1: `${fmt(lag + 13)}-${fmt(lag + 7)}`,
-        w2: `${fmt(lag + 20)}-${fmt(lag + 14)}`,
-        w3: `${fmt(lag + 27)}-${fmt(lag + 21)}`,
-        w4: `${fmt(lag + 34)}-${fmt(lag + 28)}`,
+        w0: `${fmt(6)}-${fmt(0)}`,
+        w1: `${fmt(13)}-${fmt(7)}`,
+        w2: `${fmt(20)}-${fmt(14)}`,
+        w3: `${fmt(27)}-${fmt(21)}`,
+        w4: `${fmt(34)}-${fmt(28)}`,
       };
 
       return NextResponse.json({ rows: filterPollutedRows(rows as Record<string, unknown>[]), labels });
@@ -511,6 +526,14 @@ export async function GET(request: NextRequest) {
     if (type === "pages") {
       const rows = countryFilter
         ? await sql`
+            WITH anchor AS (
+              SELECT MAX(date) AS end_date
+              FROM search_console_data
+              WHERE site_id = ${id}
+                AND page IS NOT NULL
+                AND position BETWEEN 1 AND 200
+                AND country = ANY(${countryFilter})
+            )
             SELECT page,
               SUM(clicks) as total_clicks,
               SUM(impressions) as total_impressions,
@@ -519,8 +542,8 @@ export async function GET(request: NextRequest) {
               COUNT(DISTINCT query) as keyword_count
             FROM search_console_data
             WHERE site_id = ${id}
-              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+              AND date >= ((SELECT end_date FROM anchor) - INTERVAL '1 day' * (${days} - 1))::date
+              AND date <= (SELECT end_date FROM anchor)
               AND page IS NOT NULL
               AND position BETWEEN 1 AND 200
               AND country = ANY(${countryFilter})
@@ -529,6 +552,13 @@ export async function GET(request: NextRequest) {
             LIMIT ${limit}
           `
         : await sql`
+            WITH anchor AS (
+              SELECT MAX(date) AS end_date
+              FROM search_console_data
+              WHERE site_id = ${id}
+                AND page IS NOT NULL
+                AND position BETWEEN 1 AND 200
+            )
             SELECT page,
               SUM(clicks) as total_clicks,
               SUM(impressions) as total_impressions,
@@ -537,11 +567,10 @@ export async function GET(request: NextRequest) {
               COUNT(DISTINCT query) as keyword_count
             FROM search_console_data
             WHERE site_id = ${id}
-              AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-              AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+              AND date >= ((SELECT end_date FROM anchor) - INTERVAL '1 day' * (${days} - 1))::date
+              AND date <= (SELECT end_date FROM anchor)
               AND page IS NOT NULL
               AND position BETWEEN 1 AND 200
-              AND (country IS NULL OR country = '')
             GROUP BY page
             ORDER BY total_clicks DESC
             LIMIT ${limit}

@@ -42,11 +42,19 @@ export async function GET(req: NextRequest) {
     SELECT q.query,
       SUM(q.impressions) AS imp,
       SUM(q.clicks) AS clicks,
-      AVG(q.position) AS pos
-    FROM search_console_data q
+      SUM(q.impressions * q.position)::float / NULLIF(SUM(q.impressions), 0) AS pos
+    FROM search_console_query_data q
+    JOIN (
+      SELECT MAX(date) AS end_date
+      FROM search_console_query_data
+      WHERE site_id = ${siteId}
+        AND position BETWEEN 1 AND 200
+    ) anchor ON TRUE
     WHERE q.site_id = ${siteId}
-      AND q.date >= CURRENT_DATE - 90
+      AND q.date >= (anchor.end_date - INTERVAL '89 days')::date
+      AND q.date <= anchor.end_date
       AND q.query IS NOT NULL
+      AND q.position BETWEEN 1 AND 200
       AND LENGTH(q.query) BETWEEN 4 AND 80
       AND q.query NOT LIKE '%site:%'
       AND q.query NOT LIKE '%@%'
@@ -78,31 +86,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // 2. Tracked keywords with real Google KP volumes (reference for comparison)
-  const tkRows = (await sql`
-    SELECT keyword,
-      COALESCE(volume_market, volume_ch, volume_fr, 0) AS vol
-    FROM tracked_keywords
-    WHERE site_id = ${siteId} AND is_active = true
-      AND COALESCE(volume_market, volume_ch, volume_fr, 0) >= 100
-      AND volume_source LIKE 'google_kp_real%'
-    ORDER BY COALESCE(volume_market, volume_ch, volume_fr, 0) DESC
-    LIMIT 20
-  `) as { keyword: string; vol: number }[];
-
-  for (const r of tkRows) {
-    results.push({
-      keyword: r.keyword,
-      impressions: 0,
-      clicks: 0,
-      avg_position: 0,
-      volume: Number(r.vol),
-      source: "kp_real",
-      already_tracked: true,
-    });
-  }
-
-  results.sort((a, b) => b.impressions - a.impressions || b.volume - a.volume);
+  results.sort((a, b) => b.impressions - a.impressions || a.avg_position - b.avg_position);
 
   return NextResponse.json({
     success: true,
@@ -156,14 +140,42 @@ export async function POST(req: NextRequest) {
       SELECT
         ${siteId}, ${r.keyword}, ${targetUrl}, true, NOW(), NULL, NULL,
         ${market},
-        (SELECT ROUND(d.position::numeric, 1) FROM search_console_data d
+        (SELECT ROUND((SUM(d.impressions * d.position)::float / NULLIF(SUM(d.impressions), 0))::numeric, 1)
+           FROM search_console_query_data d
+           JOIN (
+             SELECT MAX(date) AS end_date
+             FROM search_console_query_data
+             WHERE site_id = ${siteId}
+               AND LOWER(query) = LOWER(${r.keyword})
+               AND position BETWEEN 1 AND 200
+           ) anchor ON TRUE
            WHERE d.site_id = ${siteId} AND LOWER(d.query) = LOWER(${r.keyword})
-             AND d.date >= CURRENT_DATE - 30 AND d.impressions > 0
-           ORDER BY d.date DESC LIMIT 1),
-        COALESCE((SELECT SUM(d.impressions) FROM search_console_data d
-           WHERE d.site_id = ${siteId} AND LOWER(d.query) = LOWER(${r.keyword}) AND d.date >= CURRENT_DATE - 30), 0),
-        COALESCE((SELECT SUM(d.clicks) FROM search_console_data d
-           WHERE d.site_id = ${siteId} AND LOWER(d.query) = LOWER(${r.keyword}) AND d.date >= CURRENT_DATE - 30), 0),
+             AND d.date >= (anchor.end_date - INTERVAL '29 days')::date
+             AND d.date <= anchor.end_date
+             AND d.impressions > 0
+             AND d.position BETWEEN 1 AND 200),
+        COALESCE((SELECT SUM(d.impressions) FROM search_console_query_data d
+           JOIN (
+             SELECT MAX(date) AS end_date
+             FROM search_console_query_data
+             WHERE site_id = ${siteId}
+               AND LOWER(query) = LOWER(${r.keyword})
+               AND position BETWEEN 1 AND 200
+           ) anchor ON TRUE
+           WHERE d.site_id = ${siteId} AND LOWER(d.query) = LOWER(${r.keyword})
+             AND d.date >= (anchor.end_date - INTERVAL '29 days')::date
+             AND d.date <= anchor.end_date), 0),
+        COALESCE((SELECT SUM(d.clicks) FROM search_console_query_data d
+           JOIN (
+             SELECT MAX(date) AS end_date
+             FROM search_console_query_data
+             WHERE site_id = ${siteId}
+               AND LOWER(query) = LOWER(${r.keyword})
+               AND position BETWEEN 1 AND 200
+           ) anchor ON TRUE
+           WHERE d.site_id = ${siteId} AND LOWER(d.query) = LOWER(${r.keyword})
+             AND d.date >= (anchor.end_date - INTERVAL '29 days')::date
+             AND d.date <= anchor.end_date), 0),
         NOW(), 0.5, 'gsc_discovery_no_volume'
       ON CONFLICT DO NOTHING
     `;

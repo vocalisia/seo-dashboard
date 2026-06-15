@@ -23,15 +23,24 @@ export async function GET(request: NextRequest) {
     }
 
     const rows = await sql`
+      WITH anchor AS (
+        SELECT MAX(date) AS end_date
+        FROM search_console_query_data
+        WHERE site_id = ${id}
+          AND LOWER(query) = LOWER(${query})
+          AND position BETWEEN 1 AND 200
+      )
       SELECT
         date::text as date,
-        AVG(position) as position,
+        SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) as position,
         SUM(clicks) as clicks,
         SUM(impressions) as impressions
-      FROM search_console_data
+      FROM search_console_query_data
       WHERE site_id = ${id}
-        AND query = ${query}
-        AND date >= NOW() - INTERVAL '1 day' * ${days}
+        AND LOWER(query) = LOWER(${query})
+        AND date >= ((SELECT end_date FROM anchor) - INTERVAL '1 day' * (${days} - 1))::date
+        AND date <= (SELECT end_date FROM anchor)
+        AND position BETWEEN 1 AND 200
       GROUP BY date
       ORDER BY date ASC
     `;

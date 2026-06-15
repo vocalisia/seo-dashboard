@@ -207,6 +207,23 @@ function keywordSolution(kw: QueryData): string {
   if (pos <= 30) return "Page 2-3 - renforcer la page";
   return sourceVolume >= 100 ? "Creer contenu dedie" : "Faible priorite";
 }
+
+function qualityStatusLabel(status: string): string {
+  if (status === "ok") return "donnees OK";
+  if (status === "gsc_stale") return "GSC en retard";
+  if (status === "gsc_no_query_data") return "GSC sans requetes";
+  if (status === "gsc_not_configured") return "GSC non configure";
+  if (status === "kp_missing") return "Volumes KP manquants";
+  if (status === "ga4_no_daily_data") return "GA4 sans donnees";
+  return status;
+}
+
+function qualityStatusClass(status: string): string {
+  if (status === "ok") return "border-green-500/30 bg-green-500/10 text-green-300";
+  if (status === "gsc_stale") return "border-blue-500/30 bg-blue-500/10 text-blue-200";
+  return "border-yellow-500/30 bg-yellow-500/10 text-yellow-200";
+}
+
 function formatMs(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "-";
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
@@ -932,8 +949,8 @@ export default function DashboardPage() {
               {qualitySites.slice(0, 4).map((site) => (
                 <div key={site.id} className="flex items-center justify-between gap-3 rounded bg-gray-950/60 border border-gray-800 px-3 py-2">
                   <span className="font-medium text-gray-200 truncate">{site.name}</span>
-                  <span className={`shrink-0 px-2 py-0.5 rounded border ${site.status === "ok" ? "border-green-500/30 bg-green-500/10 text-green-300" : "border-yellow-500/30 bg-yellow-500/10 text-yellow-200"}`}>
-                    {site.status}
+                  <span className={`shrink-0 px-2 py-0.5 rounded border ${qualityStatusClass(site.status)}`}>
+                    {qualityStatusLabel(site.status)}
                   </span>
                 </div>
               ))}
@@ -1106,8 +1123,8 @@ export default function DashboardPage() {
                     <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">{top10} top10</span>
                   )}
                   {quality && (
-                    <span className={`text-xs px-2 py-0.5 rounded-full border ${quality.status === "ok" ? "bg-green-500/10 border-green-500/30 text-green-300" : "bg-yellow-500/10 border-yellow-500/30 text-yellow-200"}`}>
-                      {quality.status === "ok" ? "donnees OK" : quality.status}
+                    <span className={`text-xs px-2 py-0.5 rounded-full border ${qualityStatusClass(quality.status)}`}>
+                      {qualityStatusLabel(quality.status)}
                     </span>
                   )}
                 </div>
