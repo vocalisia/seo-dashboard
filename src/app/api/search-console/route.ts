@@ -92,66 +92,49 @@ export async function GET(request: NextRequest) {
     }
 
     if (type === "queries") {
-      // Bug B fix: use query-level position from search_console_query_data (no page split,
-      // matches what GSC UI displays). search_console_data is page-level -> SUM(imp*pos)/
-      // SUM(imp) is impressions-weighted across pages and gets dragged down by deep pages.
-      // Fall back to page-level aggregation if query-level row not yet synced.
-      // ALWAYS include tracked_keywords even if 0 impressions in the period.
-      // This prevents tracked keywords disappearing when switching to shorter periods.
-      // Strategy: UNION of (GSC data for period) + (tracked_keywords with 0 data fallback)
+      // Query-level GSC is the truth for positions. Anchor the requested window on
+      // the latest GSC date imported for this site, not on today's calendar date:
+      // stale-but-real properties (Vocalis/Tesla/etc.) must show their last known
+      // GSC rows instead of "0 keywords".
       const rows = countryFilter
         ? await sql`
-            WITH gsc AS (
-              SELECT q.query,
-                COALESCE(ql.clicks_q, q.total_clicks)                AS total_clicks,
-                COALESCE(ql.impressions_q, q.total_impressions)      AS total_impressions,
-                COALESCE(ql.ctr_q, q.avg_ctr)                        AS avg_ctr,
-                COALESCE(ql.position_q, q.avg_position)              AS avg_position,
-                q.avg_position                                       AS page_weighted_position,
-                q.first_seen,
+            WITH anchor AS (
+              SELECT MAX(date) AS end_date
+              FROM search_console_query_data
+              WHERE site_id = ${id}
+                AND query IS NOT NULL
+                AND position BETWEEN 1 AND 200
+                AND country = ANY(${countryFilter})
+            ),
+            gsc AS (
+              SELECT qd.query,
+                SUM(qd.clicks) AS total_clicks,
+                SUM(qd.impressions) AS total_impressions,
+                SUM(qd.impressions * qd.ctr)::float / NULLIF(SUM(qd.impressions), 0) AS avg_ctr,
+                SUM(qd.impressions * qd.position)::float / NULLIF(SUM(qd.impressions), 0) AS avg_position,
+                NULL::float8 AS page_weighted_position,
+                MIN(qd.date) AS first_seen,
                 tk.volume_market,
                 tk.volume_fr,
                 tk.volume_ch,
                 tk.market,
                 tk.volume_source,
                 'current'::varchar AS row_source
-              FROM (
-                SELECT query,
-                  SUM(clicks) as total_clicks,
-                  SUM(impressions) as total_impressions,
-                  AVG(ctr) as avg_ctr,
-                  AVG(position) as avg_position,
-                  (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
-                FROM search_console_data d
-                WHERE site_id = ${id}
-                  AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-                  AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                  AND query IS NOT NULL
-                  AND position BETWEEN 1 AND 200
-                  AND country = ANY(${countryFilter})
-                GROUP BY query
-                ORDER BY total_clicks DESC
-                LIMIT ${limit}
-              ) q
-              LEFT JOIN LATERAL (
-                SELECT SUM(clicks)                                                     AS clicks_q,
-                       SUM(impressions)                                                AS impressions_q,
-                       SUM(impressions * ctr)::float / NULLIF(SUM(impressions), 0)     AS ctr_q,
-                       SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS position_q
-                FROM search_console_query_data
-                WHERE site_id = ${id}
-                  AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-                  AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                  AND query = q.query
-                  AND country = ANY(${countryFilter})
-              ) ql ON TRUE
+              FROM search_console_query_data qd
               LEFT JOIN tracked_keywords tk
                 ON tk.site_id = ${id}
-               AND LOWER(tk.keyword) = LOWER(q.query)
+               AND LOWER(tk.keyword) = LOWER(qd.query)
                AND tk.is_active = TRUE
+              WHERE qd.site_id = ${id}
+                AND qd.date >= ((SELECT end_date FROM anchor) - INTERVAL '1 day' * (${days} - 1))::date
+                AND qd.date <= (SELECT end_date FROM anchor)
+                AND qd.query IS NOT NULL
+                AND qd.position BETWEEN 1 AND 200
+                AND qd.country = ANY(${countryFilter})
+              GROUP BY qd.query, tk.volume_market, tk.volume_fr, tk.volume_ch, tk.market, tk.volume_source
+              ORDER BY total_clicks DESC, total_impressions DESC
+              LIMIT ${limit}
             ),
-            -- Recent 30d GSC data: keywords active last 30d but not in current period
-            -- This prevents keywords disappearing when switching to short periods (7j/3j)
             gsc_30d AS (
               SELECT qd.query,
                 SUM(qd.clicks) as total_clicks,
@@ -172,8 +155,8 @@ export async function GET(request: NextRequest) {
                AND LOWER(tk.keyword) = LOWER(qd.query)
                AND tk.is_active = TRUE
               WHERE qd.site_id = ${id}
-                AND qd.date >= (CURRENT_DATE - 30)::date
-                AND qd.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+                AND qd.date >= ((SELECT end_date FROM anchor) - INTERVAL '29 days')::date
+                AND qd.date <= (SELECT end_date FROM anchor)
                 AND qd.query IS NOT NULL
                 AND qd.position BETWEEN 1 AND 200
                 AND qd.country = ANY(${countryFilter})
@@ -205,58 +188,45 @@ export async function GET(request: NextRequest) {
             ORDER BY total_clicks DESC, total_impressions DESC
           `
         : await sql`
-            SELECT q.query,
-              COALESCE(ql.clicks_q, q.total_clicks)                AS total_clicks,
-              COALESCE(ql.impressions_q, q.total_impressions)      AS total_impressions,
-              COALESCE(ql.ctr_q, q.avg_ctr)                        AS avg_ctr,
-              COALESCE(ql.position_q, q.avg_position)              AS avg_position,
-              q.avg_position                                       AS page_weighted_position,
-              q.first_seen,
-              tk.volume_market,
-              tk.volume_fr,
-              tk.volume_ch,
-              tk.market,
-              tk.volume_source,
-              'current'::varchar AS row_source
-            FROM (
-              SELECT query,
-                SUM(clicks) as total_clicks,
-                SUM(impressions) as total_impressions,
-                AVG(ctr) as avg_ctr,
-                AVG(position) as avg_position,
-                (SELECT MIN(date) FROM search_console_data WHERE site_id = ${id} AND query = d.query) AS first_seen
-              FROM search_console_data d
-              WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                AND query IS NOT NULL
-                AND position BETWEEN 1 AND 200
-                AND (country IS NULL OR country = '')
-            GROUP BY query
-              ORDER BY total_clicks DESC
-              LIMIT ${limit}
-            ) q
-            LEFT JOIN LATERAL (
-              SELECT SUM(clicks)                                                     AS clicks_q,
-                     SUM(impressions)                                                AS impressions_q,
-                     SUM(impressions * ctr)::float / NULLIF(SUM(impressions), 0)     AS ctr_q,
-                     SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS position_q
+            WITH anchor AS (
+              SELECT MAX(date) AS end_date
               FROM search_console_query_data
               WHERE site_id = ${id}
-                AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
-                AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                AND query = q.query
-            ) ql ON TRUE
-            LEFT JOIN tracked_keywords tk
-              ON tk.site_id = ${id}
-             AND LOWER(tk.keyword) = LOWER(q.query)
-             AND tk.is_active = TRUE
-          `
-          // Add 30d keywords + tracked keywords not in current period window
-          .then(async (baseRows: Record<string, unknown>[]) => {
-            const seen = new Set(baseRows.map(r => String(r.query ?? "").toLowerCase()));
-            const gsc30 = (await sql`
-              SELECT qd.query, SUM(qd.clicks) AS total_clicks, SUM(qd.impressions) AS total_impressions,
+                AND query IS NOT NULL
+                AND position BETWEEN 1 AND 200
+            ),
+            gsc AS (
+              SELECT qd.query,
+                SUM(qd.clicks) AS total_clicks,
+                SUM(qd.impressions) AS total_impressions,
+                SUM(qd.impressions * qd.ctr)::float / NULLIF(SUM(qd.impressions), 0) AS avg_ctr,
+                SUM(qd.impressions * qd.position)::float / NULLIF(SUM(qd.impressions), 0) AS avg_position,
+                NULL::float8 AS page_weighted_position,
+                MIN(qd.date) AS first_seen,
+                tk.volume_market,
+                tk.volume_fr,
+                tk.volume_ch,
+                tk.market,
+                tk.volume_source,
+                'current'::varchar AS row_source
+              FROM search_console_query_data qd
+              LEFT JOIN tracked_keywords tk
+                ON tk.site_id = ${id}
+               AND LOWER(tk.keyword) = LOWER(qd.query)
+               AND tk.is_active = TRUE
+              WHERE qd.site_id = ${id}
+                AND qd.date >= ((SELECT end_date FROM anchor) - INTERVAL '1 day' * (${days} - 1))::date
+                AND qd.date <= (SELECT end_date FROM anchor)
+                AND qd.query IS NOT NULL
+                AND qd.position BETWEEN 1 AND 200
+              GROUP BY qd.query, tk.volume_market, tk.volume_fr, tk.volume_ch, tk.market, tk.volume_source
+              ORDER BY total_clicks DESC, total_impressions DESC
+              LIMIT ${limit}
+            ),
+            gsc_30d AS (
+              SELECT qd.query,
+                SUM(qd.clicks) AS total_clicks,
+                SUM(qd.impressions) AS total_impressions,
                 SUM(qd.impressions * qd.ctr)::float / NULLIF(SUM(qd.impressions), 0) AS avg_ctr,
                 SUM(qd.impressions * qd.position)::float / NULLIF(SUM(qd.impressions), 0) AS avg_position,
                 NULL::float8 AS page_weighted_position,
@@ -272,34 +242,33 @@ export async function GET(request: NextRequest) {
                 ON tk.site_id = ${id}
                AND LOWER(tk.keyword) = LOWER(qd.query)
                AND tk.is_active = TRUE
-              WHERE qd.site_id=${id} AND qd.date >= (CURRENT_DATE-30)::date
-                AND qd.date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-                AND qd.query IS NOT NULL AND qd.position BETWEEN 1 AND 200
+              WHERE qd.site_id = ${id}
+                AND qd.date >= ((SELECT end_date FROM anchor) - INTERVAL '29 days')::date
+                AND qd.date <= (SELECT end_date FROM anchor)
+                AND qd.query IS NOT NULL
+                AND qd.position BETWEEN 1 AND 200
+                AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(qd.query))
               GROUP BY qd.query, tk.volume_market, tk.volume_fr, tk.volume_ch, tk.market, tk.volume_source
               HAVING SUM(qd.impressions) >= 5
-            `) as Record<string, unknown>[];
-            const trackedOnly = (await sql`
-              SELECT keyword AS query, 0 AS total_clicks, 0 AS total_impressions,
+            ),
+            tracked_only AS (
+              SELECT keyword AS query, 0::bigint AS total_clicks, 0::bigint AS total_impressions,
                 0::float8 AS avg_ctr,
                 NULL::float8 AS avg_position,
                 NULL::float8 AS page_weighted_position,
                 NULL::date AS first_seen, volume_market::int, volume_fr::int, volume_ch::int, market::varchar, volume_source::varchar,
                 'tracked'::varchar AS row_source
               FROM tracked_keywords WHERE site_id=${id} AND is_active=true
-            `) as Record<string, unknown>[];
-            const extra = [...gsc30, ...trackedOnly]
-              .filter(r => !seen.has(String(r.query ?? "").toLowerCase()));
-            const deduped: Record<string, unknown>[] = [...baseRows];
-            const dedupSeen = new Set(seen);
-            for (const r of extra) {
-              const k = String(r.query ?? "").toLowerCase();
-              if (!dedupSeen.has(k)) { deduped.push(r); dedupSeen.add(k); }
-            }
-            return deduped.sort((a, b) =>
-              (Number(b.total_clicks) || 0) - (Number(a.total_clicks) || 0) ||
-              (Number(b.total_impressions) || 0) - (Number(a.total_impressions) || 0)
-            );
-          });
+                AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(tracked_keywords.keyword))
+                AND NOT EXISTS (SELECT 1 FROM gsc_30d WHERE LOWER(gsc_30d.query) = LOWER(tracked_keywords.keyword))
+            )
+            SELECT * FROM gsc
+            UNION ALL
+            SELECT * FROM gsc_30d
+            UNION ALL
+            SELECT * FROM tracked_only
+            ORDER BY total_clicks DESC, total_impressions DESC
+          `;
       const allRows = rows as Record<string, unknown>[];
       const currentRows = allRows.filter((row) => row.row_source === "current");
       const visibleRows = strictPositioned ? currentRows : rows;

@@ -78,13 +78,10 @@ describe("search-console keyword data correctness", () => {
     mocks.sql.mockImplementation((strings: TemplateStringsArray) => {
       const text = queryText(strings);
       mocks.sqlCalls.push(text);
-      if (text.includes("FROM search_console_data d") && text.includes("'recent_30d'::varchar AS row_source")) {
-        return Promise.resolve(recentRows);
+      if (text.includes("WITH anchor") && text.includes("'current'::varchar AS row_source")) {
+        return Promise.resolve([...currentRows, ...recentRows, ...trackedRows]);
       }
-      if (text.includes("FROM tracked_keywords WHERE site_id=")) {
-        return Promise.resolve(trackedRows);
-      }
-      return Promise.resolve(currentRows);
+      return Promise.resolve([]);
     });
 
     const response = await GET(request("/api/search-console?siteId=7&type=queries&strict=1"));
@@ -116,7 +113,7 @@ describe("search-console keyword data correctness", () => {
     mocks.sql.mockImplementation((strings: TemplateStringsArray) => {
       const text = queryText(strings);
       mocks.sqlCalls.push(text);
-      if (text.includes("FROM tracked_keywords WHERE site_id=")) return Promise.resolve(trackedRows);
+      if (text.includes("WITH anchor") && text.includes("tracked_only AS")) return Promise.resolve(trackedRows);
       return Promise.resolve([]);
     });
 
@@ -133,6 +130,7 @@ describe("search-console keyword data correctness", () => {
       volume_source: "google_kp_real_csv_fr",
     });
     expect(rows[0]).not.toHaveProperty("current_position");
+    expect(mocks.sqlCalls.join("\n")).toContain("MAX(date) AS end_date");
   });
 
   it("uses latest available GSC data and complete weekly buckets for gains", async () => {
