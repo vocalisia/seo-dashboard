@@ -30,6 +30,7 @@ interface KeywordGap {
   competitor_position: number;
   difficulty: string;
   intent: string;
+  source?: "ai_estimate" | "cache" | "fallback_gsc_signal";
 }
 
 interface ResearchResult {
@@ -40,6 +41,10 @@ interface ResearchResult {
   total_gaps: number;
   error?: string;
   raw?: string;
+  cached?: boolean;
+  stale?: boolean;
+  fallback?: boolean;
+  warning?: string;
 }
 
 interface CachedData {
@@ -58,6 +63,13 @@ const DIFF_COLOR: Record<string, string> = {
   medium: "text-yellow-400",
   hard: "text-red-400",
 };
+
+function gapSourceLabel(source?: KeywordGap["source"]): string {
+  if (source === "fallback_gsc_signal") return "Signal GSC";
+  if (source === "cache") return "Cache";
+  if (source === "ai_estimate") return "IA";
+  return "Estime";
+}
 
 interface Notification { type: "success" | "error"; text: string; }
 
@@ -777,13 +789,23 @@ export default function CompetitorsPage() {
             </div>
           )}
 
+          {(result?.fallback || result?.stale || result?.warning) && (
+            <div className="bg-yellow-950/40 border border-yellow-700/60 rounded-lg px-4 py-3 text-sm text-yellow-200">
+              {result?.fallback
+                ? "Mode secours: donnees derivees du dashboard/GSC. Ce ne sont pas des volumes Keyword Planner valides."
+                : result?.stale
+                  ? "Cache concurrent ancien: a utiliser comme signal, pas comme verite de volume."
+                  : result?.warning}
+            </div>
+          )}
+
           {/* Summary cards */}
           {gaps.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="text-sm text-gray-400">Keyword Gaps trouvés</div>
                 <div className="text-3xl font-bold text-purple-400 mt-1">{gaps.length}</div>
-                <div className="text-xs text-gray-400 mt-1">vol. ≥ 1000/mois chacun</div>
+                <div className="text-xs text-gray-400 mt-1">volumes estimes, source indiquee par ligne</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="text-sm text-gray-400">Volume total ciblable</div>
@@ -791,7 +813,7 @@ export default function CompetitorsPage() {
                   {hasVolumes ? totalVolume.toLocaleString() : "N/A"}
                 </div>
                 <div className="text-xs text-gray-400 mt-1">
-                  {hasVolumes ? "recherches/mois cumulées" : "données non disponibles"}
+                  {hasVolumes ? "estimation mensuelle cumulee" : "donnees non disponibles"}
                 </div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -1061,7 +1083,8 @@ export default function CompetitorsPage() {
                           <CopyKeywordsButton keywords={filteredGaps.map((g) => g.keyword)} />
                         </span>
                       </th>
-                      {hasVolumes && <th className="px-5 py-3 text-right">Volume/mois</th>}
+                      {hasVolumes && <th className="px-5 py-3 text-right">Volume estime</th>}
+                      {hasVolumes && <th className="px-5 py-3 text-center">Source</th>}
                       <th className="px-5 py-3 text-left">Concurrent</th>
                       <th className="px-5 py-3 text-right">Pos. concurrent</th>
                       <th className="px-5 py-3 text-center">Difficulté</th>
@@ -1079,6 +1102,13 @@ export default function CompetitorsPage() {
                           {hasVolumes && (
                             <td className="px-5 py-3 text-right text-blue-400 font-semibold">
                               {(g.volume ?? 0).toLocaleString()}
+                            </td>
+                          )}
+                          {hasVolumes && (
+                            <td className="px-5 py-3 text-center">
+                              <span className="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-300 border border-gray-700">
+                                {gapSourceLabel(g.source)}
+                              </span>
                             </td>
                           )}
                           <td className="px-5 py-3 text-xs">

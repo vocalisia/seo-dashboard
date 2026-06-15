@@ -23,7 +23,9 @@ function parseNum(v: string | null | undefined): number {
 
 function dateRange(days: number) {
   const end = new Date();
-  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  end.setDate(end.getDate() - 1);
+  const start = new Date(end);
+  start.setDate(start.getDate() - (days - 1));
   return {
     startDate: start.toISOString().split("T")[0],
     endDate: end.toISOString().split("T")[0],
@@ -107,7 +109,10 @@ async function syncSite(
         ON CONFLICT (site_id, date) DO UPDATE SET
           sessions = EXCLUDED.sessions,
           users = EXCLUDED.users,
+          new_users = EXCLUDED.new_users,
           pageviews = EXCLUDED.pageviews,
+          bounce_rate = EXCLUDED.bounce_rate,
+          avg_session_duration = EXCLUDED.avg_session_duration,
           organic_sessions = EXCLUDED.organic_sessions,
           direct_sessions = EXCLUDED.direct_sessions,
           referral_sessions = EXCLUDED.referral_sessions,

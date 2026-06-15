@@ -8,6 +8,7 @@ interface GapRow {
   our_position: number | null;
   competitor_positions: { domain: string; pos: number }[];
   volume: number;
+  source?: "competitor_cache" | "fallback_gsc_signal";
 }
 
 export async function GET(req: NextRequest) {
@@ -45,8 +46,8 @@ export async function GET(req: NextRequest) {
         // Get our positions for these keywords
         const keywords = competitorRows.map((r) => r.keyword);
         const ourPositions = await sql`
-          SELECT query, AVG(position)::float AS pos
-          FROM search_console_data
+          SELECT query, SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos
+          FROM search_console_query_data
           WHERE site_id = ${parseInt(siteId, 10)}
             AND query = ANY(${keywords})
             AND date >= NOW() - INTERVAL '30 days'
@@ -71,6 +72,7 @@ export async function GET(req: NextRequest) {
               our_position: ourPos,
               competitor_positions: [],
               volume: row.estimated_volume,
+              source: "competitor_cache",
             };
           }
           keywordMap[row.keyword].competitor_positions.push({
@@ -88,9 +90,9 @@ export async function GET(req: NextRequest) {
     const fallbackRows = await sql`
       SELECT
         query AS keyword,
-        AVG(position)::float AS our_position,
+        SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS our_position,
         SUM(impressions)::int AS impressions
-      FROM search_console_data
+      FROM search_console_query_data
       WHERE site_id = ${parseInt(siteId, 10)}
         AND date >= NOW() - INTERVAL '30 days'
         AND query IS NOT NULL
@@ -110,6 +112,7 @@ export async function GET(req: NextRequest) {
         our_position: pos,
         competitor_positions: [],
         volume,
+        source: "fallback_gsc_signal",
       };
     });
 

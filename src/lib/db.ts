@@ -198,6 +198,34 @@ export async function ensureSchema(): Promise<void> {
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_keyword_trends_fetched ON keyword_trends(fetched_at DESC)`;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS search_console_query_data (
+      id BIGSERIAL PRIMARY KEY,
+      site_id INT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+      date DATE NOT NULL,
+      query TEXT NOT NULL DEFAULT '',
+      country TEXT NOT NULL DEFAULT '',
+      device TEXT NOT NULL DEFAULT '',
+      clicks INT NOT NULL DEFAULT 0,
+      impressions INT NOT NULL DEFAULT 0,
+      ctr REAL NOT NULL DEFAULT 0,
+      position REAL NOT NULL DEFAULT 0,
+      synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_scqd_natural_key
+      ON search_console_query_data (site_id, date, query, country, device)
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_scqd_site_query_country
+      ON search_console_query_data (site_id, query, country)
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_scqd_site_date
+      ON search_console_query_data (site_id, date)
+  `;
+
   // pagespeed_scores — strategy column so daily cron stores per-strategy rows + indices
   await sql`ALTER TABLE pagespeed_scores ADD COLUMN IF NOT EXISTS strategy VARCHAR(10)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_pagespeed_site_checked ON pagespeed_scores(site_id, checked_at DESC)`;

@@ -15,6 +15,21 @@ interface Site {
   gsc_clicks_30d: number; gsc_impressions_30d: number; avg_position_30d: number;
 }
 
+interface DashboardQualitySite {
+  id: number;
+  name: string;
+  latest_gsc_date: string | null;
+  positioned_keywords_30d: number;
+  top10_keywords_7d: number;
+  tracked_keywords: number;
+  kp_volumes_imported: number;
+  kp_volumes_missing: number;
+  gain_candidates: number;
+  latest_ga4_date: string | null;
+  users_30d: number;
+  status: "ok" | "gsc_not_configured" | "gsc_no_query_data" | "gsc_stale" | "kp_missing" | "ga4_no_daily_data" | string;
+}
+
 interface QueryData {
   query: string; total_clicks: number; total_impressions: number;
   avg_ctr: number; avg_position: number; first_seen?: string | null;
@@ -42,6 +57,7 @@ const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec
 
 type Period = "3" | "7" | "30" | "90";
 type TabType = "keywords" | "gains" | "analytics" | "device";
+type KwTypeFilter = "all" | "important" | "highvolume" | "longtail" | "questions";
 
 interface ServiceTiming {
   label: string;
@@ -225,6 +241,7 @@ export default function DashboardPage() {
   const [period, setPeriod] = useState<Period>("7"); // 7j default: 3j lag=2j = often just 1 real day
   const [keywords, setKeywords] = useState<Record<string, QueryData[]>>({});
   const [gains, setGains] = useState<Record<number, GainData[]>>({});
+  const [qualitySites, setQualitySites] = useState<DashboardQualitySite[]>([]);
   const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
   const [kwLoadingIds, setKwLoadingIds] = useState<Set<number>>(new Set());
   const [highVolLoading, setHighVolLoading] = useState<Set<number>>(new Set());
@@ -250,10 +267,10 @@ export default function DashboardPage() {
     }));
   }
   const [search, setSearch] = useState("");
-  const [kwTypeFilter, setKwTypeFilter] = useState<"all"|"longtail"|"questions">("all");
+  const [kwTypeFilter, setKwTypeFilter] = useState<KwTypeFilter>("important");
   const [siteSortCol, setSiteSortCol] = useState<"clicks"|"impressions"|"position">("clicks");
   const [siteSortDir, setSiteSortDir] = useState<"asc"|"desc">("desc");
-  const [sortCol, setSortCol] = useState<"clicks"|"impressions"|"ctr"|"position"|"volume">("clicks");
+  const [sortCol, setSortCol] = useState<"priority"|"clicks"|"impressions"|"ctr"|"position"|"volume">("priority");
   const [sortDir, setSortDir] = useState<"asc"|"desc">("desc");
   const [gainSortCol, setGainSortCol] = useState<"gain"|"position_now"|"clicks_gain"|"volume"|"opportunity">("gain");
   const [gainSortDir, setGainSortDir] = useState<"asc"|"desc">("desc");
@@ -344,6 +361,16 @@ export default function DashboardPage() {
     else setLoading(false);
   }
 
+  async function fetchQuality() {
+    try {
+      const res = await timedFetch("Qualite dashboard", "/api/dashboard-quality");
+      const data = await res.json() as { sites?: DashboardQualitySite[] };
+      if (Array.isArray(data.sites)) setQualitySites(data.sites);
+    } catch {
+      setQualitySites([]);
+    }
+  }
+
   async function loadInitialDashboard() {
     setLoading(true);
     setConfigError(null);
@@ -354,6 +381,7 @@ export default function DashboardPage() {
     } catch { /* ignore */ }
     setLoading(false);
     void fetchSites(undefined, period, true);
+    void fetchQuality();
   }
 
   useEffect(() => { void loadInitialDashboard(); }, []); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
@@ -564,6 +592,13 @@ export default function DashboardPage() {
   const avgPosition = activeSites.length > 0
     ? activeSites.reduce((s, site) => s + Number(site.avg_position_30d), 0) / activeSites.length
     : 0;
+  const qualityById = new Map(qualitySites.map((site) => [site.id, site]));
+  const qualityOkCount = qualitySites.filter((site) => site.status === "ok").length;
+  const qualityStaleCount = qualitySites.filter((site) => site.status === "gsc_stale" || site.status === "gsc_no_query_data").length;
+  const totalImportedVolumes = qualitySites.reduce((sum, site) => sum + Number(site.kp_volumes_imported || 0), 0);
+  const totalMissingVolumes = qualitySites.reduce((sum, site) => sum + Number(site.kp_volumes_missing || 0), 0);
+  const totalGainCandidates = qualitySites.reduce((sum, site) => sum + Number(site.gain_candidates || 0), 0);
+  const totalTop10Keywords = qualitySites.reduce((sum, site) => sum + Number(site.top10_keywords_7d || 0), 0);
   const latestTiming = serviceTimings[0];
   const avgServiceMs = serviceTimings.length
     ? serviceTimings.reduce((sum, item) => sum + item.ms, 0) / serviceTimings.length
@@ -843,6 +878,71 @@ export default function DashboardPage() {
         </div>
       )}
 
+      <section className="px-6 pt-4">
+        <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-4">
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-gray-500">Pilotage SEO</div>
+                <h2 className="text-lg font-semibold mt-1">Positions GSC, volumes KP, gains et alertes</h2>
+              </div>
+              <Link href="/keyword-planner-import" className="text-xs px-3 py-1.5 rounded border border-blue-500/40 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20">
+                Importer volumes
+              </Link>
+            </div>
+            <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
+              <div className="rounded border border-green-500/25 bg-green-500/10 p-3">
+                <div className="text-xs text-green-200">Sites OK</div>
+                <div className="text-2xl font-bold text-green-300 mt-1">{qualitySites.length ? `${qualityOkCount}/${qualitySites.length}` : "-"}</div>
+                <div className="text-[11px] text-green-200/70 mt-1">GSC + KP exploitables</div>
+              </div>
+              <div className="rounded border border-yellow-500/25 bg-yellow-500/10 p-3">
+                <div className="text-xs text-yellow-200">A verifier</div>
+                <div className="text-2xl font-bold text-yellow-300 mt-1">{qualityStaleCount}</div>
+                <div className="text-[11px] text-yellow-200/70 mt-1">GSC stale ou absent</div>
+              </div>
+              <div className="rounded border border-blue-500/25 bg-blue-500/10 p-3">
+                <div className="text-xs text-blue-200">Volumes KP</div>
+                <div className="text-2xl font-bold text-blue-300 mt-1">{totalImportedVolumes.toLocaleString()}</div>
+                <div className="text-[11px] text-blue-200/70 mt-1">{totalMissingVolumes.toLocaleString()} manquants</div>
+              </div>
+              <div className="rounded border border-purple-500/25 bg-purple-500/10 p-3">
+                <div className="text-xs text-purple-200">Gains / Top 10</div>
+                <div className="text-2xl font-bold text-purple-300 mt-1">{totalGainCandidates.toLocaleString()}</div>
+                <div className="text-[11px] text-purple-200/70 mt-1">{totalTop10Keywords.toLocaleString()} mots-cles top 10</div>
+              </div>
+            </div>
+          </div>
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-gray-500">Autocontrole</div>
+                <div className="text-sm text-gray-300 mt-1">Source positions: GSC query-level. Source volumes: Keyword Planner importe.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void fetchQuality()}
+                className="p-2 rounded border border-gray-700 bg-gray-800 text-gray-300 hover:text-white"
+                title="Rafraichir l'autocontrole"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="mt-4 space-y-2 text-xs">
+              {qualitySites.slice(0, 4).map((site) => (
+                <div key={site.id} className="flex items-center justify-between gap-3 rounded bg-gray-950/60 border border-gray-800 px-3 py-2">
+                  <span className="font-medium text-gray-200 truncate">{site.name}</span>
+                  <span className={`shrink-0 px-2 py-0.5 rounded border ${site.status === "ok" ? "border-green-500/30 bg-green-500/10 text-green-300" : "border-yellow-500/30 bg-yellow-500/10 text-yellow-200"}`}>
+                    {site.status}
+                  </span>
+                </div>
+              ))}
+              {qualitySites.length === 0 && <div className="text-gray-500">Autocontrole en chargement.</div>}
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* KPIs globaux */}
       <div className="px-6 py-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
@@ -914,12 +1014,17 @@ export default function DashboardPage() {
         }).map((site, i) => {
           const isOpen = expandedIds.has(site.id);
           const tab = activeTab[site.id] || "keywords";
+          const quality = qualityById.get(site.id);
           const kwKey = `${site.id}-${period}-${langFilter || "all"}`;
           const QUESTION_WORDS = ["comment","pourquoi","quand","quel","quelle","quels","quelles","qu'est","qu est","how","what","why","when","which","where","who","is","are","does","do","can","best","top"];
           const rawKws = keywords[kwKey] || [];
           const searchedKws = rawKws.filter(k => !search || k.query.toLowerCase().includes(search.toLowerCase()));
           const filteredKws = searchedKws
             .filter(k => {
+              const position = Number(k.avg_position) || 0;
+              const sourceVolume = resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch);
+              if (kwTypeFilter === "important") return sourceVolume > 1 && position >= 4 && position <= 30;
+              if (kwTypeFilter === "highvolume") return sourceVolume >= 3000;
               if (kwTypeFilter === "longtail") return k.query.trim().split(/\s+/).length >= 4;
               if (kwTypeFilter === "questions") return QUESTION_WORDS.some(w => k.query.toLowerCase().startsWith(w + " ") || k.query.toLowerCase().includes(" " + w + " "));
               return true;
@@ -934,6 +1039,10 @@ export default function DashboardPage() {
               else if (sortCol === "volume") {
                 va = resolveSourceVolume(a.volume_market, a.volume_fr, a.volume_ch);
                 vb = resolveSourceVolume(b.volume_market, b.volume_fr, b.volume_ch);
+              }
+              else if (sortCol === "priority") {
+                va = opportunityScore(resolveSourceVolume(a.volume_market, a.volume_fr, a.volume_ch), Number(a.avg_position) || 0);
+                vb = opportunityScore(resolveSourceVolume(b.volume_market, b.volume_fr, b.volume_ch), Number(b.avg_position) || 0);
               }
               else { va = Number(a.total_clicks); vb = Number(b.total_clicks); }
               return sortDir === "asc" ? va - vb : vb - va;
@@ -962,6 +1071,15 @@ export default function DashboardPage() {
             resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) <= 1 && !hasImportedVolumeSource(k.volume_source)
           );
           const missingVolumeCount = missingVolumeKeywords.length;
+          const highVolumeKeywords = rawKws
+            .map((kw) => ({
+              query: kw.query,
+              volume: resolveSourceVolume(kw.volume_market, kw.volume_fr, kw.volume_ch),
+              position: Number(kw.avg_position) || 0,
+              clicks: Number(kw.total_clicks) || 0,
+            }))
+            .filter((kw) => kw.volume >= 3000)
+            .sort((a, b) => b.volume - a.volume);
           const displayedMetricCount = tab === "gains" ? gainList.length : rawKws.length;
 
           return (
@@ -981,8 +1099,31 @@ export default function DashboardPage() {
                   {top10 > 0 && isOpen && (
                     <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">{top10} top10</span>
                   )}
+                  {quality && (
+                    <span className={`text-xs px-2 py-0.5 rounded-full border ${quality.status === "ok" ? "bg-green-500/10 border-green-500/30 text-green-300" : "bg-yellow-500/10 border-yellow-500/30 text-yellow-200"}`}>
+                      {quality.status === "ok" ? "donnees OK" : quality.status}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-6 text-sm">
+                  {quality && (
+                    <div className="hidden lg:block text-right">
+                      <div className="text-cyan-300 font-bold">{quality.kp_volumes_imported}</div>
+                      <div className="text-xs text-gray-400">volumes reels</div>
+                    </div>
+                  )}
+                  {quality && quality.kp_volumes_missing > 0 && (
+                    <div className="hidden xl:block text-right">
+                      <div className="text-yellow-300 font-bold">{quality.kp_volumes_missing}</div>
+                      <div className="text-xs text-gray-400">sans volume</div>
+                    </div>
+                  )}
+                  {highVolumeKeywords.length > 0 && (
+                    <div className="hidden xl:block text-right">
+                      <div className="text-orange-300 font-bold">{highVolumeKeywords.length}</div>
+                      <div className="text-xs text-gray-400">3000+/mois</div>
+                    </div>
+                  )}
                   <div className="text-right">
                     <div className="text-blue-400 font-bold">{(Number(site.gsc_clicks_30d)||0).toLocaleString()}</div>
                     <div className="text-xs text-gray-400">clics/{period}j</div>
@@ -1025,10 +1166,10 @@ export default function DashboardPage() {
 
                   {tab === "keywords" && (
                     <div className="flex items-center flex-wrap gap-1 px-4 py-2">
-                      {(["all","longtail","questions"] as const).map(f => (
+                      {(["important","highvolume","all","longtail","questions"] as const).map(f => (
                         <button key={f} type="button" onClick={() => setKwTypeFilter(f)}
                           className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
-                          {f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
+                          {f === "important" ? "Important" : f === "highvolume" ? "Fort volume 3000+" : f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
                         </button>
                       ))}
                       {filterHiddenAllRows && (
@@ -1057,6 +1198,16 @@ export default function DashboardPage() {
                               keywords={missingVolumeKeywords.slice(0, 200).map((kw) => kw.query)}
                               label="Copier les mots-cles sans volume"
                               className="h-5 w-5 border-yellow-500/40 bg-yellow-500/10 text-yellow-200 hover:border-yellow-400 hover:bg-yellow-500/20"
+                            />
+                          </span>
+                        )}
+                        {tab === "keywords" && highVolumeKeywords.length > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded border border-orange-500/30 bg-orange-500/10 text-orange-200">
+                            {highVolumeKeywords.length} fort volume 3000+/mois
+                            <CopyKeywordsButton
+                              keywords={highVolumeKeywords.slice(0, 100).map((kw) => kw.query)}
+                              label="Copier les mots-cles fort volume"
+                              className="h-5 w-5 border-orange-500/40 bg-orange-500/10 text-orange-200 hover:border-orange-400 hover:bg-orange-500/20"
                             />
                           </span>
                         )}
@@ -1177,6 +1328,37 @@ export default function DashboardPage() {
                     </div>
                   )}
 
+                  {tab === "keywords" && highVolumeKeywords.length > 0 && (
+                    <div className="px-4 py-3 border-t border-gray-800 bg-orange-950/10">
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-orange-300">Mots-cles fort volume niche</div>
+                          <div className="text-[11px] text-gray-400">Volume reel importe, seuil 3000 recherches/mois</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setKwTypeFilter("highvolume")}
+                          className="text-xs px-3 py-1.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-200 hover:bg-orange-500/20"
+                        >
+                          Voir 3000+
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
+                        {highVolumeKeywords.slice(0, 5).map((kw) => (
+                          <div key={kw.query} className="rounded border border-gray-800 bg-gray-950/60 px-3 py-2">
+                            <div className="text-sm font-semibold text-white truncate" title={kw.query}>{kw.query}</div>
+                            <div className="mt-1 flex items-center justify-between text-[11px]">
+                              <span className="text-orange-300 font-bold">{kw.volume.toLocaleString()}/mois</span>
+                              <span className={kw.position > 0 && kw.position <= 10 ? "text-green-300" : kw.position <= 30 ? "text-yellow-300" : "text-gray-500"}>
+                                pos. {kw.position > 0 ? kw.position.toFixed(1) : "-"}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {kwLoadingIds.has(site.id) ? (
                     <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                   ) : tab === "keywords" ? (
@@ -1196,8 +1378,8 @@ export default function DashboardPage() {
                                 <CopyKeywordsButton keywords={kws.slice(0, 100).map((kw) => kw.query)} />
                               </span>
                             </th>
-                            {(["clicks","impressions","ctr","position"] as const).map(col => {
-                              const labels = { clicks: "Clics", impressions: "Impressions", ctr: "CTR", position: "Position" };
+                            {(["priority","clicks","impressions","ctr","position"] as const).map(col => {
+                              const labels = { priority: "Priorite", clicks: "Clics", impressions: "Impressions", ctr: "CTR", position: "Position" };
                               const active = sortCol === col;
                               return (
                                 <th key={col} className="text-right py-2 px-3 cursor-pointer select-none"
@@ -1261,6 +1443,16 @@ export default function DashboardPage() {
                                   </a>
                                   <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "rotate-180" : ""}`} />
                                 </div>
+                              </td>
+                              <td className="text-right py-2 px-3">
+                                {(() => {
+                                  const score = opportunityScore(
+                                    resolveSourceVolume(kw.volume_market, kw.volume_fr, kw.volume_ch),
+                                    Number(kw.avg_position) || 0
+                                  );
+                                  const { label, color } = oppLabel(score);
+                                  return <span className={`text-xs ${color}`}>{score > 0 ? label : "-"}</span>;
+                                })()}
                               </td>
                               <td className="text-right py-2 px-3 text-blue-400 font-semibold">{Number(kw.total_clicks)}</td>
                               <td className="text-right py-2 px-3 text-gray-400">{Number(kw.total_impressions).toLocaleString()}</td>

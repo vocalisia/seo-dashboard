@@ -71,6 +71,7 @@ export async function GET(request: NextRequest) {
         WHERE s.is_active = true
           AND d.date >= (CURRENT_DATE - INTERVAL '1 day' * ${gscStartDaysAgo})::date
           AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${gscEndDaysAgo})::date
+          AND (d.country IS NULL OR d.country = '')
         GROUP BY s.id, s.name, s.url, d.date
         ORDER BY d.date ASC
       `;
@@ -114,6 +115,7 @@ export async function GET(request: NextRequest) {
           FROM search_console_data
           WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${gscStartDaysAgo})::date
             AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${gscEndDaysAgo})::date
+            AND (country IS NULL OR country = '')
           GROUP BY site_id
         ),
         pos AS (
@@ -132,6 +134,7 @@ export async function GET(request: NextRequest) {
           FROM search_console_data
           WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${gscStartDaysAgo})::date
             AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${gscEndDaysAgo})::date
+            AND (country IS NULL OR country = '')
           GROUP BY site_id
         ),
         ga4 AS (

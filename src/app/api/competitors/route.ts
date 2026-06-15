@@ -22,6 +22,7 @@ interface ResearchResult {
     competitor_position: number;
     difficulty: string;
     intent: string;
+    source?: "ai_estimate" | "cache" | "fallback_gsc_signal";
   }[];
   ourKeywordsCount: number;
 }
@@ -151,7 +152,7 @@ function inferCompetitors(site: Site): { domain: string; description: string }[]
 async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
   const rows = (await sql`
     SELECT query, SUM(impressions) AS impressions
-    FROM search_console_data
+    FROM search_console_query_data
     WHERE site_id = ${site.id}
       AND date >= NOW() - INTERVAL '90 days'
       AND query IS NOT NULL
@@ -172,6 +173,7 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
       competitor_position: (index % 10) + 1,
       difficulty: index < 4 ? "medium" : "low",
       intent: isQuestionLike(keyword) ? "informational" : index % 2 === 0 ? "commercial" : "informational",
+      source: "fallback_gsc_signal" as const,
     };
   });
 
@@ -317,7 +319,7 @@ function inferFallbackCompetitors(site: Site): { domain: string; description: st
 async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
   const rows = (await sql`
     SELECT query, SUM(impressions) AS impressions
-    FROM search_console_data
+    FROM search_console_query_data
     WHERE site_id = ${site.id}
       AND date >= NOW() - INTERVAL '90 days'
       AND query IS NOT NULL
@@ -338,6 +340,7 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
       competitor_position: (index % 10) + 1,
       difficulty: index < 4 ? "medium" : "low",
       intent: isQuestionLike(keyword) ? "informational" : index % 2 === 0 ? "commercial" : "informational",
+      source: "fallback_gsc_signal" as const,
     };
   });
 
@@ -412,6 +415,7 @@ async function loadCachedResearch(sql: SQLClient, siteId: number, maxAgeDays = 6
       competitor_position: Number(r.competitor_position) || 0,
       difficulty: r.difficulty ?? "",
       intent: r.intent ?? "",
+      source: "cache" as const,
     })),
     ourKeywordsCount: 0,
   };
@@ -462,8 +466,8 @@ export async function POST(req: NextRequest) {
             perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length });
             continue;
           }
-          // Try fallback to cache even if older than 60d
-          const cached = await loadCachedResearch(sql, s.id, 365);
+          // Try fallback to recent cache only. Older cache must not look fresh.
+          const cached = await loadCachedResearch(sql, s.id, 60);
           if (cached) {
             perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length });
           } else {
@@ -542,8 +546,8 @@ export async function POST(req: NextRequest) {
           min_volume: 100,
         });
       }
-      // Fallback to older cache (up to 1y) on AI error
-      const cached = await loadCachedResearch(sql, site.id, 365);
+      // Fallback to recent cache only. Older cache must not look fresh.
+      const cached = await loadCachedResearch(sql, site.id, 60);
       if (cached) {
         return NextResponse.json({
           success: true,
@@ -628,6 +632,7 @@ export async function GET(req: NextRequest) {
       competitor_position: Number(r.competitor_position) || 0,
       difficulty: r.difficulty ?? "",
       intent: r.intent ?? "",
+      source: "cache" as const,
     }));
 
     return NextResponse.json({

@@ -40,29 +40,53 @@ export async function GET(req: NextRequest) {
   let rows: KeywordRow[];
   if (siteId && siteId !== "all") {
     rows = (await sql`
+      WITH live AS (
+        SELECT site_id, LOWER(query) AS keyword_key,
+          SUM(clicks) AS current_clicks,
+          SUM(impressions) AS current_impressions,
+          SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS current_position
+        FROM search_console_query_data
+        WHERE date >= (CURRENT_DATE - INTERVAL '30 days')::date
+          AND date <= (CURRENT_DATE - INTERVAL '2 days')::date
+          AND position BETWEEN 1 AND 200
+        GROUP BY site_id, LOWER(query)
+      )
       SELECT k.id, k.keyword, k.market, k.volume_fr, k.volume_ch, k.volume_market,
-             k.current_position, k.current_impressions, k.current_clicks,
+             live.current_position, live.current_impressions, live.current_clicks,
              k.site_id, s.name AS site_name, s.url AS site_url
       FROM tracked_keywords k
       JOIN sites s ON s.id = k.site_id
+      LEFT JOIN live ON live.site_id = k.site_id AND live.keyword_key = LOWER(k.keyword)
       WHERE k.is_active = TRUE
         AND k.site_id = ${parseInt(siteId, 10)}
         AND COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) >= ${minVolFilter}
-        AND COALESCE(k.current_position, 100) BETWEEN ${minPos} AND ${maxPos}
-      ORDER BY COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) DESC, k.current_position ASC NULLS LAST
+        AND COALESCE(live.current_position, 100) BETWEEN ${minPos} AND ${maxPos}
+      ORDER BY COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) DESC, live.current_position ASC NULLS LAST
       LIMIT 500
     `) as KeywordRow[];
   } else {
     rows = (await sql`
+      WITH live AS (
+        SELECT site_id, LOWER(query) AS keyword_key,
+          SUM(clicks) AS current_clicks,
+          SUM(impressions) AS current_impressions,
+          SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS current_position
+        FROM search_console_query_data
+        WHERE date >= (CURRENT_DATE - INTERVAL '30 days')::date
+          AND date <= (CURRENT_DATE - INTERVAL '2 days')::date
+          AND position BETWEEN 1 AND 200
+        GROUP BY site_id, LOWER(query)
+      )
       SELECT k.id, k.keyword, k.market, k.volume_fr, k.volume_ch, k.volume_market,
-             k.current_position, k.current_impressions, k.current_clicks,
+             live.current_position, live.current_impressions, live.current_clicks,
              k.site_id, s.name AS site_name, s.url AS site_url
       FROM tracked_keywords k
       JOIN sites s ON s.id = k.site_id
+      LEFT JOIN live ON live.site_id = k.site_id AND live.keyword_key = LOWER(k.keyword)
       WHERE k.is_active = TRUE
         AND COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) >= ${minVolFilter}
-        AND COALESCE(k.current_position, 100) BETWEEN ${minPos} AND ${maxPos}
-      ORDER BY COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) DESC, k.current_position ASC NULLS LAST
+        AND COALESCE(live.current_position, 100) BETWEEN ${minPos} AND ${maxPos}
+      ORDER BY COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) DESC, live.current_position ASC NULLS LAST
       LIMIT 500
     `) as KeywordRow[];
   }

@@ -106,8 +106,12 @@ function normalizePropertyId(raw: string | null): string | null {
 }
 
 function dateRange(days: number): { startDate: string; endDate: string } {
-  const endDate = new Date().toISOString().split("T")[0];
-  const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const end = new Date();
+  end.setDate(end.getDate() - 1);
+  const start = new Date(end);
+  start.setDate(start.getDate() - (days - 1));
+  const endDate = end.toISOString().split("T")[0];
+  const startDate = start.toISOString().split("T")[0];
   return { startDate, endDate };
 }
 

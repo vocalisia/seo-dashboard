@@ -131,6 +131,7 @@ export async function GET(request: NextRequest) {
         FROM search_console_data
         WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
           AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+          AND (country IS NULL OR country = '')
         GROUP BY site_id
       `) as Array<Record<string, unknown>>;
       const posRows = (await sql`
@@ -158,6 +159,7 @@ export async function GET(request: NextRequest) {
           WHERE site_id = ANY(${missingPositionIds})
             AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
             AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
+            AND (country IS NULL OR country = '')
           GROUP BY site_id
         `) as Array<Record<string, unknown>>;
         for (const row of fallbackRows) posMap.set(Number(row.site_id), Number(row.avg_position ?? 0));
@@ -182,7 +184,7 @@ export async function GET(request: NextRequest) {
           WHERE site_id = ${s.id}
             AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
             AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-            AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+            AND country = ANY(${wanted})
         `) as Array<Record<string, unknown>>;
         const posRow = (await sql`
           SELECT
@@ -194,7 +196,7 @@ export async function GET(request: NextRequest) {
           WHERE site_id = ${s.id}
             AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
             AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-            AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+            AND country = ANY(${wanted})
         `) as Array<Record<string, unknown>>;
         const t = totalsRow[0] ?? {};
         const p = posRow[0] ?? {};
@@ -206,7 +208,7 @@ export async function GET(request: NextRequest) {
             WHERE site_id = ${s.id}
               AND date >= (CURRENT_DATE - INTERVAL '1 day' * (${days} - 1 + ${GSC_LAG_DAYS}))::date
               AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${GSC_LAG_DAYS})::date
-              AND (country IS NULL OR country = '' OR country = ANY(${wanted}))
+              AND country = ANY(${wanted})
           `) as Array<Record<string, unknown>>;
           avg = Number(fallback[0]?.avg_position ?? 0);
         }

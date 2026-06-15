@@ -1,13 +1,49 @@
 import { getSQL } from "@/lib/db";
 import { getAnalyticsClient, getSearchConsoleClient } from "@/lib/google-auth";
 import { auth } from "@/auth";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+
+const GSC_PAGE_SIZE = 25000;
+
+async function fetchAllSearchAnalyticsRows(
+  searchConsole: ReturnType<typeof getSearchConsoleClient>,
+  siteUrl: string,
+  requestBody: Record<string, unknown>
+) {
+  const rows: Array<{
+    keys?: string[] | null;
+    clicks?: number | null;
+    impressions?: number | null;
+    ctr?: number | null;
+    position?: number | null;
+  }> = [];
+  for (let startRow = 0; ; startRow += GSC_PAGE_SIZE) {
+    const response = await searchConsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        ...requestBody,
+        rowLimit: GSC_PAGE_SIZE,
+        startRow,
+      },
+    });
+    const pageRows = response.data.rows || [];
+    rows.push(...pageRows);
+    if (pageRows.length < GSC_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+function isoDateDaysAgo(daysAgo: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString().split("T")[0];
+}
 
 async function syncAnalytics(siteId: number, propertyId: string, accessToken?: string) {
   const sql = getSQL();
   const analytics = getAnalyticsClient(accessToken);
-  const endDate = new Date().toISOString().split("T")[0];
-  const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const endDate = isoDateDaysAgo(1);
+  const startDate = isoDateDaysAgo(30);
 
   const response = await analytics.properties.runReport({
     property: `properties/${propertyId}`,
@@ -71,34 +107,35 @@ async function syncAnalytics(siteId: number, propertyId: string, accessToken?: s
               ${stats.organic}, ${stats.direct}, ${stats.referral}, ${stats.social})
       ON CONFLICT (site_id, date) DO UPDATE SET
         sessions = EXCLUDED.sessions, users = EXCLUDED.users,
-        pageviews = EXCLUDED.pageviews, organic_sessions = EXCLUDED.organic_sessions
+        new_users = EXCLUDED.new_users,
+        pageviews = EXCLUDED.pageviews,
+        bounce_rate = EXCLUDED.bounce_rate,
+        avg_session_duration = EXCLUDED.avg_session_duration,
+        organic_sessions = EXCLUDED.organic_sessions,
+        direct_sessions = EXCLUDED.direct_sessions,
+        referral_sessions = EXCLUDED.referral_sessions,
+        social_sessions = EXCLUDED.social_sessions
     `;
     inserted++;
   }
   return inserted;
 }
 
-async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: string) {
+async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: string, days = 45) {
   const sql = getSQL();
   const searchConsole = getSearchConsoleClient(accessToken);
-  const endDate = new Date().toISOString().split("T")[0];
-  // 45j pour couvrir W4 (29-35j) du tableau Gains/semaine
-  const startDate = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const endDate = isoDateDaysAgo(2);
+  // 45d covers W4 (29-35d) in Gains/semaine.
+  const startDate = isoDateDaysAgo(Math.max(45, Math.min(365, days)));
 
   // Query 1: query + page + date (no country, no device) — country='' device='' rows
   // Natural key: (site_id, date, COALESCE(query,''), COALESCE(page,''), COALESCE(country,''), COALESCE(device,''))
   // UNIQUE INDEX uq_scd_natural_key enforces dedup at write time.
-  const response = await searchConsole.searchanalytics.query({
-    siteUrl,
-    requestBody: {
+  const rows = await fetchAllSearchAnalyticsRows(searchConsole, siteUrl, {
       startDate, endDate,
       dimensions: ["query", "page", "date"],
       dataState: "final", // exclude fresh/lag dates
-      rowLimit: 25000, startRow: 0,
-    },
   });
-
-  const rows = response.data.rows || [];
   let totalInserted = 0;
 
   for (const row of rows) {
@@ -122,16 +159,11 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: 
   // Query 2: by country WITH date dimension so each row has its real date
   // (previously collapsed all dates to endDate → 45× row inflation per query/page/country)
   try {
-    const countryResponse = await searchConsole.searchanalytics.query({
-      siteUrl,
-      requestBody: {
+    const countryRows = await fetchAllSearchAnalyticsRows(searchConsole, siteUrl, {
         startDate, endDate,
         dimensions: ["query", "page", "country", "date"],
         dataState: "final",
-        rowLimit: 25000, startRow: 0,
-      },
     });
-    const countryRows = countryResponse.data.rows || [];
     for (const row of countryRows) {
       if ((row.position || 0) > 200) continue;
       const country = (row.keys?.[2] || "").toUpperCase();
@@ -160,16 +192,11 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: 
   // actually displays in the GSC UI (query+country aggregate). Stored in a separate
   // table so page-level analyses still work but the keyword position is the real one.
   try {
-    const queryResponse = await searchConsole.searchanalytics.query({
-      siteUrl,
-      requestBody: {
+    const queryRows = await fetchAllSearchAnalyticsRows(searchConsole, siteUrl, {
         startDate, endDate,
         dimensions: ["query", "country", "date"],
         dataState: "final",
-        rowLimit: 25000, startRow: 0,
-      },
     });
-    const queryRows = queryResponse.data.rows || [];
     for (const row of queryRows) {
       if ((row.position || 0) > 200) continue;
       const country = (row.keys?.[1] || "").toUpperCase();
@@ -196,7 +223,7 @@ async function syncSearchConsole(siteId: number, siteUrl: string, accessToken?: 
   return totalInserted;
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
     // Try OAuth session first, fallback to service account (no login required)
     let accessToken: string | undefined;
@@ -214,21 +241,29 @@ export async function POST() {
     }
 
     const sql = getSQL();
-    const sites = await sql`SELECT * FROM sites WHERE is_active = true`;
+    const siteIdParam = request.nextUrl.searchParams.get("siteId");
+    const siteId = siteIdParam ? Number(siteIdParam) : null;
+    if (siteIdParam && (!Number.isFinite(siteId) || Number(siteId) <= 0)) {
+      return NextResponse.json({ error: "Invalid siteId" }, { status: 400 });
+    }
+    const sites = siteId
+      ? await sql`SELECT * FROM sites WHERE is_active = true AND id = ${siteId}`
+      : await sql`SELECT * FROM sites WHERE is_active = true`;
     const results = [];
+    const days = Math.max(45, Math.min(365, parseInt(request.nextUrl.searchParams.get("days") || "45", 10) || 45));
 
     for (const site of sites) {
       const result: { site: string; analytics?: number; gsc?: number; error?: string } = { site: site.name };
       try {
         if (site.ga_property_id) result.analytics = await syncAnalytics(site.id, site.ga_property_id, accessToken);
-        if (site.gsc_property) result.gsc = await syncSearchConsole(site.id, site.gsc_property, accessToken);
+        if (site.gsc_property) result.gsc = await syncSearchConsole(site.id, site.gsc_property, accessToken, days);
       } catch (err: unknown) {
         result.error = err instanceof Error ? err.message : "Unknown error";
       }
       results.push(result);
     }
 
-    return NextResponse.json({ success: true, results, auth: useServiceAccount ? "service_account" : "oauth" });
+    return NextResponse.json({ success: true, results, days, auth: useServiceAccount ? "service_account" : "oauth" });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

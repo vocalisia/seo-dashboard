@@ -189,16 +189,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           volume_fr = COALESCE(EXCLUDED.volume_fr, tracked_keywords.volume_fr),
           volume_ch = COALESCE(EXCLUDED.volume_ch, tracked_keywords.volume_ch),
           volume_market = CASE
+            WHEN EXCLUDED.volume_market IS NULL THEN tracked_keywords.volume_market
             WHEN EXCLUDED.market = 'CH' THEN EXCLUDED.volume_market
             WHEN tracked_keywords.market IS NULL OR tracked_keywords.market <> 'CH' THEN EXCLUDED.volume_market
             ELSE tracked_keywords.volume_market
           END,
-          volume_source = EXCLUDED.volume_source,
+          volume_source = CASE
+            WHEN EXCLUDED.volume_market IS NULL THEN tracked_keywords.volume_source
+            ELSE EXCLUDED.volume_source
+          END,
           confidence = EXCLUDED.confidence,
           competition = COALESCE(EXCLUDED.competition, tracked_keywords.competition),
           cpc_low = COALESCE(EXCLUDED.cpc_low, tracked_keywords.cpc_low),
           cpc_high = COALESCE(EXCLUDED.cpc_high, tracked_keywords.cpc_high),
-          volume_updated_at = NOW()
+          volume_updated_at = CASE
+            WHEN EXCLUDED.volume_market IS NULL THEN tracked_keywords.volume_updated_at
+            ELSE NOW()
+          END
         RETURNING (xmax = 0) AS inserted
       `) as Array<{ inserted: boolean }>;
 
