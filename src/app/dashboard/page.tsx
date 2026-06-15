@@ -1502,7 +1502,9 @@ export default function DashboardPage() {
                     )
                   ) : (
                     gainList.length === 0 ? (
-                      <div className="py-6 text-center text-gray-400 text-sm">Pas encore assez d&apos;historique pour calculer les gains</div>
+                      <div className="py-6 text-center text-gray-400 text-sm">
+                        Aucune variation hebdo comparable dans la derniere fenetre GSC importee.
+                      </div>
                     ) : (
                       <table className="w-full text-sm">
                         <thead>
