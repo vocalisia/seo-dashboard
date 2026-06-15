@@ -183,9 +183,9 @@ function oppLabel(score: number): { label: string; color: string } {
 }
 function recommendedAction(position: number, monthlyVolume: number): { label: string; cta: string; type: "push" | "optimize" | "maintain" | "create" } {
   if (position <= 0) return { label: "Pas de position GSC", cta: "-", type: "create" };
+  if (monthlyVolume <= 1) return { label: "Importer volume KP avant action", cta: "-", type: "maintain" };
   if (position <= 3) return { label: "Maintenir top 3", cta: "Suivre", type: "maintain" };
   if (position <= 10) return { label: "Optimiser CTR", cta: "Optimiser", type: "optimize" };
-  if (monthlyVolume <= 1) return { label: "Importer volume avant action", cta: "-", type: "maintain" };
   if (position <= 20 && monthlyVolume >= 100) return { label: "Pousser top 10", cta: "Pousser", type: "push" };
   if (position <= 30 && monthlyVolume >= 500) return { label: "Renforcer contenu", cta: "Renforcer", type: "push" };
   if (monthlyVolume >= 1000) return { label: "Creer article dedie", cta: "Creer", type: "create" };
@@ -200,7 +200,7 @@ function keywordSolution(kw: QueryData): string {
   if (!pos || pos === 0) return "Pas de position GSC";
   if (sourceVolume <= 1 && hasSource) return pos <= 10 ? "Page 1 - CTR/meta, KP sans volume" : "KP sans volume - prioriser GSC";
   if (sourceVolume <= 1 && pos > 10) return impressions >= 20 ? "Importer volume KP - signal GSC" : "Importer volume KP";
-  if (sourceVolume <= 1) return "Page 1 - CTR/meta, volume a importer";
+  if (sourceVolume <= 1) return "Importer volume KP avant action";
   if (pos <= 3) return "Top 3 - maintenir";
   if (pos <= 10) return "Page 1 - optimiser CTR";
   if (pos <= 15) return "Quasi page 1 - contenu + maillage";
@@ -1023,14 +1023,15 @@ export default function DashboardPage() {
             .filter(k => {
               const position = Number(k.avg_position) || 0;
               const sourceVolume = resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch);
-              if (kwTypeFilter === "important") return sourceVolume > 1 && position >= 4 && position <= 30;
-              if (kwTypeFilter === "highvolume") return sourceVolume >= 3000;
+              const hasRealVolume = hasImportedVolumeSource(k.volume_source) && sourceVolume > 1;
+              if (kwTypeFilter === "important") return hasRealVolume && position >= 4 && position <= 30;
+              if (kwTypeFilter === "highvolume") return hasRealVolume && sourceVolume >= 3000;
               if (kwTypeFilter === "longtail") return k.query.trim().split(/\s+/).length >= 4;
               if (kwTypeFilter === "questions") return QUESTION_WORDS.some(w => k.query.toLowerCase().startsWith(w + " ") || k.query.toLowerCase().includes(" " + w + " "));
               return true;
             });
-          const filterHiddenAllRows = searchedKws.length > 0 && filteredKws.length === 0 && kwTypeFilter !== "all";
-          const kws = (filterHiddenAllRows ? searchedKws : filteredKws)
+          const emptyActiveFilter = searchedKws.length > 0 && filteredKws.length === 0 && kwTypeFilter !== "all";
+          const kws = filteredKws
             .sort((a, b) => {
               let va = 0, vb = 0;
               if (sortCol === "position") { va = Number(a.avg_position); vb = Number(b.avg_position); }
@@ -1061,11 +1062,15 @@ export default function DashboardPage() {
               return gainSortDir === "asc" ? va - vb : vb - va;
             });
           const top10 = rawKws.filter(k => Number(k.avg_position) > 0 && Number(k.avg_position) <= 10).length;
-          const keywordSourceVolumeCount = rawKws.filter(k => resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1).length;
+          const keywordSourceVolumeCount = rawKws.filter(k =>
+            hasImportedVolumeSource(k.volume_source) && resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) > 1
+          ).length;
           const keywordImportedZeroVolumeCount = rawKws.filter(k =>
             resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) <= 1 && hasImportedVolumeSource(k.volume_source)
           ).length;
-          const gainsSourceVolumeCount = gainList.filter(g => resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) > 1).length;
+          const gainsSourceVolumeCount = gainList.filter(g =>
+            hasImportedVolumeSource(g.volume_source) && resolveSourceVolume(g.volume_market, g.volume_fr, g.volume_ch) > 1
+          ).length;
           const sourceVolumeCount = tab === "gains" ? gainsSourceVolumeCount : keywordSourceVolumeCount;
           const missingVolumeKeywords = rawKws.filter(k =>
             resolveSourceVolume(k.volume_market, k.volume_fr, k.volume_ch) <= 1 && !hasImportedVolumeSource(k.volume_source)
@@ -1075,12 +1080,13 @@ export default function DashboardPage() {
             .map((kw) => ({
               query: kw.query,
               volume: resolveSourceVolume(kw.volume_market, kw.volume_fr, kw.volume_ch),
+              hasRealVolume: hasImportedVolumeSource(kw.volume_source),
               position: Number(kw.avg_position) || 0,
               clicks: Number(kw.total_clicks) || 0,
             }))
-            .filter((kw) => kw.volume >= 3000)
+            .filter((kw) => kw.hasRealVolume && kw.volume >= 3000)
             .sort((a, b) => b.volume - a.volume);
-          const displayedMetricCount = tab === "gains" ? gainList.length : rawKws.length;
+          const displayedMetricCount = tab === "gains" ? gainList.length : kws.length;
 
           return (
             <div key={site.id} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -1172,9 +1178,9 @@ export default function DashboardPage() {
                           {f === "important" ? "Important" : f === "highvolume" ? "Fort volume 3000+" : f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
                         </button>
                       ))}
-                      {filterHiddenAllRows && (
+                      {emptyActiveFilter && (
                         <span className="ml-2 text-[11px] text-yellow-300">
-                          Filtre sans resultat: affichage de tous les mots cles GSC disponibles.
+                          Aucun resultat pour ce filtre. Aucun mot-cle hors filtre n'est affiche.
                         </span>
                       )}
                     </div>
@@ -1362,10 +1368,13 @@ export default function DashboardPage() {
                   {kwLoadingIds.has(site.id) ? (
                     <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
                   ) : tab === "keywords" ? (
-                    rawKws.length === 0 ? (
+                    kws.length === 0 ? (
                       <div className="py-6 text-center text-gray-400 text-sm">
-                        Aucune requête GSC pour ce site avec le filtre actuel
-                        {langFilter ? " (pays/langue trop restrictif possible)" : ""}.
+                        {rawKws.length === 0
+                          ? `Aucune requete GSC pour ce site${langFilter ? " avec ce pays/langue" : ""}.`
+                          : kwTypeFilter === "highvolume"
+                            ? "Aucun mot-cle avec volume reel importe >= 3000/mois pour ce site."
+                            : "Aucun mot-cle ne correspond au filtre actif."}
                       </div>
                     ) : (
                       <table className="w-full text-sm">
