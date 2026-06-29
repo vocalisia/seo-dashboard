@@ -71,6 +71,37 @@ function gapSourceLabel(source?: KeywordGap["source"]): string {
   return "Estime";
 }
 
+function cachedDataFromResearch(result: ResearchResult): CachedData {
+  const gaps = (result.gaps ?? []).map((gap) => ({
+    ...gap,
+    competitor_domain: gap.competitor_domain || gap.competitor,
+  }));
+
+  const competitorMap = new Map<string, CompetitorStat>();
+  for (const competitor of result.competitors ?? []) {
+    if (!competitor.domain) continue;
+    competitorMap.set(competitor.domain, {
+      domain: competitor.domain,
+      found_keywords_count: 0,
+      total_volume: 0,
+    });
+  }
+  for (const gap of gaps) {
+    const domain = gap.competitor_domain || gap.competitor;
+    if (!domain) continue;
+    const current = competitorMap.get(domain) ?? {
+      domain,
+      found_keywords_count: 0,
+      total_volume: 0,
+    };
+    current.found_keywords_count += 1;
+    current.total_volume += Number(gap.volume) || 0;
+    competitorMap.set(domain, current);
+  }
+
+  return { gaps, competitors: Array.from(competitorMap.values()) };
+}
+
 interface Notification { type: "success" | "error"; text: string; }
 
 interface GapRow {
@@ -134,18 +165,18 @@ type KwTabName = "general" | "longtail" | "questions";
 const AI_QUICK_ACTIONS = [
   {
     label: "Compare positionnement",
-    buildPrompt: (domains: string[]) =>
-      `Compare le positionnement marketing de ${domains.join(", ")}. Identifie qui cible quel segment (PME/grandes entreprises, B2B/B2C, prix premium/low cost). Donne-moi un tableau structuré.`,
+    buildPrompt: (domains: string[], siteLabel: string) =>
+      `Compare le positionnement marketing de ${siteLabel} face a ${domains.join(", ")}. Identifie qui cible quel segment (PME/grandes entreprises, B2B/B2C, offre premium/accessible). Donne-moi un tableau structure.`,
   },
   {
     label: "Trouve angles différenciants",
-    buildPrompt: (domains: string[]) =>
-      `Pour chacun de ces concurrents (${domains.join(", ")}), identifie ses 3 forces et 3 faiblesses SEO/marketing. Suggère 5 angles où Vocalis peut se différencier.`,
+    buildPrompt: (domains: string[], siteLabel: string) =>
+      `Pour chacun de ces concurrents (${domains.join(", ")}), identifie ses 3 forces et 3 faiblesses SEO/marketing. Suggere 5 angles ou ${siteLabel} peut se differencier.`,
   },
   {
     label: "Stratégie contenu manquant",
-    buildPrompt: (domains: string[]) =>
-      `Quels sujets aucun de ces concurrents (${domains.join(", ")}) ne traite mais qui auraient du potentiel SEO en 2026 pour Vocalis (voice AI, agent vocal IA) ?`,
+    buildPrompt: (domains: string[], siteLabel: string) =>
+      `Quels sujets aucun de ces concurrents (${domains.join(", ")}) ne traite correctement mais qui auraient du potentiel SEO en 2026 pour ${siteLabel} ?`,
   },
 ];
 
@@ -318,7 +349,12 @@ export default function CompetitorsPage() {
         if (selectedSite === "all") {
           showNotification("success", `Analyse multi-sites: ${d.sites_processed ?? 0}/${d.sites_total ?? 0} sites traités`);
         } else {
-          await fetchCached();
+          const nextCached = cachedDataFromResearch(d);
+          if (nextCached.gaps.length > 0 || nextCached.competitors.length > 0) {
+            setCached(nextCached);
+          } else {
+            await fetchCached();
+          }
           const compCount = d.competitors?.length ?? 0;
           const gapCount = d.gaps?.length ?? 0;
           const tag = d.cached ? (d.stale ? "cache ancien" : "depuis cache") : "fresh AI";
@@ -777,7 +813,7 @@ export default function CompetitorsPage() {
             </div>
             <p className="text-xs text-gray-400">
               <strong>Voir l&apos;analyse (cache)</strong> = lit les données stockées (rapide, gratuit).
-              <strong className="ml-2">Rescan IA live</strong> = nouvel appel IA via Gemini/Perplexity. Anthropic/OpenAI ne sont pas utilises par le routeur principal.
+              <strong className="ml-2">Rescan IA live</strong> = nouvel appel via le provider search configure (Perplexity/Gemini), puis stockage du resultat.
               Le cache expire automatiquement après 60 jours.
             </p>
           </div>
@@ -1069,7 +1105,7 @@ export default function CompetitorsPage() {
                 {!hasVolumes && (
                   <div className="flex items-start gap-2 text-xs text-gray-400 bg-gray-800/60 rounded-lg px-3 py-2">
                     <span className="text-blue-400 flex-shrink-0">i</span>
-                    Volumes non disponibles — Perplexity ne fournit pas de volume précis. Consulter Semrush/Ahrefs pour validation.
+                    Volumes source non importes pour ces gaps. Le tableau garde les concurrents et positions; importe les volumes Keyword Planner/DataForSEO pour les valider.
                   </div>
                 )}
               </div>
@@ -1188,7 +1224,8 @@ export default function CompetitorsPage() {
                       const domains = competitorDomains.length > 0
                         ? competitorDomains
                         : (result?.competitors ?? []).map((c) => c.domain);
-                      setAiWidget((s) => ({ ...s, prompt: a.buildPrompt(domains) }));
+                      const siteLabel = selectedSiteObj ? `${selectedSiteObj.name} (${selectedSiteObj.url})` : "le site selectionne";
+                      setAiWidget((s) => ({ ...s, prompt: a.buildPrompt(domains, siteLabel) }));
                     }}
                     className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-xs rounded-lg transition-colors border border-purple-700/40"
                   >
@@ -1213,7 +1250,7 @@ export default function CompetitorsPage() {
                 className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded-lg text-sm font-medium text-white transition-colors"
               >
                 {aiWidget.loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
-                {aiWidget.loading ? "L’IA scrute les concurrents en temps réel via Perplexity (25-40s)…" : "Analyser"}
+                {aiWidget.loading ? "L'IA scrute les concurrents en temps reel (25-40s)..." : "Analyser"}
               </button>
               {aiWidget.error && (
                 <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-sm text-red-300">{aiWidget.error}</div>

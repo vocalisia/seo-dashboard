@@ -165,12 +165,17 @@ export async function GET(request: NextRequest) {
               HAVING SUM(qd.impressions) >= 5
             ),
             tracked_only AS (
-              -- Tracked keywords NOT in GSC for this period OR last 30d
-              -- No current GSC row means no current position. Keep volumes, hide stale positions.
+              -- Tracked keywords not present in the selected GSC window.
+              -- Keep the imported volumes and the last synced tracked position when available.
               SELECT tk.keyword AS query,
-                0::bigint AS total_clicks, 0::bigint AS total_impressions,
-                0::float8 AS avg_ctr,
-                NULL::float8 AS avg_position,
+                COALESCE(tk.current_clicks, 0)::bigint AS total_clicks,
+                COALESCE(tk.current_impressions, 0)::bigint AS total_impressions,
+                CASE
+                  WHEN COALESCE(tk.current_impressions, 0) > 0
+                    THEN COALESCE(tk.current_clicks, 0)::float8 / NULLIF(tk.current_impressions, 0)
+                  ELSE 0::float8
+                END AS avg_ctr,
+                tk.current_position::float8 AS avg_position,
                 NULL::float8 AS page_weighted_position,
                 NULL::date AS first_seen,
                 tk.volume_market::int, tk.volume_fr::int, tk.volume_ch::int, tk.market::varchar, tk.volume_source::varchar,
@@ -252,15 +257,22 @@ export async function GET(request: NextRequest) {
               HAVING SUM(qd.impressions) >= 5
             ),
             tracked_only AS (
-              SELECT keyword AS query, 0::bigint AS total_clicks, 0::bigint AS total_impressions,
-                0::float8 AS avg_ctr,
-                NULL::float8 AS avg_position,
+              SELECT tk.keyword AS query,
+                COALESCE(tk.current_clicks, 0)::bigint AS total_clicks,
+                COALESCE(tk.current_impressions, 0)::bigint AS total_impressions,
+                CASE
+                  WHEN COALESCE(tk.current_impressions, 0) > 0
+                    THEN COALESCE(tk.current_clicks, 0)::float8 / NULLIF(tk.current_impressions, 0)
+                  ELSE 0::float8
+                END AS avg_ctr,
+                tk.current_position::float8 AS avg_position,
                 NULL::float8 AS page_weighted_position,
-                NULL::date AS first_seen, volume_market::int, volume_fr::int, volume_ch::int, market::varchar, volume_source::varchar,
+                NULL::date AS first_seen, tk.volume_market::int, tk.volume_fr::int, tk.volume_ch::int, tk.market::varchar, tk.volume_source::varchar,
                 'tracked'::varchar AS row_source
-              FROM tracked_keywords WHERE site_id=${id} AND is_active=true
-                AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(tracked_keywords.keyword))
-                AND NOT EXISTS (SELECT 1 FROM gsc_30d WHERE LOWER(gsc_30d.query) = LOWER(tracked_keywords.keyword))
+              FROM tracked_keywords tk
+              WHERE tk.site_id=${id} AND tk.is_active=true
+                AND NOT EXISTS (SELECT 1 FROM gsc WHERE LOWER(gsc.query) = LOWER(tk.keyword))
+                AND NOT EXISTS (SELECT 1 FROM gsc_30d WHERE LOWER(gsc_30d.query) = LOWER(tk.keyword))
             )
             SELECT * FROM gsc
             UNION ALL

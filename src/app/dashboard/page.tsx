@@ -58,6 +58,8 @@ const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec
 type Period = "3" | "7" | "30" | "90";
 type TabType = "keywords" | "gains" | "analytics" | "device";
 type KwTypeFilter = "all" | "important" | "highvolume" | "longtail" | "questions";
+const KEYWORD_LOAD_LIMIT = 2000;
+const KEYWORD_RENDER_LIMIT = 300;
 
 interface ServiceTiming {
   label: string;
@@ -284,7 +286,7 @@ export default function DashboardPage() {
     }));
   }
   const [search, setSearch] = useState("");
-  const [kwTypeFilter, setKwTypeFilter] = useState<KwTypeFilter>("important");
+  const [kwTypeFilter, setKwTypeFilter] = useState<KwTypeFilter>("all");
   const [siteSortCol, setSiteSortCol] = useState<"clicks"|"impressions"|"position">("clicks");
   const [siteSortDir, setSiteSortDir] = useState<"asc"|"desc">("desc");
   const [sortCol, setSortCol] = useState<"priority"|"clicks"|"impressions"|"ctr"|"position"|"volume">("priority");
@@ -414,7 +416,7 @@ export default function DashboardPage() {
     setKwLoadingIds(prev => new Set(prev).add(siteId));
     try {
       const langQs = langFilter ? `&language=${langFilter}` : "";
-      const res = await timedFetch("Mots-cles site", `/api/search-console?siteId=${siteId}&type=queries&days=${p}&limit=300&strict=1${langQs}`);
+      const res = await timedFetch("Mots-cles site", `/api/search-console?siteId=${siteId}&type=queries&days=${p}&limit=${KEYWORD_LOAD_LIMIT}${langQs}`);
       const data = await res.json();
       if (Array.isArray(data)) setKeywords(prev => ({ ...prev, [key]: data }));
     } catch { /* ignore */ }
@@ -453,7 +455,7 @@ export default function DashboardPage() {
     for (const expandedId of expandedIds) {
       setKwLoadingIds(prev => new Set(prev).add(expandedId));
       try {
-        const res = await timedFetch("Mots-cles filtre", `/api/search-console?siteId=${expandedId}&type=queries&days=${p}&limit=300&strict=1${langQs}`);
+        const res = await timedFetch("Mots-cles filtre", `/api/search-console?siteId=${expandedId}&type=queries&days=${p}&limit=${KEYWORD_LOAD_LIMIT}${langQs}`);
         const data = await res.json();
         if (Array.isArray(data)) {
           const key = `${expandedId}-${p}-${lang || "all"}`;
@@ -1189,7 +1191,7 @@ export default function DashboardPage() {
 
                   {tab === "keywords" && (
                     <div className="flex items-center flex-wrap gap-1 px-4 py-2">
-                      {(["important","highvolume","all","longtail","questions"] as const).map(f => (
+                      {(["all","important","highvolume","longtail","questions"] as const).map(f => (
                         <button key={f} type="button" onClick={() => setKwTypeFilter(f)}
                           className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
                           {f === "important" ? "Important" : f === "highvolume" ? "Fort volume 3000+" : f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
@@ -1197,7 +1199,7 @@ export default function DashboardPage() {
                       ))}
                       {emptyActiveFilter && (
                         <span className="ml-2 text-[11px] text-yellow-300">
-                          Aucun resultat pour ce filtre. Aucun mot-cle hors filtre n'est affiche.
+                          Filtre actif sans resultat. Clique Tous pour revoir tous les mots-cles charges.
                         </span>
                       )}
                     </div>
@@ -1228,7 +1230,7 @@ export default function DashboardPage() {
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded border border-orange-500/30 bg-orange-500/10 text-orange-200">
                             {highVolumeKeywords.length} fort volume 3000+/mois
                             <CopyKeywordsButton
-                              keywords={highVolumeKeywords.slice(0, 100).map((kw) => kw.query)}
+                              keywords={highVolumeKeywords.slice(0, KEYWORD_RENDER_LIMIT).map((kw) => kw.query)}
                               label="Copier les mots-cles fort volume"
                               className="h-5 w-5 border-orange-500/40 bg-orange-500/10 text-orange-200 hover:border-orange-400 hover:bg-orange-500/20"
                             />
@@ -1401,7 +1403,7 @@ export default function DashboardPage() {
                             <th className="text-left py-2 px-3">
                               <span className="inline-flex items-center gap-2">
                                 Mot clé
-                                <CopyKeywordsButton keywords={kws.slice(0, 100).map((kw) => kw.query)} />
+                                <CopyKeywordsButton keywords={kws.slice(0, KEYWORD_RENDER_LIMIT).map((kw) => kw.query)} />
                               </span>
                             </th>
                             {(["priority","clicks","impressions","ctr","position"] as const).map(col => {
@@ -1440,7 +1442,7 @@ export default function DashboardPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {kws.slice(0, 100).map((kw, j) => (
+                          {kws.slice(0, KEYWORD_RENDER_LIMIT).map((kw, j) => (
                             <tr key={j} className={`border-b border-gray-800/40 hover:bg-gray-800/20 cursor-pointer ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "bg-blue-900/10" : ""}`}
                               onClick={() => openKwHistory(site.id, kw.query)}>
                               <td className="py-2 px-5 text-gray-600 text-xs">{j + 1}</td>
@@ -1846,8 +1848,8 @@ export default function DashboardPage() {
                       )}
                     </div>
                   )}
-                  {tab === "keywords" && kws.length > 100 && (
-                    <div className="py-2 text-center text-xs text-gray-400">{kws.length - 100} mots clés supplémentaires — affine le filtre</div>
+                  {tab === "keywords" && kws.length > KEYWORD_RENDER_LIMIT && (
+                    <div className="py-2 text-center text-xs text-gray-400">{kws.length - KEYWORD_RENDER_LIMIT} mots clés supplémentaires — affine le filtre</div>
                   )}
                 </div>
               )}

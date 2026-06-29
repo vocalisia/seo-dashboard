@@ -317,8 +317,11 @@ function inferFallbackCompetitors(site: Site): { domain: string; description: st
 }
 
 async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
-  const rows = (await sql`
-    SELECT query, SUM(impressions) AS impressions
+  let rows = (await sql`
+    SELECT
+      query,
+      SUM(impressions)::float8 AS signal,
+      GREATEST(100, (ROUND((SUM(impressions)::numeric / 10)) * 10)::int) AS volume
     FROM search_console_query_data
     WHERE site_id = ${site.id}
       AND date >= NOW() - INTERVAL '90 days'
@@ -326,7 +329,25 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
     GROUP BY query
     ORDER BY SUM(impressions) DESC
     LIMIT 20
-  `) as { query: string; impressions: string }[];
+  `) as { query: string; signal: string; volume: number }[];
+
+  if (rows.length === 0) {
+    rows = (await sql`
+      SELECT
+        keyword AS query,
+        COALESCE(current_impressions, 0)::float8 AS signal,
+        GREATEST(
+          100,
+          COALESCE(NULLIF(volume_market, 1), NULLIF(volume_ch, 1), NULLIF(volume_fr, 1), current_impressions, 100)
+        )::int AS volume
+      FROM tracked_keywords
+      WHERE site_id = ${site.id}
+        AND is_active = TRUE
+        AND keyword IS NOT NULL
+      ORDER BY COALESCE(NULLIF(volume_market, 1), NULLIF(volume_ch, 1), NULLIF(volume_fr, 1), current_impressions, 0) DESC
+      LIMIT 20
+    `) as { query: string; signal: string; volume: number }[];
+  }
 
   const competitors = inferFallbackCompetitors(site);
   const seeds = rows.map((row) => row.query).filter(Boolean);
@@ -335,7 +356,7 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
     const questionPrefix = isQuestionLike(keyword) ? "" : index % 3 === 0 ? "meilleur " : index % 3 === 1 ? "comparatif " : "comment choisir ";
     return {
       keyword: `${questionPrefix}${keyword}`.trim().slice(0, 500),
-      volume: Math.max(100, Math.round((Number(rows[index]?.impressions ?? 0) || 100) / 10) * 10),
+      volume: Math.max(100, Number(rows[index]?.volume ?? 100) || 100),
       competitor: competitors[index % competitors.length]?.domain ?? competitors[0].domain,
       competitor_position: (index % 10) + 1,
       difficulty: index < 4 ? "medium" : "low",
@@ -421,6 +442,45 @@ async function loadCachedResearch(sql: SQLClient, siteId: number, maxAgeDays = 6
   };
 }
 
+async function persistResearchForSite(site: Site, sql: SQLClient, research: ResearchResult): Promise<void> {
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS competitor_research (
+        id SERIAL PRIMARY KEY,
+        site_id INTEGER REFERENCES sites(id),
+        competitor_domain VARCHAR(500),
+        competitor_description TEXT,
+        keyword VARCHAR(500),
+        estimated_volume INTEGER,
+        competitor_position DECIMAL(6,2),
+        difficulty VARCHAR(20),
+        intent VARCHAR(30),
+        researched_at TIMESTAMP DEFAULT NOW()
+      )
+    `;
+    await sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`;
+
+    const descMap = new Map<string, string>();
+    for (const competitor of research.competitors ?? []) {
+      if (competitor.domain) descMap.set(competitor.domain.toLowerCase(), competitor.description || "");
+    }
+
+    for (const gap of research.gaps ?? []) {
+      const domain = (gap.competitor || "").trim();
+      if (!domain || !gap.keyword) continue;
+      const desc = descMap.get(domain.toLowerCase()) || null;
+      await sql`
+        INSERT INTO competitor_research
+        (site_id, competitor_domain, competitor_description, keyword, estimated_volume, competitor_position, difficulty, intent)
+        VALUES (${site.id}, ${domain}, ${desc}, ${gap.keyword}, ${Number(gap.volume) || 0},
+                ${Number(gap.competitor_position) || 0}, ${gap.difficulty || "unknown"}, ${gap.intent || "informational"})
+      `;
+    }
+  } catch (err) {
+    logError("competitors.persistResearchForSite", err, { siteId: site.id });
+  }
+}
+
 export async function POST(req: NextRequest) {
   let body: { site_id?: number | "all"; force_refresh?: boolean };
   try {
@@ -446,6 +506,7 @@ export async function POST(req: NextRequest) {
 
       const perSite: { site: string; competitors: number; gaps: number; error?: string }[] = [];
       const errors: string[] = [];
+      let aiFallbackOnly = false;
 
       for (const s of activeSites) {
         // Cache-first: skip AI call if cache exists (and not force_refresh)
@@ -457,26 +518,25 @@ export async function POST(req: NextRequest) {
           }
         }
         try {
-          const r = await runResearchForSite(s, sql);
+          const r = aiFallbackOnly
+            ? await runFallbackResearchForSite(s, sql)
+            : await runResearchForSite(s, sql);
+          if (aiFallbackOnly) await persistResearchForSite(s, sql, r);
           perSite.push({ site: s.name, competitors: r.competitors.length, gaps: r.gaps.length });
         } catch (err) {
           const msg = formatAIError(err);
-          if (err instanceof AIProviderError && err.code === "no_key") {
-            const fallback = await runFallbackResearchForSite(s, sql);
-            perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length });
-            continue;
-          }
           // Try fallback to recent cache only. Older cache must not look fresh.
           const cached = await loadCachedResearch(sql, s.id, 60);
           if (cached) {
             perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length });
           } else {
-            perSite.push({ site: s.name, competitors: 0, gaps: 0, error: msg });
-            errors.push(`${s.name}: ${msg}`);
+            const fallback = await runFallbackResearchForSite(s, sql);
+            await persistResearchForSite(s, sql, fallback);
+            perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length, error: `fallback: ${msg}` });
           }
-          // Stop on credit_low / no_key (no point retrying for every site)
+          // Once the provider is clearly unavailable, finish remaining sites with dashboard-derived fallback.
           if (err instanceof AIProviderError && (err.code === "credit_low" || err.code === "no_key" || err.code === "auth")) {
-            break;
+            aiFallbackOnly = true;
           }
         }
       }
@@ -531,21 +591,6 @@ export async function POST(req: NextRequest) {
         min_volume: 1000,
       });
     } catch (err) {
-      if (err instanceof AIProviderError && err.code === "no_key") {
-        const fallback = await runFallbackResearchForSite(site, sql);
-        return NextResponse.json({
-          success: true,
-          site: site.name,
-          cached: false,
-          fallback: true,
-          warning: "AI provider unavailable; fallback analysis generated from dashboard data.",
-          competitors: fallback.competitors,
-          gaps: fallback.gaps,
-          our_keywords_count: fallback.ourKeywordsCount,
-          total_gaps: fallback.gaps.length,
-          min_volume: 100,
-        });
-      }
       // Fallback to recent cache only. Older cache must not look fresh.
       const cached = await loadCachedResearch(sql, site.id, 60);
       if (cached) {
@@ -561,8 +606,20 @@ export async function POST(req: NextRequest) {
           min_volume: 1000,
         });
       }
-      logError("competitors.aiResearch", err);
-      return NextResponse.json({ success: false, error: formatAIError(err) });
+      const fallback = await runFallbackResearchForSite(site, sql);
+      await persistResearchForSite(site, sql, fallback);
+      return NextResponse.json({
+        success: true,
+        site: site.name,
+        cached: false,
+        fallback: true,
+        warning: `${formatAIError(err)} Fallback generated from dashboard data and stored in cache.`,
+        competitors: fallback.competitors,
+        gaps: fallback.gaps,
+        our_keywords_count: fallback.ourKeywordsCount,
+        total_gaps: fallback.gaps.length,
+        min_volume: 100,
+      });
     }
   } catch (err) {
     logError("competitors.research", err);
