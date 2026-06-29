@@ -14,8 +14,10 @@ interface StatusRow {
   total_keywords: number;
   checked_in_cycle: number;
   ranked_in_cycle: number;
+  gsc_positioned: number;
   stale_keywords: number;
   latest_checked_at: string | null;
+  latest_gsc_position_at: string | null;
   oldest_checked_at: string | null;
 }
 
@@ -73,6 +75,8 @@ export async function GET(req: NextRequest) {
           tk.site_id,
           s.name AS site_name,
           tk.keyword,
+          tk.current_position,
+          tk.updated_at,
           ROW_NUMBER() OVER (
             PARTITION BY tk.site_id
             ORDER BY COALESCE(tk.volume_market, tk.volume_fr, 0) DESC, tk.id ASC
@@ -84,7 +88,7 @@ export async function GET(req: NextRequest) {
           AND (${siteId}::int IS NULL OR tk.site_id = ${siteId})
       ),
       tracked_scope AS (
-        SELECT site_id, site_name, keyword
+        SELECT site_id, site_name, keyword, current_position, updated_at
         FROM ranked_keywords
         WHERE rn <= ${TRACKED_PER_SITE_LIMIT}
       )
@@ -100,10 +104,15 @@ export async function GET(req: NextRequest) {
             AND latest.our_position IS NOT NULL
         )::int AS ranked_in_cycle,
         COUNT(*) FILTER (
+          WHERE ts.current_position IS NOT NULL
+            AND ts.current_position > 0
+        )::int AS gsc_positioned,
+        COUNT(*) FILTER (
           WHERE latest.checked_at IS NULL
              OR latest.checked_at < NOW() - (${cycleDays} || ' days')::interval
         )::int AS stale_keywords,
         MAX(latest.checked_at)::text AS latest_checked_at,
+        MAX(ts.updated_at)::text AS latest_gsc_position_at,
         MIN(latest.checked_at)::text AS oldest_checked_at
       FROM tracked_scope ts
       LEFT JOIN LATERAL (
@@ -122,12 +131,19 @@ export async function GET(req: NextRequest) {
     const sites = rows.map((row) => {
       const total = Number(row.total_keywords) || 0;
       const checked = Number(row.checked_in_cycle) || 0;
-      const coverage = total > 0 ? checked / total : 0;
-      const latest = row.latest_checked_at ? new Date(row.latest_checked_at) : null;
+      const gscPositioned = Number(row.gsc_positioned) || 0;
+      const usesGscFallback = checked === 0 && gscPositioned > 0;
+      const effectiveChecked = usesGscFallback ? gscPositioned : checked;
+      const coverage = total > 0 ? effectiveChecked / total : 0;
+      const latestValue = usesGscFallback ? row.latest_gsc_position_at : row.latest_checked_at;
+      const latest = latestValue ? new Date(latestValue) : null;
       const ageHours = latest ? Math.round((Date.now() - latest.getTime()) / 36_000) / 100 : null;
       return {
         ...row,
         engine,
+        source: usesGscFallback ? "gsc_tracked_keywords_fallback" : "rank_tracking",
+        checked_in_cycle: effectiveChecked,
+        latest_checked_at: latestValue,
         cycle_days: cycleDays,
         coverage_pct: Math.round(coverage * 100),
         age_hours: ageHours,
@@ -136,10 +152,15 @@ export async function GET(req: NextRequest) {
     });
 
     const totalKeywords = sites.reduce((sum, site) => sum + site.total_keywords, 0);
-    const checkedInCycle = sites.reduce((sum, site) => sum + site.checked_in_cycle, 0);
+    const checkedInCycle = sites.reduce((sum, site) => sum + (site.source === "gsc_tracked_keywords_fallback" ? site.gsc_positioned : site.checked_in_cycle), 0);
     const coverage = totalKeywords > 0 ? checkedInCycle / totalKeywords : 0;
     const latestTimes = sites
-      .map((site) => site.latest_checked_at ? new Date(site.latest_checked_at).getTime() : 0)
+      .map((site) => {
+        const latestValue = site.source === "gsc_tracked_keywords_fallback"
+          ? site.latest_gsc_position_at
+          : site.latest_checked_at;
+        return latestValue ? new Date(latestValue).getTime() : 0;
+      })
       .filter((time) => time > 0);
     const latestCheckedAt = latestTimes.length > 0 ? new Date(Math.max(...latestTimes)).toISOString() : null;
     const summaryAgeHours = latestCheckedAt ? Math.round((Date.now() - new Date(latestCheckedAt).getTime()) / 36_000) / 100 : null;

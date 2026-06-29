@@ -152,9 +152,10 @@ export async function GET() {
     success: true,
     generated_at: new Date().toISOString(),
     rules: {
-      positions: "search_console_query_data only",
-      volumes: "tracked_keywords Keyword Planner imports only",
+      positions: "Positions from search_console_query_data or reconciled tracked_keywords current_position.",
+      volumes: "Volumes from imported Keyword Planner data when present, otherwise explicit GSC/dashboard-derived estimates with source labels.",
       no_fake_positions: true,
+      no_silent_empty_modules: true,
     },
     summary,
     sites: rows,

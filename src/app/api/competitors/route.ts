@@ -499,7 +499,7 @@ export async function POST(req: NextRequest) {
   // "all" mode: run sequentially per site, aggregate results
   if (site_id === "all") {
     try {
-      const activeSites = (await sql`SELECT id, name, url FROM sites WHERE is_active = true ORDER BY id LIMIT 20`) as Site[];
+      const activeSites = (await sql`SELECT id, name, url FROM sites WHERE is_active = true ORDER BY id`) as Site[];
       if (activeSites.length === 0) {
         return NextResponse.json({ success: false, error: "Aucun site actif" });
       }

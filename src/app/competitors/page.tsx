@@ -790,30 +790,30 @@ export default function CompetitorsPage() {
                 onClick={() => runResearch(false)}
                 disabled={loading || !selectedSite}
                 className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
-                title="Affiche les données mises en cache (rapide, économe en budget AI)"
+                title="Affiche les données mises en cache (rapide, sans appel IA)"
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                 {loading
                   ? (selectedSite === "all" ? "Analyse multi-sites en cours..." : "Recherche IA en cours...")
-                  : (selectedSite === "all" ? "Lancer l’analyse sur tous les sites" : "Voir l’analyse (cache)")}
+                  : (selectedSite === "all" ? "Lancer l'analyse sur tous les sites" : "Voir l'analyse (cache)")}
               </button>
               <button
                 onClick={() => {
-                  if (confirm("Forcer un nouveau scan IA live peut consommer du quota Gemini/Perplexity. Continuer ?")) {
+                  if (confirm("Forcer un nouveau scan IA live peut consommer du quota IA configuré. Continuer ?")) {
                     void runResearch(true);
                   }
                 }}
                 disabled={loading || !selectedSite}
                 className="flex items-center gap-2 px-4 py-2 bg-orange-600/80 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors border border-orange-500/40"
-                title="Force un nouvel appel AI live — ignore le cache (consomme du quota)"
+                title="Force un nouvel appel IA live et ignore le cache (consomme du quota)"
               >
                 <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
                 Rescan IA live
               </button>
             </div>
             <p className="text-xs text-gray-400">
-              <strong>Voir l&apos;analyse (cache)</strong> = lit les données stockées (rapide, gratuit).
-              <strong className="ml-2">Rescan IA live</strong> = nouvel appel via le provider search configure (Perplexity/Gemini), puis stockage du resultat.
+              <strong>Voir l&apos;analyse (cache)</strong> = lit les données stockées (rapide, sans appel IA).
+              <strong className="ml-2">Rescan IA live</strong> = nouvel appel via le provider IA disponible (OpenAI, Anthropic, Mammouth, Gemini ou Perplexity selon env), puis stockage du resultat.
               Le cache expire automatiquement après 60 jours.
             </p>
           </div>
