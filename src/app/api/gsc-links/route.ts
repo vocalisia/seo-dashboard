@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { getGoogleAuth } from "@/lib/google-auth";
+import { siteCountryCode } from "@/lib/site-country";
 
 export const dynamic = "force-dynamic";
 
@@ -69,7 +70,67 @@ async function loadPortfolioLinks(sql: ReturnType<typeof getSQL>): Promise<LinkR
     .slice(0, 100);
 }
 
-async function loadFallbackVisibility(sql: ReturnType<typeof getSQL>, siteId: number): Promise<LinkRow[]> {
+async function loadSiteCachedLinks(sql: ReturnType<typeof getSQL>, siteId: number): Promise<LinkRow[]> {
+  const rows = (await sql`
+    SELECT linking_domain, target_page, SUM(link_count) AS link_count
+    FROM gsc_links
+    WHERE site_id = ${siteId}
+    GROUP BY linking_domain, target_page
+    ORDER BY SUM(link_count) DESC
+    LIMIT 50
+  `) as Record<string, unknown>[];
+
+  return rows.map(normalizeLink);
+}
+
+function normalizeTargetPage(page: string): string {
+  try {
+    const url = new URL(page);
+    if (url.protocol === "http:") url.protocol = "https:";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return page.replace(/^http:\/\//i, "https://");
+  }
+}
+
+function aggregateVisibilityRows(rows: Array<{ page: string; impressions: string | number }>): LinkRow[] {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    const page = normalizeTargetPage(row.page);
+    totals.set(page, (totals.get(page) ?? 0) + Number(row.impressions ?? 0));
+  }
+  return Array.from(totals, ([target_page, link_count]) => ({
+    linking_domain: "GSC visibility signal",
+    target_page,
+    link_count,
+  }))
+    .sort((a, b) => b.link_count - a.link_count)
+    .slice(0, 30);
+}
+
+async function loadFallbackVisibility(sql: ReturnType<typeof getSQL>, siteId: number, country: string | null): Promise<LinkRow[]> {
+  const countryRows = country
+    ? ((await sql`
+        SELECT page, SUM(impressions) AS impressions
+        FROM search_console_data
+        WHERE site_id = ${siteId}
+          AND date >= NOW() - INTERVAL '30 days'
+          AND page IS NOT NULL
+          AND page != ''
+          AND query IS NOT NULL
+          AND query != ''
+          AND country = ${country}
+        GROUP BY page
+        ORDER BY SUM(impressions) DESC
+        LIMIT 30
+      `) as Array<{ page: string; impressions: string }>)
+    : [];
+
+  if (countryRows.length > 0) {
+    return aggregateVisibilityRows(countryRows);
+  }
+
   const rows = (await sql`
     SELECT page, SUM(impressions) AS impressions
     FROM search_console_data
@@ -77,16 +138,14 @@ async function loadFallbackVisibility(sql: ReturnType<typeof getSQL>, siteId: nu
       AND date >= NOW() - INTERVAL '30 days'
       AND page IS NOT NULL
       AND page != ''
+      AND query IS NOT NULL
+      AND query != ''
     GROUP BY page
     ORDER BY SUM(impressions) DESC
     LIMIT 30
   `) as Array<{ page: string; impressions: string }>;
 
-  return rows.map((row) => ({
-    linking_domain: "GSC visibility signal",
-    target_page: row.page,
-    link_count: Number(row.impressions),
-  }));
+  return aggregateVisibilityRows(rows);
 }
 
 async function loadGoogleLinks(siteUrl: string): Promise<LinkRow[]> {
@@ -172,6 +231,14 @@ export async function GET(req: NextRequest) {
     const sites = (await sql`SELECT * FROM sites WHERE id = ${siteId} LIMIT 1`) as Array<Record<string, unknown>>;
     if (sites.length === 0) return NextResponse.json({ error: "Site not found" }, { status: 404 });
 
+    const cachedLinks = await loadSiteCachedLinks(sql, siteId);
+    if (cachedLinks.length > 0 && searchParams.get("refresh") !== "1") {
+      return NextResponse.json(
+        buildResponse(cachedLinks, "local_cache"),
+        { headers: timingHeaders(startedAt) },
+      );
+    }
+
     const siteUrl = sites[0].gsc_property as string | null;
     if (!siteUrl) return NextResponse.json({ error: "No GSC property configured" }, { status: 400 });
 
@@ -185,7 +252,7 @@ export async function GET(req: NextRequest) {
 
     if (links.length === 0) {
       source = "gsc_visibility_fallback";
-      links = await loadFallbackVisibility(sql, siteId);
+      links = await loadFallbackVisibility(sql, siteId, siteCountryCode(String(sites[0].url ?? siteUrl)));
     }
     await persistLinks(sql, siteId, links);
 
