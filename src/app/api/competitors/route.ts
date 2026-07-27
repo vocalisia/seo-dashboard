@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAI, AIProviderError } from "@/lib/ai";
+import { requireApiSession } from "@/lib/api-auth";
 import { logError } from "@/lib/logger";
 
 interface Site {
@@ -22,7 +23,7 @@ interface ResearchResult {
     competitor_position: number;
     difficulty: string;
     intent: string;
-    source?: "ai_estimate" | "cache" | "fallback_gsc_signal";
+    source?: "ai_estimate" | "keyword_planner" | "cache" | "fallback_gsc_signal";
   }[];
   ourKeywordsCount: number;
 }
@@ -446,6 +447,9 @@ async function persistResearchForSite(site: Site, sql: SQLClient, research: Rese
 }
 
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   let body: { site_id?: number | "all"; force_refresh?: boolean };
   try {
     body = (await req.json()) as { site_id?: number | "all"; force_refresh?: boolean };
@@ -576,7 +580,7 @@ export async function POST(req: NextRequest) {
         site: site.name,
         cached: false,
         fallback: true,
-        warning: `${formatAIError(err)} Fallback generated from dashboard data and stored in cache.`,
+        warning: `${formatAIError(err)} Aucun volume ni position concurrentielle non vérifiée n'est affiché.`,
         competitors: fallback.competitors,
         gaps: fallback.gaps,
         our_keywords_count: fallback.ourKeywordsCount,
@@ -595,6 +599,9 @@ export async function POST(req: NextRequest) {
  * Returns cached competitor research from DB
  */
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const siteId = req.nextUrl.searchParams.get("site_id");
   if (!siteId) {
     return NextResponse.json({ success: false, error: "site_id required" }, { status: 400 });
