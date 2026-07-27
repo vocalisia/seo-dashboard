@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL, ensureSchema } from "@/lib/db";
 import { fetchKeywordTrend, TrendPoint } from "@/lib/google-trends";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -20,6 +21,8 @@ interface CachedRow {
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   const { searchParams } = new URL(req.url);
   const keyword = (searchParams.get("keyword") ?? "").trim();
   const geo = (searchParams.get("geo") ?? "").trim().toUpperCase();
@@ -78,6 +81,45 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
+    if (/Google Trends HTTP 429/.test(msg)) {
+      let stale: CachedRow[] = [];
+      try {
+        stale = (await sql`
+          SELECT id, trend_data, fetched_at
+          FROM keyword_trends
+          WHERE COALESCE(site_id, 0) = ${siteId ?? 0}
+            AND LOWER(keyword) = LOWER(${keyword})
+            AND geo = ${geo}
+          ORDER BY fetched_at DESC
+          LIMIT 1
+        `) as CachedRow[];
+      } catch {
+        // Preserve the upstream quota status even if the cache lookup fails.
+      }
+
+      if (stale.length > 0) {
+        return NextResponse.json({
+          keyword,
+          geo,
+          cached: true,
+          stale: true,
+          warning: "Google Trends limite temporairement les requêtes. Dernier relevé affiché.",
+          fetched_at: stale[0].fetched_at,
+          points: stale[0].trend_data?.points ?? [],
+        });
+      }
+
+      return NextResponse.json(
+        {
+          error: "Google Trends limite temporairement les requêtes. Réessaie dans quelques minutes.",
+          keyword,
+          geo,
+          points: [],
+        },
+        { status: 429, headers: { "Retry-After": "300" } }
+      );
+    }
+
     return NextResponse.json(
       { error: msg, keyword, geo, points: [] },
       { status: 502 }
