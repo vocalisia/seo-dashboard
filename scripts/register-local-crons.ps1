@@ -16,25 +16,37 @@ if (-not $cronSecret) {
   $cronSecret = ""
 }
 
-$baseUrl = "http://localhost:3001"
+$deprecatedTaskNames = @(
+  "Vocalis_Seo_Reports_Mon"
+)
 $tasks = @(
   @{ Name = "Vocalis_Seo_Sync_Daily";        Path = "/api/sync";                   Schedule = "Daily";  At = "03:00" },
-  @{ Name = "Vocalis_Seo_Alerts_Daily";      Path = "/api/alerts/check";           Schedule = "Daily";  At = "06:00" },
   @{ Name = "Vocalis_Seo_VerifyUrls_Daily";  Path = "/api/autopilot/verify-urls";  Schedule = "Daily";  At = "05:00" },
+  @{ Name = "Vocalis_Seo_Alerts_Daily";      Path = "/api/alerts/check";           Schedule = "Daily";  At = "06:00" },
   @{ Name = "Vocalis_Seo_PageSpeed_Sunday";  Path = "/api/pagespeed/weekly";       Schedule = "Weekly"; At = "04:00"; Day = "Sunday" },
   @{ Name = "Vocalis_Seo_Competitors_Mon";   Path = "/api/competitors/weekly";     Schedule = "Weekly"; At = "07:00"; Day = "Monday" },
-  @{ Name = "Vocalis_Seo_Reports_Mon";       Path = "/api/reports/generate";       Schedule = "Weekly"; At = "08:00"; Day = "Monday" },
-  @{ Name = "Vocalis_Seo_Autopilot_Mon";     Path = "/api/autopilot/weekly";       Schedule = "Weekly"; At = "09:00"; Day = "Monday" }
+  @{ Name = "Vocalis_Seo_Autopilot_Mon";     Path = "/api/autopilot/weekly";       Schedule = "Weekly"; At = "09:00"; Day = "Monday" },
+  @{ Name = "Vocalis_Seo_Reports_Fri";       Path = "/api/reports/generate";       Schedule = "Weekly"; At = "08:00"; Day = "Friday" }
 )
 
-foreach ($t in $tasks) {
-  $url = "$baseUrl$($t.Path)"
-  $headers = if ($cronSecret) { "@{Authorization='Bearer $cronSecret'}" } else { "@{}" }
-  $cmd = "Invoke-WebRequest -Uri '$url' -Method POST -Headers $headers -UseBasicParsing -TimeoutSec 600"
-  $argLine = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$cmd`""
+foreach ($oldTask in $deprecatedTaskNames) {
+  Unregister-ScheduledTask -TaskName $oldTask -Confirm:$false -ErrorAction SilentlyContinue
+}
 
+foreach ($t in $tasks) {
   $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-  $action = New-ScheduledTaskAction -Execute $psExe -Argument $argLine
+  if ($t.Name -eq "Vocalis_Seo_Reports_Fri") {
+    $scriptPath = Join-Path (Split-Path $PSScriptRoot -Parent) "scripts\generate-weekly-reports.mjs"
+    $nodeExe = "C:\Program Files\nodejs\node.exe"
+    $action = New-ScheduledTaskAction -Execute $nodeExe -Argument "`"$scriptPath`""
+  } else {
+    $baseUrl = "http://localhost:3001"
+    $url = "$baseUrl$($t.Path)"
+    $headers = if ($cronSecret) { "@{Authorization='Bearer $cronSecret'}" } else { "@{}" }
+    $cmd = "Invoke-WebRequest -Uri '$url' -Method POST -Headers $headers -UseBasicParsing -TimeoutSec 600"
+    $argLine = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$cmd`""
+    $action = New-ScheduledTaskAction -Execute $psExe -Argument $argLine
+  }
 
   if ($t.Schedule -eq "Daily") {
     $trigger = New-ScheduledTaskTrigger -Daily -At $t.At
@@ -47,7 +59,11 @@ foreach ($t in $tasks) {
 
   Unregister-ScheduledTask -TaskName $t.Name -Confirm:$false -ErrorAction SilentlyContinue
   Register-ScheduledTask -TaskName $t.Name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Local cron $($t.Path)" | Out-Null
-  Write-Host "OK - $($t.Name) -> $url ($($t.Schedule) $($t.At) $($t.Day))"
+  if ($t.Name -eq "Vocalis_Seo_Reports_Fri") {
+    Write-Host "OK - $($t.Name) -> node $scriptPath ($($t.Schedule) $($t.At) $($t.Day))"
+  } else {
+    Write-Host "OK - $($t.Name) -> $url ($($t.Schedule) $($t.At) $($t.Day))"
+  }
 }
 
 Write-Host ""

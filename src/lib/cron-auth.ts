@@ -27,8 +27,7 @@ function secretsMatch(expectedSecret: string, providedSecret: string | null): bo
 
 export function hasValidCronSecret(request: Request): boolean {
   const expectedSecret = process.env.CRON_SECRET?.trim();
-  const isProduction = process.env.NODE_ENV === "production";
-  if (!expectedSecret) return !isProduction;
+  if (!expectedSecret) return false;
   return secretsMatch(expectedSecret, extractCronSecret(request.headers));
 }
 
@@ -37,7 +36,7 @@ export function requireCronSecret(request: Request): NextResponse | null {
   const expectedSecret = process.env.CRON_SECRET?.trim();
   const isProduction = process.env.NODE_ENV === "production";
 
-  // Backward compatibility for local dev setups without CRON_SECRET.
+  // Local development may run cron routes without provisioning a secret.
   if (!expectedSecret) {
     if (!isProduction) return null;
     return NextResponse.json(
@@ -61,6 +60,17 @@ export function requireCronSecret(request: Request): NextResponse | null {
 export async function requireCronOrUser(request: Request): Promise<NextResponse | null> {
   // 1) Cron secret path (fast, no DB hit)
   if (hasValidCronSecret(request)) return null;
+
+  // Scheduled jobs use GET, and a browser sends session cookies with a
+  // cross-site navigation. Do not let a logged-in dashboard session turn a
+  // third-party link into a cron trigger. Dashboard-initiated actions use POST.
+  const requestUrl = new URL(request.url);
+  if (request.method === "GET" && requestUrl.pathname.startsWith("/api/cron/")) {
+    return NextResponse.json(
+      { success: false, error: "Unauthorized: cron secret required" },
+      { status: 401 }
+    );
+  }
 
   // 2) User session path
   try {

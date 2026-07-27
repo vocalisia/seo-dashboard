@@ -83,7 +83,15 @@ export default function CrossDomainCannibalPage() {
             return (
               <div key={i} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                 <div className="px-5 py-3 cursor-pointer hover:bg-gray-800/40 flex items-center justify-between"
-                  onClick={() => setExpandedKeys(prev => { const n = new Set(prev); isOpen ? n.delete(r.query) : n.add(r.query); return n; })}>
+                  onClick={() => setExpandedKeys(prev => {
+                    const next = new Set(prev);
+                    if (isOpen) {
+                      next.delete(r.query);
+                    } else {
+                      next.add(r.query);
+                    }
+                    return next;
+                  })}>
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                     <span className="font-medium">{r.query}</span>

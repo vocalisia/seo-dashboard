@@ -58,7 +58,7 @@ const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec
 type Period = "3" | "7" | "30" | "90";
 type TabType = "keywords" | "gains" | "analytics" | "device";
 type KwTypeFilter = "all" | "important" | "highvolume" | "longtail" | "questions";
-const KEYWORD_LOAD_LIMIT = 2000;
+const KEYWORD_LOAD_LIMIT = 500;
 const KEYWORD_RENDER_LIMIT = 300;
 
 interface ServiceTiming {
@@ -247,6 +247,24 @@ async function runLimited<T>(
   await Promise.all(runners);
 }
 
+async function fetchWithTiming(
+  record: (timing: ServiceTiming) => void,
+  label: string,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const started = performance.now();
+  const res = await fetch(input, init);
+  record({
+    label,
+    ms: performance.now() - started,
+    ok: res.ok,
+    at: Date.now(),
+    cache: res.headers.get("X-Cache"),
+  });
+  return res;
+}
+
 export default function DashboardPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
@@ -309,16 +327,7 @@ export default function DashboardPage() {
   }
 
   async function timedFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const started = performance.now();
-    const res = await fetch(input, init);
-    recordTiming({
-      label,
-      ms: performance.now() - started,
-      ok: res.ok,
-      at: Date.now(),
-      cache: res.headers.get("X-Cache"),
-    });
-    return res;
+    return fetchWithTiming(recordTiming, label, input, init);
   }
 
   async function askAiAgent(siteId: number, query: string, position: number, monthlyVolume: number, actionType: "push" | "optimize" | "maintain" | "create") {
@@ -406,8 +415,11 @@ export default function DashboardPage() {
   useEffect(() => { void loadInitialDashboard(); }, []); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
 
   useEffect(() => {
-    const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
-    if (nav) setPageLoadMs(nav.domContentLoadedEventEnd);
+    const frame = requestAnimationFrame(() => {
+      const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+      if (nav) setPageLoadMs(nav.domContentLoadedEventEnd);
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   async function loadKeywords(siteId: number, p: Period) {
@@ -469,12 +481,19 @@ export default function DashboardPage() {
 
   async function toggleSite(siteId: number) {
     const wasOpen = expandedIds.has(siteId);
-    setExpandedIds(prev => { const n = new Set(prev); wasOpen ? n.delete(siteId) : n.add(siteId); return n; });
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (wasOpen) {
+        next.delete(siteId);
+      } else {
+        next.add(siteId);
+      }
+      return next;
+    });
     if (!wasOpen) {
       const tab = activeTab[siteId] || "keywords";
       if (tab === "keywords") {
         await loadKeywords(siteId, period);
-        loadGains(siteId);
       } else await loadGains(siteId);
     }
   }
@@ -487,8 +506,11 @@ export default function DashboardPage() {
       setExpandedIds(new Set(allIds));
       setBulkLoading(true);
       await runLimited(allIds, 4, async (id) => {
-        await loadKeywords(id, period);
-        await loadGains(id);
+        const tab = activeTab[id] || "keywords";
+        if (tab === "keywords") await loadKeywords(id, period);
+        else if (tab === "gains") await loadGains(id);
+        else if (tab === "analytics") await loadAnalytics(id, period);
+        else await loadDeviceSplit(id, period);
       });
       setBulkLoading(false);
     }
@@ -648,7 +670,7 @@ export default function DashboardPage() {
             <li>
               Vérifie au minimum <code className="bg-gray-800 px-1 rounded">DATABASE_URL</code>,{" "}
               <code className="bg-gray-800 px-1 rounded">NEXTAUTH_SECRET</code>,{" "}
-              <code className="bg-gray-800 px-1 rounded">GOOGLE_CLIENT_ID</code> / <code className="bg-gray-800 px-1 rounded">GOOGLE_CLIENT_SECRET</code>.
+              <code className="bg-gray-800 px-1 rounded">DASHBOARD_AUTH_USER</code> / <code className="bg-gray-800 px-1 rounded">DASHBOARD_AUTH_PASSWORD</code>.
             </li>
             <li>
               Puis <code className="bg-gray-800 px-1 rounded">npm run dev</code> et recharge la page.
@@ -1329,7 +1351,11 @@ export default function DashboardPage() {
                                   className={`flex items-center px-3 py-2 border-b border-gray-800/30 cursor-pointer transition ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/12 hover:bg-yellow-500/20" : "hover:bg-yellow-500/5"}`}
                                   onClick={() => setHighVolSelected(prev => {
                                     const n = new Set(prev);
-                                    n.has(kw.keyword) ? n.delete(kw.keyword) : n.add(kw.keyword);
+                                    if (n.has(kw.keyword)) {
+                                      n.delete(kw.keyword);
+                                    } else {
+                                      n.add(kw.keyword);
+                                    }
                                     return n;
                                   })}>
                                   <span className="w-5 shrink-0 flex items-center">

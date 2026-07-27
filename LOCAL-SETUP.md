@@ -4,6 +4,10 @@
 - `vercel.json` → auto-deploy GitHub désactivé (`git.deploymentEnabled: false`)
 - Crons Vercel supprimés (étaient: 7 jobs)
 - Nouveau script `scripts/register-local-crons.ps1` → recrée les 7 crons en tâches Windows
+- Planning local recommandé :
+  - lundi : production autopilot + concurrents
+  - mardi à vendredi : vérification live / alertes / sync
+  - vendredi : génération du rapport hebdo final
 
 ## Setup en 3 étapes
 

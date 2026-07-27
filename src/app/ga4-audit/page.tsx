@@ -43,17 +43,32 @@ export default function GA4AuditPage() {
   const [sites, setSites] = useState<SiteGA4Status[]>([]);
   const [loading, setLoading] = useState(true);
 
-  async function load() {
-    setLoading(true);
+  async function fetchAudit(): Promise<SiteGA4Status[] | null> {
     try {
       const res = await fetch("/api/ga4-audit");
-      const data = await res.json();
-      if (Array.isArray(data)) setSites(data);
-    } catch { /* ignore */ }
+      const data: unknown = await res.json();
+      return Array.isArray(data) ? data as SiteGA4Status[] : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function refresh() {
+    setLoading(true);
+    const data = await fetchAudit();
+    if (data) setSites(data);
     setLoading(false);
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAudit().then((data) => {
+      if (cancelled) return;
+      if (data) setSites(data);
+      setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const ok = sites.filter(s => s.status === "ok").length;
   const broken = sites.filter(s => s.status === "broken").length;
@@ -68,7 +83,7 @@ export default function GA4AuditPage() {
           <h1 className="text-xl font-bold">Audit balises GA4</h1>
           <span className="text-xs text-gray-500">Détection problèmes analytics par site</span>
         </div>
-        <button onClick={load} disabled={loading}
+        <button onClick={refresh} disabled={loading}
           className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 px-3 py-2 rounded-lg text-sm transition disabled:opacity-50">
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           Actualiser

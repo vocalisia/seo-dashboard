@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
+import { assertPublicHttpUrl, assertSameSiteUrl, fetchPublicUrl } from "@/lib/safe-url";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -35,9 +36,9 @@ const THIN_PATTERNS: { reason: string; re: RegExp; rec: BloatRow["recommendation
 const ORPHAN_IMPRESSION_THRESHOLD = 2;
 
 async function fetchSitemapUrls(siteUrl: string, limit = 2000): Promise<string[]> {
-  const base = siteUrl.replace(/\/$/, "");
   try {
-    const res = await fetch(base + "/sitemap.xml", {
+    const base = await assertPublicHttpUrl(siteUrl);
+    const res = await fetchPublicUrl(new URL("/sitemap.xml", base).toString(), {
       signal: AbortSignal.timeout(8000),
       headers: { "User-Agent": "SEO-Dashboard/1.0" },
     });
@@ -45,7 +46,11 @@ async function fetchSitemapUrls(siteUrl: string, limit = 2000): Promise<string[]
     const text = await res.text();
     const urls: string[] = [];
     for (const m of text.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)) {
-      urls.push(m[1].trim());
+      try {
+        urls.push(assertSameSiteUrl(m[1].trim(), base).toString());
+      } catch {
+        // Ignore malformed or cross-site sitemap entries.
+      }
       if (urls.length >= limit) break;
     }
     return urls;
@@ -81,6 +86,12 @@ export async function POST(request: NextRequest) {
     siteUrl = body.site_url;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  try {
+    siteUrl = (await assertPublicHttpUrl(siteUrl)).toString();
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid site_url" }, { status: 400 });
   }
 
   // Normalize URL: strip trailing slash, lowercase, drop http(s)://www. — for tolerant matching

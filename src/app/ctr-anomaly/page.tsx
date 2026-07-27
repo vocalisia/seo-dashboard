@@ -23,14 +23,16 @@ export default function CTRAnomalyPage() {
     fetch("/api/sites").then(r => r.json()).catch(() => null).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
-        if (data.length > 0) setSiteId((data[0] as Site).id);
+        if (data.length > 0) {
+          setLoading(true);
+          setSiteId((data[0] as Site).id);
+        }
       }
     });
   }, []);
 
   useEffect(() => {
     if (!siteId) return;
-    setLoading(true);
     fetch(`/api/ctr-anomaly?siteId=${siteId}&days=28&limit=100`)
       .then(r => r.json())
       .then((data: unknown) => {
@@ -51,7 +53,10 @@ export default function CTRAnomalyPage() {
           <h1 className="text-xl font-bold">CTR Anomaly Detector</h1>
           <span className="text-xs text-gray-500">vs benchmark AWR 2026</span>
         </div>
-        <select value={siteId || ""} onChange={e => setSiteId(parseInt(e.target.value))}
+        <select value={siteId || ""} onChange={e => {
+          setLoading(true);
+          setSiteId(parseInt(e.target.value));
+        }}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>

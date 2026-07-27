@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scanNiche, NicheScanResult } from "@/lib/youtube";
-import { auth } from "@/auth";
 import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
@@ -64,8 +63,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Aucun mot-cle exploitable" }, { status: 400 });
     }
 
-    const session = await auth();
-    const accessToken = session?.accessToken as string | undefined;
     const now = Date.now();
     let cacheHits = 0;
 
@@ -78,7 +75,7 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        const result = await scanNiche(keyword, accessToken);
+        const result = await scanNiche(keyword);
         CACHE.set(cacheKey, { ts: now, result });
         return result;
       } catch (err: unknown) {

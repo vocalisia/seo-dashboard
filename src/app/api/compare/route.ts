@@ -79,7 +79,7 @@ async function getSiteStats(siteId: number): Promise<SiteStats | null> {
     SELECT COUNT(*) as article_count
     FROM autopilot_runs
     WHERE site_id = ${siteId}
-      AND status = 'published'
+      AND status IN ('published', 'verified_live')
   `;
 
   // Top 10 keywords

@@ -6,6 +6,7 @@
  * AND from seed scripts. No AI calls here — those happen in /api/scanner/deep-research.
  */
 
+import { normalizeSeoTitle } from "./autopilot-utils";
 import { fetchGoogleSerpSnapshot } from "./opportunity-sources";
 
 // ---------- Types ----------
@@ -209,23 +210,26 @@ export function buildLaunchPlan(opts: {
 
   const articles: LaunchPlanArticle[] = [
     {
-      title: `Guide complet: ${primary}`,
+      title: normalizeSeoTitle(primary, primary),
       target_keyword: primary,
       intent: "informational",
       word_count_target: 2400,
       priority: 1,
     },
     {
-      title: `${primary} vs alternatives: comparatif ${new Date().getFullYear()}`,
+      title: normalizeSeoTitle(`${primary}: comparatif ${new Date().getFullYear()}`, primary),
       target_keyword: `${primary} comparatif`,
       intent: "commercial",
       word_count_target: 1800,
       priority: 2,
     },
     {
-      title: questions[0]
-        ? questions[0].replace(/\?$/, "").trim().slice(0, 90)
-        : `Comment choisir ${secondary} pour ${opts.niche}`,
+      title: normalizeSeoTitle(
+        questions[0]
+          ? questions[0].replace(/\?$/, "").trim().slice(0, 90)
+          : `Comment choisir ${secondary} pour ${opts.niche}`,
+        secondary
+      ),
       target_keyword: secondary,
       intent: "informational",
       word_count_target: 1600,
@@ -236,7 +240,7 @@ export function buildLaunchPlan(opts: {
   // Optional 4th if we have rich tertiary
   if (tertiary && tertiary !== primary && tertiary !== secondary) {
     articles.push({
-      title: `${tertiary}: erreurs à éviter en ${new Date().getFullYear()}`,
+      title: normalizeSeoTitle(`${tertiary}: erreurs à éviter en ${new Date().getFullYear()}`, tertiary),
       target_keyword: tertiary,
       intent: "informational",
       word_count_target: 1400,

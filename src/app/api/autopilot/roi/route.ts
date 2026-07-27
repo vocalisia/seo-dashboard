@@ -73,7 +73,7 @@ export async function GET(req: NextRequest) {
       SELECT id, keyword, COALESCE(language, 'fr') AS language, created_at
       FROM autopilot_runs
       WHERE site_id = ${siteId}
-        AND status = 'published'
+        AND status IN ('published', 'verified_live')
       ORDER BY created_at DESC
       LIMIT 100
     `) as AutopilotRow[];

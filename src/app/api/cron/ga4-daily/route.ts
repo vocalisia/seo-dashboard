@@ -9,6 +9,8 @@ import { NextResponse } from "next/server";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { getSQL } from "@/lib/db";
 import { getAnalyticsClient } from "@/lib/google-auth";
+import { ensureSyncStatusTable, saveSyncStatus } from "@/lib/sync-status";
+import { mapWithConcurrency } from "@/lib/data-sync";
 
 interface SiteRow {
   id: number;
@@ -37,10 +39,13 @@ async function syncSite(
   analytics: ReturnType<typeof getAnalyticsClient>,
   sql: ReturnType<typeof getSQL>,
   days: number
-): Promise<{ inserted: number; error: string | null }> {
+): Promise<{ inserted: number; latestDate: string | null; error: string | null }> {
+  const startedAt = new Date();
   const propId = site.ga_property_id.replace(/^properties\//, "");
   if (!propId || /^G-/.test(propId)) {
-    return { inserted: 0, error: "Measurement ID stored instead of Property ID" };
+    const error = "Measurement ID stored instead of Property ID";
+    await saveSyncStatus({ siteId: site.id, source: "ga4", status: "error", rowsSynced: 0, latestDataDate: null, error, startedAt });
+    return { inserted: 0, latestDate: null, error };
   }
 
   const { startDate, endDate } = dateRange(days);
@@ -120,9 +125,13 @@ async function syncSite(
       `;
       inserted++;
     }
-    return { inserted, error: null };
+    const latestDate = Object.keys(byDate).sort().at(-1) ?? null;
+    await saveSyncStatus({ siteId: site.id, source: "ga4", status: "success", rowsSynced: inserted, latestDataDate: latestDate, startedAt });
+    return { inserted, latestDate, error: null };
   } catch (e) {
-    return { inserted: 0, error: e instanceof Error ? e.message : "Unknown" };
+    const error = e instanceof Error ? e.message : "Unknown";
+    await saveSyncStatus({ siteId: site.id, source: "ga4", status: "error", rowsSynced: 0, latestDataDate: null, error, startedAt });
+    return { inserted: 0, latestDate: null, error };
   }
 }
 
@@ -135,6 +144,7 @@ export async function GET(request: Request) {
 
   try {
     const sql = getSQL();
+    await ensureSyncStatusTable();
     const analytics = getAnalyticsClient();
 
     const siteRows = (await sql`
@@ -144,19 +154,15 @@ export async function GET(request: Request) {
       ORDER BY name
     `) as SiteRow[];
 
-    const results: Array<{ site: string; inserted: number; error: string | null }> = [];
-    let totalInserted = 0;
-    let errors = 0;
-
-    for (const site of siteRows) {
-      const { inserted, error } = await syncSite(site, analytics, sql, days);
-      results.push({ site: site.name, inserted, error });
-      totalInserted += inserted;
-      if (error) errors++;
-    }
+    const results = await mapWithConcurrency(siteRows, 3, async (site) => {
+      const result = await syncSite(site, analytics, sql, days);
+      return { site_id: site.id, site: site.name, inserted: result.inserted, latest_date: result.latestDate, error: result.error };
+    });
+    const totalInserted = results.reduce((total, result) => total + result.inserted, 0);
+    const errors = results.filter((result) => result.error).length;
 
     return NextResponse.json({
-      success: true,
+      success: errors === 0,
       sites: siteRows.length,
       total_inserted: totalInserted,
       errors,

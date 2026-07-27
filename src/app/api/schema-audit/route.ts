@@ -3,6 +3,7 @@ import { requireApiSession } from "@/lib/api-auth";
 import { testRichResults } from "@/lib/rich-results";
 import { ensureSchema } from "@/lib/db";
 import { logError } from "@/lib/logger";
+import { assertPublicHttpUrl, assertSameSiteUrl, fetchPublicUrl } from "@/lib/safe-url";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -155,7 +156,7 @@ function parseJsonLd(html: string): { types: string[]; errors: string[]; warning
 
 async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<string | null> {
   try {
-    const res = await fetch(url, {
+    const res = await fetchPublicUrl(url, {
       signal: AbortSignal.timeout(timeoutMs),
       headers: { "User-Agent": "SEO-Dashboard-Auditor/1.0" },
     });
@@ -166,14 +167,18 @@ async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<string |
   }
 }
 
-async function fetchSitemapUrls(siteUrl: string, limit: number): Promise<string[]> {
-  const sitemapUrl = siteUrl.replace(/\/$/, "") + "/sitemap.xml";
+async function fetchSitemapUrls(siteUrl: URL, limit: number): Promise<string[]> {
+  const sitemapUrl = new URL("/sitemap.xml", siteUrl).toString();
   const html = await fetchWithTimeout(sitemapUrl);
   if (!html) return [];
   const matches = html.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi);
   const urls: string[] = [];
   for (const m of matches) {
-    urls.push(m[1].trim());
+    try {
+      urls.push(assertSameSiteUrl(m[1].trim(), siteUrl).toString());
+    } catch {
+      continue;
+    }
     if (urls.length >= limit) break;
   }
   return urls;
@@ -196,7 +201,7 @@ export async function POST(request: NextRequest) {
   const authState = await requireApiSession();
   if (authState.unauthorized) return authState.unauthorized;
 
-  let siteUrl: string;
+  let siteUrl: URL;
   let verifyWithGoogle = false;
   let maxVerify = 10;
   let maxUrls = 30;
@@ -211,7 +216,14 @@ export async function POST(request: NextRequest) {
     if (typeof body.siteUrl !== "string") {
       return NextResponse.json({ error: "siteUrl required" }, { status: 400 });
     }
-    siteUrl = body.siteUrl;
+    try {
+      siteUrl = await assertPublicHttpUrl(body.siteUrl);
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Invalid URL" },
+        { status: 400 },
+      );
+    }
     if (typeof body.verifyWithGoogle === "boolean") verifyWithGoogle = body.verifyWithGoogle;
     if (typeof body.maxVerify === "number" && body.maxVerify > 0) {
       maxVerify = Math.min(10, Math.floor(body.maxVerify));

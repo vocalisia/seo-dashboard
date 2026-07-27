@@ -68,9 +68,10 @@ async function sendEmailRecap(results: AutopilotResult[]): Promise<void> {
 
   if (!resendKey || !alertEmail) return;
 
-  const published = results.filter((r) => r.status === "published");
+  const published = results.filter((r) => r.status === "verified_live" || r.status === "published");
   const skipped = results.filter((r) => r.status === "skipped_disabled");
-  const failed = results.filter((r) => r.status !== "published" && r.status !== "skipped_disabled");
+  const pending = results.filter((r) => r.status === "published_pending_live");
+  const failed = results.filter((r) => r.status !== "verified_live" && r.status !== "published" && r.status !== "published_pending_live" && r.status !== "skipped_disabled");
 
   // Group by language for the recap
   const byLang: Record<string, AutopilotResult[]> = {};
@@ -98,6 +99,15 @@ async function sendEmailRecap(results: AutopilotResult[]): Promise<void> {
 <p>${published.length} article(s) publié(s) sur ${Object.keys(byLang).length} langue(s)${skipped.length > 0 ? ` — ${skipped.length} site(s) ignoré(s) (publication désactivée)` : ""}</p>
 
 ${langBlocks}
+
+${
+  pending.length > 0
+    ? `<h3>??? En attente de live (${pending.length})</h3>
+<ul>
+  ${pending.map((r) => `<li><strong>${r.site}</strong> [${r.language}]: ${r.keyword ?? r.article_title ?? "???"}</li>`).join("")}
+</ul>`
+    : ""
+}
 
 ${
   failed.length > 0
@@ -250,7 +260,8 @@ export async function POST(request: Request) {
     // Send email recap
     await sendEmailRecap(results);
 
-    const published = results.filter((r) => r.status === "published").length;
+    const published = results.filter((r) => r.status === "verified_live" || r.status === "published").length;
+    const pending_live = results.filter((r) => r.status === "published_pending_live").length;
     const failed = results.filter((r) => r.status === "failed").length;
     const skippedDisabled = results.filter((r) => r.status === "skipped_disabled").length;
 
@@ -259,6 +270,7 @@ export async function POST(request: Request) {
       total_sites: sites.length,
       total_runs: results.length,
       published,
+      pending_live,
       failed,
       skipped_disabled: skippedDisabled,
       results,

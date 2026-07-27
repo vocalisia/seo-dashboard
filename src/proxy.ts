@@ -38,11 +38,17 @@ function hasLocalDevBasicAuth(req: NextRequest): boolean {
   if (!isLocalhost) return false;
   const authHeader = req.headers.get("authorization") ?? "";
   if (!authHeader.startsWith("Basic ")) return false;
-  const decoded = Buffer.from(authHeader.slice(6), "base64").toString("utf-8");
+  let decoded: string;
+  try {
+    decoded = atob(authHeader.slice(6));
+  } catch {
+    return false;
+  }
   const [user, ...rest] = decoded.split(":");
-  const expectedUser = process.env.LOCAL_BASIC_AUTH_USER ?? "1983";
-  const expectedPass = process.env.LOCAL_BASIC_AUTH_PASS ?? "1983";
-  return user === expectedUser && rest.join(":") === expectedPass;
+  const expectedUser = process.env.LOCAL_BASIC_AUTH_USER?.trim();
+  const expectedPass = process.env.LOCAL_BASIC_AUTH_PASS?.trim();
+  if (!expectedUser || !expectedPass) return false;
+  return secretsMatch(expectedUser, user) && secretsMatch(expectedPass, rest.join(":"));
 }
 
 // HTTP Basic Auth (1st layer before NextAuth)
@@ -57,10 +63,18 @@ function checkBasicAuth(req: NextRequest): NextResponse | null {
   const authHeader = req.headers.get("authorization") ?? "";
   if (authHeader.startsWith("Basic ")) {
     const b64 = authHeader.slice(6);
-    const decoded = Buffer.from(b64, "base64").toString("utf-8");
+    let decoded: string;
+    try {
+      decoded = atob(b64);
+    } catch {
+      return new NextResponse("Accès restreint", {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Basic realm="SEO Dashboard"' },
+      });
+    }
     const [user, ...rest] = decoded.split(":");
     const pass = rest.join(":");
-    if (user === basicUser && pass === basicPass) return null;
+    if (secretsMatch(basicUser, user) && secretsMatch(basicPass, pass)) return null;
     if (hasLocalDevBasicAuth(req)) return null;
   }
 
@@ -72,7 +86,7 @@ function checkBasicAuth(req: NextRequest): NextResponse | null {
   });
 }
 
-export default auth((req) => {
+export const proxy = auth((req) => {
   // 1. Basic Auth check (also lets valid cron-secret through)
   const { pathname } = req.nextUrl;
 
@@ -85,9 +99,12 @@ export default auth((req) => {
     return NextResponse.next();
   }
 
-  // Basic Auth stays as a fallback outer gate for unauthenticated requests.
-  // A valid NextAuth session must not be blocked a second time.
-  if (!req.auth) {
+  // Credentials login is the primary dashboard access path. Keep Basic Auth only
+  // as a fallback for deployments that have not configured any login provider.
+  const credentialsLoginEnabled = Boolean(
+    process.env.DASHBOARD_AUTH_USER?.trim() || process.env.BASIC_AUTH_USER?.trim(),
+  );
+  if (!req.auth && !credentialsLoginEnabled) {
     const basicDenied = checkBasicAuth(req);
     if (basicDenied) return basicDenied;
   }
@@ -131,6 +148,8 @@ export default auth((req) => {
 
   return NextResponse.next();
 });
+
+export default proxy;
 
 export const config = {
   matcher: ["/((?!_next|favicon\\.ico|.*\\.(?:svg|png|jpg|ico|css|js)).*)"],

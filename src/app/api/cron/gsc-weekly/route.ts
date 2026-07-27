@@ -5,21 +5,6 @@ import { getGoogleAuthWithWriteScope } from "@/lib/google-auth";
 import { getSQL } from "@/lib/db";
 
 // ── Vault 369 LTD — 12 monitored sites ──────────────────────────────────────
-const VAULT_SITES = [
-  "sc-domain:seo-true.com",
-  "sc-domain:agentic-whatsup.com",
-  "sc-domain:vocalis.pro",
-  "sc-domain:master-seller.fr",
-  "sc-domain:trustly-ai.com",
-  "sc-domain:iapmesuisse.ch",
-  "sc-domain:tesla-mag.ch",
-  "sc-domain:cbdeuropa.com",
-  "sc-domain:lead-gene.com",
-  "sc-domain:agents-ia.pro",
-  "sc-domain:vocalis-ai.org",
-  "sc-domain:ai-due.com",
-] as const;
-
 const INDEXNOW_KEY =
   process.env.INDEXNOW_KEY ?? "551683f27598a229d3e9dc91cb786208";
 const ALERT_EMAIL =
@@ -142,7 +127,6 @@ async function processSite(
 
   // 1. Sitemaps — list + resubmit broken ones
   let sitemapStatus: SitemapStatus[] = [];
-  let resubmittedCount = 0;
 
   try {
     const sitemapRes = await gscClient.sitemaps.list({ siteUrl: site });
@@ -160,7 +144,6 @@ async function processSite(
           try {
             await gscClient.sitemaps.submit({ siteUrl: site, feedpath: smUrl });
             resubmitted = true;
-            resubmittedCount++;
           } catch {
             // Non-fatal — log only
             console.error(`[gsc-weekly] sitemap resubmit failed: ${smUrl}`);
@@ -359,12 +342,21 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const auth = getGoogleAuthWithWriteScope();
   const gscClient = google.searchconsole({ version: "v1", auth: auth as never });
+  const sql = getSQL();
+  const configuredSites = (await sql`
+    SELECT gsc_property
+    FROM sites
+    WHERE is_active = true
+      AND gsc_property IS NOT NULL
+      AND BTRIM(gsc_property) <> ''
+    ORDER BY id
+  `) as Array<{ gsc_property: string }>;
 
   const today = new Date().toISOString().slice(0, 10);
 
   // Process all sites in parallel
   const snapshots = await Promise.allSettled(
-    VAULT_SITES.map((site) => processSite(site, gscClient))
+    configuredSites.map(({ gsc_property }) => processSite(gsc_property, gscClient))
   );
 
   let sitesProcessed = 0;
@@ -450,6 +442,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   return NextResponse.json({
     success: true,
+    sites_configured: configuredSites.length,
     sites_processed: sitesProcessed,
     drops_detected: drops.length,
     sitemaps_resubmitted: sitemapsResubmitted,

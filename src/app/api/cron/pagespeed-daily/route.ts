@@ -42,7 +42,7 @@ interface SiteResult {
   error?: string;
 }
 
-const RATE_DELAY_MS = 2_500;
+const RATE_DELAY_MS = process.env.PAGESPEED_API_KEY?.trim() ? 150 : 1_100;
 
 function extractMetrics(data: Record<string, unknown>): PageSpeedMetrics {
   const lr = data.lighthouseResult as Record<string, unknown> | undefined;

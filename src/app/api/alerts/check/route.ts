@@ -124,7 +124,7 @@ async function checkIndexation(
            created_at
     FROM autopilot_runs
     WHERE site_id = ${siteId}
-      AND status = 'published'
+      AND status IN ('published', 'verified_live')
       AND github_url IS NOT NULL
       AND created_at < NOW() - INTERVAL '48 hours'
     ORDER BY created_at DESC

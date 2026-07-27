@@ -3,7 +3,13 @@ import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 
 function isLocalhostHost(host: string): boolean {
-  const hostname = host.split(":")[0];
+  let hostname = host.trim().toLowerCase();
+  if (hostname.startsWith("[")) {
+    const closingBracket = hostname.indexOf("]");
+    hostname = closingBracket >= 0 ? hostname.slice(1, closingBracket) : hostname;
+  } else {
+    hostname = hostname.split(":")[0];
+  }
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
@@ -20,7 +26,10 @@ export async function requireApiSession() {
   const host = (await headers()).get("host") ?? "";
   const authUrl = process.env.NEXTAUTH_URL ?? "";
   const localAuthUrl = authUrl.includes("localhost") || authUrl.includes("127.0.0.1");
-  const isLocalRuntime = process.env.NODE_ENV === "development" && (isLocalhostHost(host) || localAuthUrl);
+  const isLocalRuntime =
+    process.env.NODE_ENV === "development" &&
+    process.env.LOCAL_DEV_BYPASS_AUTH === "true" &&
+    (isLocalhostHost(host) || localAuthUrl);
 
   if (isLocalRuntime) {
     return { session: null, unauthorized: null as NextResponse | null };

@@ -1,10 +1,13 @@
-import { auth } from "@/auth";
 import { getAnalyticsClient } from "@/lib/google-auth";
+import { requireApiSession } from "@/lib/api-auth";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const propertyId = request.nextUrl.searchParams.get("propertyId");
 
   if (!propertyId) {
@@ -12,12 +15,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const session = await auth();
-    if (!session?.accessToken) {
-      return NextResponse.json({ error: "Non authentifié" }, { status: 401 });
-    }
-
-    const analytics = getAnalyticsClient(session.accessToken);
+    const analytics = getAnalyticsClient();
 
     const response = await analytics.properties.runRealtimeReport({
       property: `properties/${propertyId}`,

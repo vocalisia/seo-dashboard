@@ -24,7 +24,8 @@ export async function GET(request: Request) {
       },
     });
     const data = await res.json().catch(() => ({}));
-    return NextResponse.json({ success: res.ok, daily_sync: data });
+    const success = res.ok && data?.success !== false;
+    return NextResponse.json({ success, daily_sync: data }, { status: success ? 200 : 502 });
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : "Unknown" }, { status: 500 });
   }

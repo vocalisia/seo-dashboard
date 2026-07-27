@@ -16,6 +16,7 @@ interface PublishedRun {
   github_url: string | null;
   published_url: string;
   language: string | null;
+  status: string;
   created_at: string;
 }
 
@@ -52,9 +53,9 @@ async function runVerification() {
 
   // Articles publiés ces 60 derniers jours, jamais nettoyés
   const rows = (await sql`
-    SELECT id, site_id, keyword, github_url, published_url, language, created_at
+    SELECT id, site_id, keyword, github_url, published_url, language, status, created_at
     FROM autopilot_runs
-    WHERE status = 'published'
+    WHERE status IN ('published', 'verified_live', 'published_pending_live')
       AND published_url IS NOT NULL
       AND created_at >= NOW() - INTERVAL '60 days'
     ORDER BY created_at DESC
@@ -107,18 +108,26 @@ async function runVerification() {
   };
 
   const offenders: PublishedRun[] = [];
+  const promoted: PublishedRun[] = [];
   // 6-way concurrent probe (lecture HTML plus chère que HEAD)
   for (let i = 0; i < probeRows.length; i += 6) {
     const batch = probeRows.slice(i, i + 6);
     const verdicts = await Promise.all(batch.map((r) => probe(r.published_url)));
     batch.forEach((r, j) => {
       if (verdicts[j] === "dead") offenders.push(r);
+      else if (verdicts[j] === "ok" && r.status === "published_pending_live") promoted.push(r);
     });
   }
 
+  if (promoted.length > 0) {
+    const promotedIds = promoted.map((r) => r.id);
+    await sql`UPDATE autopilot_runs SET status = 'verified_live' WHERE id = ANY(${promotedIds})`;
+    logAutopilot("verify_promoted_live", { count: promoted.length, ids: promotedIds });
+  }
+
   if (offenders.length === 0 && blockedRows.length === 0) {
-    logAutopilot("verify_done", { checked: rows.length, offenders: 0 });
-    return NextResponse.json({ success: true, checked: rows.length, cleaned: 0, offenders: [] });
+    logAutopilot("verify_done", { checked: rows.length, offenders: 0, promoted: promoted.length });
+    return NextResponse.json({ success: true, checked: rows.length, cleaned: 0, promoted: promoted.length, offenders: [] });
   }
 
   // Auth Google pour désindexation
@@ -241,6 +250,7 @@ ${cleaned.map((c) => `<li><a href="${c.url}">${c.url}</a> — Google: ${c.deinde
     offenders: offenders.length,
     cleaned: cleaned.length,
     cleaned_blocked: blockedRows.length,
+    promoted: promoted.length,
   });
 
   return NextResponse.json({
@@ -248,6 +258,7 @@ ${cleaned.map((c) => `<li><a href="${c.url}">${c.url}</a> — Google: ${c.deinde
     checked: rows.length,
     cleaned: cleaned.length,
     cleaned_blocked: blockedRows.length,
+    promoted: promoted.length,
     offenders: cleaned,
     blocked_urls: blockedRows.map((r) => ({ id: r.id, url: r.published_url })),
   });

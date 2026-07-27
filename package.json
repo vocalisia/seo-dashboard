@@ -16,12 +16,13 @@
     "env:pull": "npx vercel env pull .env.local",
     "sync:gsc": "node scripts/sync-gsc.mjs",
     "sync:ga4": "node scripts/sync-ga4.mjs",
+    "reports:weekly": "node scripts/generate-weekly-reports.mjs",
     "validate:ga4": "node scripts/validate-ga4-ids.mjs",
     "fix:ga4": "node scripts/validate-ga4-ids.mjs --fix",
     "prebuild": "node scripts/seo-tag-guard.cjs && node scripts/validate-ga4-ids.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.88.0",
+    "@anthropic-ai/sdk": "0.91.1",
     "@neondatabase/serverless": "^1.0.2",
     "@sentry/nextjs": "^10.54.0",
     "@vercel/blob": "^2.3.3",

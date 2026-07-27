@@ -21,10 +21,18 @@ async function runWeeklyAutopilot(request: Request): Promise<NextResponse> {
   // Build the self-call URL — same pattern as src/app/api/autopilot/weekly/route.ts
   // VERCEL_PROJECT_PRODUCTION_URL = canonical prod URL (stable)
   // VERCEL_URL = preview deployment URL (changes each deploy)
+  // Never derive a self-call target from the request Host header: the cron secret
+  // must only ever be sent to an explicitly configured dashboard origin.
   const baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
     ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
     : process.env.NEXT_PUBLIC_SITE_URL
-      ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : new URL(request.url).origin);
+      ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
+  if (!baseUrl) {
+    return NextResponse.json(
+      { success: false, error: "Dashboard origin is not configured" },
+      { status: 500 },
+    );
+  }
 
   const cronSecret = process.env.CRON_SECRET?.trim();
   const headers: Record<string, string> = { "Content-Type": "application/json" };

@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAICached } from "@/lib/ai-cache";
+import { normalizeSeoTitle } from "@/lib/autopilot-utils";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -141,7 +142,7 @@ export async function POST(req: NextRequest) {
     // 2. Ask AI to generate titles + rationale for top 20
     const keywordList = top30.map((o) => `- "${o.keyword}" (vol: ${o.volume}, pos: ${o.position.toFixed(0)}, type: ${o.type})`).join("\n");
 
-    const aiPrompt = `Tu es expert SEO. Pour chaque mot-clé ci-dessous, génère un titre d'article optimisé SEO et une justification courte. Réponds UNIQUEMENT en JSON valide: [{"keyword":"...","title":"...","rationale":"..."}]\n\nMots-clés:\n${keywordList}`;
+    const aiPrompt = `Tu es expert SEO. Pour chaque mot-clé ci-dessous, génère un titre d'article SEO public et une justification courte. Contraintes du titre: mot-clé principal au début, une seule intention de recherche, 45 à 60 caractères si possible, jamais plus de 60, lisible, naturel, sans bourrage, sans label interne (AIO, LLM SEO, SEO principal), sans prix/devise/pourcentage, sans URL et sans ponctuation parasite. Réponds UNIQUEMENT en JSON valide: [{"keyword":"...","title":"...","rationale":"..."}]\n\nMots-clés:\n${keywordList}`;
 
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error("AI timeout")), 30000)
@@ -167,7 +168,7 @@ export async function POST(req: NextRequest) {
     } catch {
       aiItems = top30.map((o) => ({
         keyword: o.keyword,
-        title: `Guide complet: ${o.keyword}`,
+        title: normalizeSeoTitle(o.keyword, o.keyword),
         rationale: o.type === "striking" ? "Position 11-30: une amélioration = page 1" : "CTR faible: optimiser le titre peut doubler le trafic",
       }));
     }
@@ -185,7 +186,7 @@ export async function POST(req: NextRequest) {
       const difficulty = o.volume > 10000 ? "hard" : o.volume > 3000 ? "medium" : "easy";
       const ai = aiMap[o.keyword];
       return {
-        title: ai?.title ?? `Guide: ${o.keyword}`,
+        title: normalizeSeoTitle(ai?.title ?? o.keyword, o.keyword),
         target_keyword: o.keyword,
         score,
         rationale: ai?.rationale ?? "",

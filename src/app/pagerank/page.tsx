@@ -104,7 +104,7 @@ export default function PageRankPage() {
             {loading ? "Calcul PageRank..." : "Calculer PageRank"}
           </button>
           {loading && (
-            <span className="text-xs text-gray-400">Crawl jusqu'à 80 pages, avec timeout de sécurité</span>
+            <span className="text-xs text-gray-400">Crawl jusqu&apos;à 80 pages, avec timeout de sécurité</span>
           )}
         </div>
 
@@ -127,7 +127,7 @@ export default function PageRankPage() {
             </div>
             {result.partial && (
               <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
-                Calcul partiel: le crawl a été borné pour garder l'outil réactif.
+                Calcul partiel: le crawl a été borné pour garder l&apos;outil réactif.
               </div>
             )}
 

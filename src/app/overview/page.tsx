@@ -345,7 +345,7 @@ export default function OverviewPage() {
       ) : (
         <div className="flex-1 px-6 py-5 space-y-5">
           <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 px-4 py-3 text-xs text-cyan-100">
-            GSC mesure les clics et impressions depuis Google. GA4 mesure les sessions sur le site apres chargement, consentement et tracking. Les deux sources ne doivent pas etre egales; le ratio organique GA4 / clics GSC sert seulement d'indicateur de coherence.
+            GSC mesure les clics et impressions depuis Google. GA4 mesure les sessions sur le site apres chargement, consentement et tracking. Les deux sources ne doivent pas etre egales; le ratio organique GA4 / clics GSC sert seulement d&apos;indicateur de coherence.
           </div>
           {loadError && (
             <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">

@@ -1,7 +1,11 @@
 import { initDB } from "@/lib/db";
 import { NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 
 export async function POST() {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   try {
     await initDB();
     return NextResponse.json({ success: true, message: "Database initialized" });

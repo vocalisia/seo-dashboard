@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
+import { assertPublicHttpUrl, assertSameSiteUrl, fetchPublicUrl } from "@/lib/safe-url";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -34,7 +35,7 @@ interface ApiResponse {
 
 async function fetchWithTimeout(url: string): Promise<string | null> {
   try {
-    const res = await fetch(url, {
+    const res = await fetchPublicUrl(url, {
       signal: AbortSignal.timeout(5000),
       headers: { "User-Agent": "SEO-Dashboard-PRank/1.0" },
     });
@@ -46,13 +47,16 @@ async function fetchWithTimeout(url: string): Promise<string | null> {
 }
 
 async function fetchSitemapUrls(siteUrl: string, limit: number): Promise<string[]> {
-  const base = siteUrl.replace(/\/$/, "");
-  const html = await fetchWithTimeout(base + "/sitemap.xml");
+  const base = await assertPublicHttpUrl(siteUrl);
+  const html = await fetchWithTimeout(new URL("/sitemap.xml", base).toString());
   if (!html) return [];
   const urls: string[] = [];
   for (const m of html.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)) {
-    if (!m[1].includes(".xml")) {
-      urls.push(m[1].trim());
+    try {
+      const page = assertSameSiteUrl(m[1].trim(), base);
+      if (!page.pathname.endsWith(".xml")) urls.push(page.toString());
+    } catch {
+      // Ignore malformed or cross-site sitemap entries.
     }
     if (urls.length >= limit) break;
   }
@@ -144,6 +148,12 @@ export async function POST(request: NextRequest) {
     }
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  try {
+    siteUrl = (await assertPublicHttpUrl(siteUrl)).toString();
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid site_url" }, { status: 400 });
   }
 
   // GSC clicks per page

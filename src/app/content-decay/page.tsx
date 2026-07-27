@@ -55,14 +55,15 @@ export default function ContentDecayPage() {
       .then((data: unknown) => {
         const list = Array.isArray(data) ? data as Site[] : [];
         setSites(list);
-        if (list.length > 0) setSiteId("all");
+        if (list.length > 0) {
+          setLoading(true);
+          setSiteId("all");
+        }
       });
   }, []);
 
   useEffect(() => {
     if (siteId === null) return;
-    setLoading(true);
-    setError(null);
     const limit = siteId === "all" ? 300 : 100;
     fetch(`/api/content-decay?siteId=${siteId}&limit=${limit}`)
       .then((r) => r.json())
@@ -101,7 +102,11 @@ export default function ContentDecayPage() {
         </div>
         <select
           value={siteId ?? ""}
-          onChange={(e) => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
+          onChange={(e) => {
+            setLoading(true);
+            setError(null);
+            setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value, 10));
+          }}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm"
         >
           <option value="all">Tous les sites</option>

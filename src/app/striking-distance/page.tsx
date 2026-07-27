@@ -24,14 +24,16 @@ export default function StrikingDistancePage() {
     fetch("/api/sites").then(r => r.json()).catch(() => null).then((data: unknown) => {
       if (Array.isArray(data)) {
         setSites(data as Site[]);
-        if (data.length > 0) setSiteId("all");
+        if (data.length > 0) {
+          setLoading(true);
+          setSiteId("all");
+        }
       }
     });
   }, []);
 
   useEffect(() => {
     if (siteId === null) return;
-    setLoading(true);
     const limit = siteId === "all" ? 300 : 100;
     fetch(`/api/striking-distance?siteId=${siteId}&days=28&limit=${limit}`)
       .then(r => r.json())
@@ -53,7 +55,10 @@ export default function StrikingDistancePage() {
           <h1 className="text-xl font-bold">Striking Distance</h1>
           <span className="text-xs text-gray-500">Pos 8-20 → page 1 facile</span>
         </div>
-        <select value={siteId ?? ""} onChange={e => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value))}
+        <select value={siteId ?? ""} onChange={e => {
+          setLoading(true);
+          setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value));
+        }}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
           <option value="all">🌐 Tous les sites</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}

@@ -339,11 +339,20 @@ async function runOperationalCoverageChecks(): Promise<{ checks: HealthCheck[]; 
   return { checks, issues: issues.slice(0, 100) };
 }
 
-async function probeEndpoint(name: string, path: string, baseUrl: string, cookieHeader: string): Promise<HealthCheck> {
+async function probeEndpoint(
+  name: string,
+  path: string,
+  baseUrl: string,
+  forwardedHeaders: { cookie?: string; authorization?: string },
+): Promise<HealthCheck> {
   try {
     const start = Date.now();
     const res = await fetch(`${baseUrl}${path}`, {
-      headers: { cookie: cookieHeader, "Cache-Control": "no-cache" },
+      headers: {
+        ...(forwardedHeaders.cookie ? { cookie: forwardedHeaders.cookie } : {}),
+        ...(forwardedHeaders.authorization ? { authorization: forwardedHeaders.authorization } : {}),
+        "Cache-Control": "no-cache",
+      },
       signal: AbortSignal.timeout(8000),
     });
     const ms = Date.now() - start;
@@ -364,7 +373,10 @@ async function probeEndpoint(name: string, path: string, baseUrl: string, cookie
   }
 }
 
-async function runEndpointProbes(baseUrl: string, cookieHeader: string): Promise<HealthCheck[]> {
+async function runEndpointProbes(
+  baseUrl: string,
+  forwardedHeaders: { cookie?: string; authorization?: string },
+): Promise<HealthCheck[]> {
   const sql = getSQL();
   const sites = (await sql`
     SELECT id, ga_property_id
@@ -400,7 +412,7 @@ async function runEndpointProbes(baseUrl: string, cookieHeader: string): Promise
     if (sampleGa4Property) probes.push(["GET /api/realtime (GA4)", `/api/realtime?propertyId=${encodeURIComponent(sampleGa4Property)}`]);
   }
   probes.push(["GET /api/opportunities/scan", "/api/opportunities/scan"]);
-  return Promise.all(probes.map(([name, path]) => probeEndpoint(name, path, baseUrl, cookieHeader)));
+  return Promise.all(probes.map(([name, path]) => probeEndpoint(name, path, baseUrl, forwardedHeaders)));
 }
 
 async function buildAISummary(checks: HealthCheck[]): Promise<{ summary: string; actions: string[] }> {
@@ -440,11 +452,14 @@ export async function GET(req: Request) {
 
   try {
     const baseUrl = new URL(req.url).origin;
-    const cookieHeader = req.headers.get("cookie") ?? "";
+    const forwardedHeaders = {
+      cookie: req.headers.get("cookie") ?? undefined,
+      authorization: req.headers.get("authorization") ?? undefined,
+    };
     const [dbChecks, coverage, endpointChecks] = await Promise.all([
       runHealthChecks(),
       runOperationalCoverageChecks(),
-      runEndpointProbes(baseUrl, cookieHeader).catch(() => [] as HealthCheck[]),
+      runEndpointProbes(baseUrl, forwardedHeaders).catch(() => [] as HealthCheck[]),
     ]);
     const checks = [...dbChecks, ...coverage.checks, ...endpointChecks];
     const failCount = checks.filter((c) => c.status === "fail").length;

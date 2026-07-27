@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { assertPublicHttpUrl } from "@/lib/safe-url";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -42,10 +43,22 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const url = searchParams.get("url");
     const siteId = searchParams.get("site_id");
+    const numericSiteId = siteId && /^[1-9]\d*$/.test(siteId) ? Number(siteId) : null;
 
     if (!url) return NextResponse.json({ error: "url required" }, { status: 400 });
+    if (siteId && !numericSiteId) return NextResponse.json({ error: "Invalid site_id" }, { status: 400 });
+    let safeUrl: URL;
+    try {
+      safeUrl = await assertPublicHttpUrl(url);
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Invalid URL" },
+        { status: 400 },
+      );
+    }
 
-    const encodedUrl = encodeURIComponent(url);
+    const normalizedUrl = safeUrl.toString();
+    const encodedUrl = encodeURIComponent(normalizedUrl);
     const apiKey = process.env.PAGESPEED_API_KEY;
     const keyParam = apiKey ? `&key=${apiKey}` : "";
     const baseUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodedUrl}${keyParam}`;
@@ -73,7 +86,7 @@ export async function GET(req: NextRequest) {
     const mobile = extractMetrics(mobileData);
     const desktop = extractMetrics(desktopData);
 
-    if (siteId) {
+    if (numericSiteId) {
       try {
         const sql = getSQL();
         await sql`
@@ -82,7 +95,7 @@ export async function GET(req: NextRequest) {
              mobile_lcp, desktop_lcp, mobile_cls, desktop_cls,
              mobile_fcp, desktop_fcp, mobile_ttfb, desktop_ttfb)
           VALUES
-            (${parseInt(siteId, 10)}, ${url}, ${mobile.score}, ${desktop.score},
+            (${numericSiteId}, ${normalizedUrl}, ${mobile.score}, ${desktop.score},
              ${mobile.lcp}, ${desktop.lcp}, ${mobile.cls}, ${desktop.cls},
              ${mobile.fcp}, ${desktop.fcp}, ${mobile.ttfb}, ${desktop.ttfb})
         `;
@@ -91,7 +104,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ mobile, desktop, url });
+    return NextResponse.json({ mobile, desktop, url: normalizedUrl });
   } catch (err) {
     console.error(err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

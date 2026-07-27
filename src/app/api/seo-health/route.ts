@@ -121,7 +121,7 @@ export async function GET(req: NextRequest) {
     try {
       const contentRows = (await sql`
         SELECT COUNT(*) AS cnt FROM autopilot_runs
-        WHERE site_id = ${site_id} AND status = 'published'
+        WHERE site_id = ${site_id} AND status IN ('published', 'verified_live')
       `) as { cnt: number }[];
       articleCount = Number(contentRows[0]?.cnt ?? 0);
     } catch { /* table may not exist */ }

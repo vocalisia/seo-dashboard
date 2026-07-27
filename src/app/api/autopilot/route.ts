@@ -17,13 +17,159 @@ import {
   buildPublishedArticleUrl,
   normalizeAutopilotMarkdownLinks,
 } from "@/lib/autopilot-published-url";
-import { slugify, todayISO } from "@/lib/autopilot-utils";
+import { normalizeSeoTitle, slugify, todayISO } from "@/lib/autopilot-utils";
 
 interface Site {
   id: number;
   name: string;
   url: string;
   gsc_property: string;
+}
+
+function isUsableGeneratedImageUrl(url: string | null | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+
+  const normalized = url.trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (normalized.includes("placeholder")) {
+    return false;
+  }
+
+  if (normalized.endsWith(".svg")) {
+    return false;
+  }
+
+  if (/\/placeholder(\.|$)/.test(normalized)) {
+    return false;
+  }
+
+  if (/^data:image\/svg\+xml/.test(normalized)) {
+    return false;
+  }
+
+  return (
+    /^https?:\/\//.test(normalized) ||
+    /^data:image\/(?:png|jpeg|jpg|webp);base64,/.test(normalized)
+  );
+}
+
+function normalizeTextForMatch(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function pageMatchesExpectedArticle(html: string, expectedTitle: string): boolean {
+  const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const rawSignals = [titleMatch?.[1] ?? "", h1Match?.[1] ?? ""].join(" ");
+  const normalizedSignals = normalizeTextForMatch(rawSignals);
+  const expectedTokens = normalizeTextForMatch(expectedTitle)
+    .split(" ")
+    .filter((token) => token.length >= 4);
+
+  if (!normalizedSignals || expectedTokens.length === 0) {
+    return false;
+  }
+
+  const matchedCount = expectedTokens.filter((token) =>
+    normalizedSignals.includes(token)
+  ).length;
+
+  return matchedCount >= Math.min(2, expectedTokens.length);
+}
+
+async function probePublishedUrl(
+  url: string,
+  expectedTitle?: string,
+  attempts = 6,
+  delayMs = 5000
+): Promise<{ ok: boolean; status: number | null; matchedTitle: boolean }> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+        headers: { "user-agent": "SEO Dashboard live verifier" },
+      });
+      const status = response.status;
+      if (status === 200) {
+        const html = await response.text();
+        const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+        const title = titleMatch ? titleMatch[1].trim().toLowerCase() : "";
+        const matchedTitle = expectedTitle
+          ? pageMatchesExpectedArticle(html, expectedTitle)
+          : true;
+        const hasPlaceholderImage =
+          html.includes("/placeholder.jpg") || html.includes('image: "/placeholder.jpg"');
+        if (
+          !/(introuvable|not\s+found|\b404\b)/i.test(title) &&
+          matchedTitle &&
+          !hasPlaceholderImage
+        ) {
+          return { ok: true, status, matchedTitle };
+        }
+      }
+      if (status === 404 || status === 410) {
+        return { ok: false, status, matchedTitle: false };
+      }
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    } catch {
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  return { ok: false, status: null, matchedTitle: false };
+}
+
+async function probeAssetUrl(
+  url: string,
+  attempts = 6,
+  delayMs = 4000
+): Promise<{ ok: boolean; status: number | null; contentType: string | null }> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+        headers: { "user-agent": "SEO Dashboard asset verifier" },
+      });
+      const status = response.status;
+      const contentType = response.headers.get("content-type");
+      if (
+        status === 200 &&
+        contentType &&
+        /^image\/(png|jpeg|jpg|webp|avif)/i.test(contentType)
+      ) {
+        return { ok: true, status, contentType };
+      }
+      if (status === 404 || status === 410) {
+        return { ok: false, status, contentType };
+      }
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    } catch {
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  return { ok: false, status: null, contentType: null };
 }
 
 export async function POST(req: NextRequest) {
@@ -135,7 +281,7 @@ export async function POST(req: NextRequest) {
           FROM autopilot_runs
           WHERE site_id = ${site_id}
             AND COALESCE(language, 'fr') = ${language}
-            AND status = 'published'
+            AND status IN ('published', 'verified_live', 'published_pending_live')
         `) as { keyword: string }[];
         usedKeywords = usedRows.map((r) => r.keyword);
       } catch (err) {
@@ -407,7 +553,7 @@ Pick the 4-6 slugs from the list that are MOST SEMANTICALLY RELEVANT to "${keywo
 Anchors must contain variations of "${keyword}" or semantically close terms, in the article language.`
         : "";
 
-      const langInstruction = `You are a senior SEO expert. Write complete MDX articles in ${lang.articleLang} with mandatory internal linking. Generate ONLY raw MDX content, no markdown code block wrappers.`;
+      const langInstruction = `You are a senior SEO expert. Write complete MDX articles in ${lang.articleLang} with mandatory internal linking. Generate ONLY raw MDX content, no markdown code block wrappers. Public titles/H1 must be short, readable, query-first, and free of internal SEO labels.`;
 
       const articleResult = await askAICached({
         cacheKey: `autopilot-article:${site_id}:${language}:${keyword}:${today}`,
@@ -427,7 +573,7 @@ ${internalLinksBlock}
 
 REQUIRED STRUCTURE:
 ---
-title: "H1 SEO-optimized in ${lang.articleLang}, 50-65 chars. Rules: (1) MUST contain '${keyword}' naturally (2) MUST reflect the actual article angle you develop below (3) include a benefit, year, or specific number to boost CTR. Example format: '[Keyword]: [Specific Benefit] for [Audience] in 2026'. NEVER write a generic 'The Ultimate Guide' style title if the content is not a guide."
+title: "Public H1/title in ${lang.articleLang}, 45-60 characters ideal, 60 max. HARD RULES: (1) start with '${keyword}' or its exact natural form, at the beginning (2) one single search intent only (3) short, readable, human, no keyword stuffing (4) no internal labels like AIO, LLM SEO, SEO principal, Ancrage SEO (5) no prices, currencies, percentages, weird symbols, URL fragments, double slashes, mojibake or fake marketing fluff (6) use a colon only if it improves clarity and still stays short. Good examples: '${keyword}: points a verifier', '${keyword}: erreurs a eviter', '${keyword} en Suisse'. Bad examples: 'The Ultimate Guide...', long list titles, multi-intent titles."
 description: "Meta description 145-160 chars in ${lang.articleLang}. MUST contain '${keyword}' and summarize the SPECIFIC angle of the article (not generic). Include a call-to-action verb."
 date: "${today}"
 tags: ["${keyword.split(" ")[0]}", "tag2", "tag3", "tag4"]
@@ -555,7 +701,29 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
 
       // Extract title from frontmatter
       const titleMatch = articleContent.match(/^title:\s*["']?(.+?)["']?\s*$/m);
-      if (titleMatch) articleTitle = titleMatch[1];
+      const rawTitle = titleMatch?.[1] ?? "";
+      const normalizedTitle = normalizeSeoTitle(rawTitle, keyword);
+      articleTitle = normalizedTitle;
+
+      if (titleMatch) {
+        articleContent = articleContent.replace(
+          /^title:\s*["']?.+?["']?\s*$/m,
+          `title: "${normalizedTitle}"`
+        );
+      } else {
+        articleContent = articleContent.replace(
+          /^---\s*$/m,
+          `---\ntitle: "${normalizedTitle}"`
+        );
+      }
+
+      if (rawTitle && rawTitle !== normalizedTitle) {
+        logAutopilot("title_normalized", {
+          keyword,
+          rawTitle,
+          normalizedTitle,
+        });
+      }
     } catch (err) {
       console.error("Article generation failed:", err);
       return NextResponse.json({ success: false, error: "Article generation failed" });
@@ -572,11 +740,11 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     try {
       // Build a rich, context-aware prompt in English for image generation.
       const imagePrompt = [
-        `Professional editorial photograph illustrating an article titled "${articleTitle}".`,
+        `Photorealistic premium editorial photograph illustrating an article titled "${articleTitle}".`,
         articleDescription ? `Article context: ${articleDescription}` : "",
-        `Visual theme: ${keyword} — show the actual subject matter, real people or real objects, business context if applicable.`,
-        `Style: modern, clean, professional stock photography, high quality, realistic lighting, 16:9 composition.`,
-        `Strict rules: NO text, NO letters, NO logos, NO watermarks, NO cartoon style.`,
+        `Visual theme: ${keyword} - show the real subject matter with believable people, places, objects, documents or financial situations tied to the article.`,
+        `Style: high-end magazine photography, realistic lighting, credible depth, natural textures, premium composition, 16:9 frame.`,
+        `Strict rules: SINGLE SCENE ONLY, NO collage, NO grid, NO multi-panel composition, NO text, NO letters, NO logos, NO watermarks, NO icon collage, NO abstract gradient, NO bokeh placeholder, NO vector illustration, NO flat design, NO cartoon style.`,
       ]
         .filter(Boolean)
         .join(" ");
@@ -593,6 +761,34 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       }
     } catch (err) {
       console.error("Image generation failed:", err);
+    }
+
+    const placeholderStillPresent = articleContent.includes(
+      'image: "/placeholder.jpg"'
+    );
+    const hasRealGeneratedImage =
+      isUsableGeneratedImageUrl(imageUrl) && !placeholderStillPresent;
+
+    if (!hasRealGeneratedImage) {
+      logAutopilot("image_required_block", {
+        site_id,
+        keyword,
+        imageUrl,
+        placeholderStillPresent,
+      });
+
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Publication bloquee: vraie photo generee obligatoire. Placeholder, SVG ou image faible refuse.",
+          keyword,
+          article_title: articleTitle,
+          image_url: imageUrl,
+          status: "blocked_image_required",
+        },
+        { status: 422 }
+      );
     }
 
     // 7. Publish to GitHub (if not dry_run and repo config exists)
@@ -673,8 +869,53 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       }
     }
 
+    // 8c. Live verification before claiming publication success
+    let liveVerified = false;
+    let liveStatus: number | null = null;
+    let liveTitleMatched = false;
+    let assetVerified = false;
+    let assetStatus: number | null = null;
+    let assetContentType: string | null = null;
+    if (publishedUrl && githubUrl && !dry_run) {
+      try {
+        const probe = await probePublishedUrl(publishedUrl, articleTitle);
+        liveVerified = probe.ok;
+        liveStatus = probe.status;
+        liveTitleMatched = probe.matchedTitle;
+        logAutopilot(liveVerified ? "live_verify_ok" : "live_verify_pending", {
+          liveUrl: publishedUrl,
+          status: liveStatus,
+          matchedTitle: liveTitleMatched,
+        });
+      } catch (err) {
+        console.error("[autopilot] live verification failed (non-blocking):", err);
+      }
+    }
+
+    if (imageUrl && githubUrl && !dry_run) {
+      try {
+        const assetProbe = await probeAssetUrl(imageUrl);
+        assetVerified = assetProbe.ok;
+        assetStatus = assetProbe.status;
+        assetContentType = assetProbe.contentType;
+        logAutopilot(assetVerified ? "asset_verify_ok" : "asset_verify_pending", {
+          imageUrl,
+          status: assetStatus,
+          contentType: assetContentType,
+        });
+      } catch (err) {
+        console.error("[autopilot] asset verification failed (non-blocking):", err);
+      }
+    }
+
     // 9. Store result in autopilot_runs (with language + published URL)
-    const runStatus = dry_run ? "dry_run" : githubUrl ? "published" : "failed";
+    const runStatus = dry_run
+      ? "dry_run"
+      : liveVerified && assetVerified
+        ? "verified_live"
+        : githubUrl
+          ? "live_check_failed"
+          : "failed";
     try {
       try {
         await sql`ALTER TABLE autopilot_runs ADD COLUMN IF NOT EXISTS published_url VARCHAR(1500)`;
@@ -704,10 +945,43 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
     logAutopilot("run_complete", {
       site_id,
       keyword,
-      status: dry_run ? "dry_run" : githubUrl ? "published" : "failed",
+      status: runStatus,
       dry_run,
       hasGithubUrl: Boolean(githubUrl),
+      liveVerified,
+      liveStatus,
+      liveTitleMatched,
+      assetVerified,
+      assetStatus,
+      assetContentType,
     });
+
+    if (!dry_run && githubUrl && (!liveVerified || !assetVerified)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Publication bloquee: verification live incomplete. Page ou image non verifiee en 200 sur le domaine/public asset final.",
+          keyword,
+          article_title: articleTitle,
+          github_url: githubUrl,
+          published_url: publishedUrl,
+          image_url: imageUrl,
+          status: runStatus,
+          live_verified: liveVerified,
+          live_status: liveStatus,
+          live_title_matched: liveTitleMatched,
+          asset_verified: assetVerified,
+          asset_status: assetStatus,
+          asset_content_type: assetContentType,
+          indexing_requested: indexingRequested,
+          repo_matched: repoConfig ? repoConfig.repo : null,
+          link_candidates_count: linkCandidates.length,
+          link_stats: linkStats,
+        },
+        { status: 422 }
+      );
+    }
 
     // 10. Return result
     return NextResponse.json({
@@ -724,6 +998,12 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       dry_run,
       status: runStatus,
       indexing_requested: indexingRequested,
+      live_verified: liveVerified,
+      live_status: liveStatus,
+      live_title_matched: liveTitleMatched,
+      asset_verified: assetVerified,
+      asset_status: assetStatus,
+      asset_content_type: assetContentType,
       // Debug info for UI
       repo_matched: repoConfig ? repoConfig.repo : null,
       link_candidates_count: linkCandidates.length,

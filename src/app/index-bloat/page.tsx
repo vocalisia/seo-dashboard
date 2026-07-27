@@ -160,7 +160,7 @@ export default function IndexBloatPage() {
               <strong>Comment dé-indexer:</strong> Ajouter dans le{" "}
               <code className="bg-blue-900/40 px-1 rounded">&lt;head&gt;</code> de chaque page concernée:{" "}
               <code className="bg-blue-900/40 px-1 rounded text-xs">
-                &lt;meta name="robots" content="noindex, follow" /&gt;
+                &lt;meta name=&quot;robots&quot; content=&quot;noindex, follow&quot; /&gt;
               </code>
             </div>
             {result.partial && (

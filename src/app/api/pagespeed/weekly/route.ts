@@ -55,9 +55,11 @@ function extractMetrics(data: Record<string, unknown>): PageSpeedMetrics {
 
 async function fetchPageSpeed(url: string, strategy: "mobile" | "desktop"): Promise<PageSpeedMetrics> {
   const encodedUrl = encodeURIComponent(url);
-  const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodedUrl}&strategy=${strategy}`;
+  const apiKey = process.env.PAGESPEED_API_KEY?.trim();
+  const keyParam = apiKey ? `&key=${apiKey}` : "";
+  const apiUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodedUrl}&strategy=${strategy}${keyParam}`;
 
-  const res = await fetch(apiUrl);
+  const res = await fetch(apiUrl, { signal: AbortSignal.timeout(60_000) });
 
   if (!res.ok) {
     throw new Error(`PageSpeed API ${strategy} returned ${res.status}`);
