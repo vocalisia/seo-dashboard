@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { assertPublicHttpUrl } from "@/lib/safe-url";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -39,6 +40,9 @@ function extractMetrics(data: Record<string, unknown>): PageSpeedMetrics {
 }
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   try {
     const { searchParams } = new URL(req.url);
     const url = searchParams.get("url");
@@ -69,13 +73,21 @@ export async function GET(req: NextRequest) {
     const desktopRes = await fetch(`${baseUrl}&strategy=desktop`, { signal: AbortSignal.timeout(60000) });
 
     if (!mobileRes.ok || !desktopRes.ok) {
-      const errBody = await mobileRes.text().catch(() => "");
-      const isQuota = errBody.includes("429") || mobileRes.status === 429;
-      return NextResponse.json({
-        error: isQuota
-          ? "Quota Google PageSpeed dépassé — réessaie dans 1 minute ou ajoute PAGESPEED_API_KEY dans Vercel"
-          : `PageSpeed API error (${mobileRes.status})`,
-      }, { status: 502 });
+      const failedResponse = !mobileRes.ok ? mobileRes : desktopRes;
+      const errBody = await failedResponse.text().catch(() => "");
+      const isQuota = failedResponse.status === 429 || errBody.includes("429");
+
+      if (isQuota) {
+        return NextResponse.json(
+          { error: "Google PageSpeed limite temporairement les requetes. Reessaie dans une minute." },
+          { status: 429, headers: { "Retry-After": "60" } },
+        );
+      }
+
+      return NextResponse.json(
+        { error: `PageSpeed API error (${failedResponse.status})` },
+        { status: 502 },
+      );
     }
 
     const [mobileData, desktopData] = await Promise.all([
