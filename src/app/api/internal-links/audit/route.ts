@@ -4,13 +4,16 @@ export const maxDuration = 60;
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { listRepoFiles } from "@/lib/github";
-import { resolveSiteRepoConfig, SITE_REPO_MAP } from "@/lib/autopilot-config";
+import { resolveSiteRepoConfig } from "@/lib/autopilot-config";
+import { requireApiSession } from "@/lib/api-auth";
 
 const ARTICLE_LIMIT = 30;
 const LINK_POOR_THRESHOLD = 2;
 
-// Regex to match internal markdown links like [text](/blog/slug) or [text](/slug)
-const INTERNAL_LINK_REGEX = /\[([^\]]*)\]\(\/(blog\/)?([a-z0-9][a-z0-9-]*)\)/gi;
+// Match locale-prefixed and non-prefixed internal links, e.g.
+// [text](/fr/blog/slug), [text](/blog/slug), or [text](/slug).
+const INTERNAL_LINK_REGEX =
+  /\[([^\]]*)\]\(\/(?:(?:[a-z]{2}(?:-[A-Z]{2})?)\/)?(?:blog\/)?([a-z0-9][a-z0-9-]*)(?:[?#][^)]*)?\)/gi;
 
 interface ArticleData {
   slug: string;
@@ -27,6 +30,72 @@ interface Suggestion {
   from: string;
   to: string;
   reason: string;
+}
+function pageKey(url: URL): string {
+  const pathname = url.pathname.replace(/\/+$/, "") || "/";
+  return pathname === "/" ? "home" : pathname.replace(/^\/+/, "");
+}
+
+function sitemapUrls(xml: string, origin: string): URL[] {
+  const urls: URL[] = [];
+  const seen = new Set<string>();
+  const matches = xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi);
+  for (const match of matches) {
+    try {
+      const url = new URL(match[1].trim());
+      if (url.origin !== origin || seen.has(url.href)) continue;
+      seen.add(url.href);
+      urls.push(url);
+    } catch {
+      // Ignore malformed sitemap entries.
+    }
+  }
+  return urls;
+}
+
+function publicInternalLinks(html: string, origin: string): string[] {
+  const links: string[] = [];
+  const matches = html.matchAll(/\shref\s*=\s*["']([^"'#][^"']*)["']/gi);
+  for (const match of matches) {
+    try {
+      const url = new URL(match[1], origin);
+      if (url.origin === origin) links.push(pageKey(url));
+    } catch {
+      // Ignore malformed href values.
+    }
+  }
+  return links;
+}
+
+async function fetchPublicPages(siteUrl: string): Promise<ArticleData[]> {
+  const origin = new URL(siteUrl).origin;
+  const response = await fetch(`${origin}/sitemap.xml`, {
+    headers: { "User-Agent": "SEO-Dashboard-InternalLinks/1.0" },
+    cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) return [];
+
+  const urls = sitemapUrls(await response.text(), origin).slice(0, ARTICLE_LIMIT);
+  const results = await Promise.all(urls.map(async (url) => {
+    try {
+      const page = await fetch(url, {
+        headers: { "User-Agent": "SEO-Dashboard-InternalLinks/1.0" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!page.ok) return null;
+      return {
+        slug: pageKey(url),
+        content: "",
+        outgoingLinks: publicInternalLinks(await page.text(), origin),
+      };
+    } catch {
+      return null;
+    }
+  }));
+
+  return results.filter((page): page is ArticleData => page !== null);
 }
 
 /** Fetch raw MDX content from GitHub */
@@ -59,7 +128,7 @@ function extractInternalLinks(content: string): string[] {
   const regex = new RegExp(INTERNAL_LINK_REGEX.source, "gi");
 
   while ((match = regex.exec(content)) !== null) {
-    links.push(match[3]);
+    links.push(match[2]);
   }
   return links;
 }
@@ -124,6 +193,8 @@ function keywordOverlap(kwA: Set<string>, kwB: Set<string>): string[] {
 }
 
 export async function POST(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   try {
     const body = (await request.json()) as { site_id?: number };
     const siteId = body.site_id;
@@ -142,51 +213,43 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Site not found" }, { status: 404 });
     }
     const site = sites[0];
-
-    // 2. Find repo config
     const siteName = site.name as string;
+
+    // 2. Read Git-backed articles when available; otherwise audit the live sitemap.
     const { repoConfig, siteKey, normalizedSiteName } = resolveSiteRepoConfig(siteName);
+    let articles: ArticleData[];
+    let auditSource: "github" | "sitemap";
+
     if (!repoConfig) {
-      return NextResponse.json(
-        {
-          error: `No repo config for site "${siteName}" (normalized: "${normalizedSiteName}"). Available: ${Object.keys(SITE_REPO_MAP).join(", ")}`,
-        },
-        { status: 400 }
-      );
+      articles = await fetchPublicPages(site.url as string);
+      auditSource = "sitemap";
+      if (articles.length === 0) {
+        return NextResponse.json(
+          { error: `No repository config and no readable sitemap for site "${siteName}".` },
+          { status: 404 }
+        );
+      }
+    } else {
+      const { repo, articlePath, format } = repoConfig;
+      const allSlugs = await listRepoFiles(repo, articlePath);
+      if (allSlugs.length === 0) {
+        return NextResponse.json(
+          { error: "No articles found in repo" },
+          { status: 404 }
+        );
+      }
+
+      const slugsToAudit = allSlugs.slice(0, ARTICLE_LIMIT);
+      const results = await Promise.all(slugsToAudit.map(async (slug) => {
+        const content = await fetchRawContent(repo, `${articlePath}/${slug}.${format}`);
+        if (!content) return null;
+        return { slug, content, outgoingLinks: extractInternalLinks(content) };
+      }));
+      articles = results.filter((article): article is ArticleData => article !== null);
+      auditSource = "github";
     }
 
-    const { repo, articlePath, format } = repoConfig;
-
-    // 3. List article slugs from GitHub
-    const allSlugs = await listRepoFiles(repo, articlePath);
-    if (allSlugs.length === 0) {
-      return NextResponse.json(
-        { error: "No articles found in repo" },
-        { status: 404 }
-      );
-    }
-
-    const slugsToAudit = allSlugs.slice(0, ARTICLE_LIMIT);
-
-    // 4. Fetch raw content for each article (parallel, batched)
-    const articles: ArticleData[] = [];
-    const fetchPromises = slugsToAudit.map(async (slug) => {
-      const content = await fetchRawContent(
-        repo,
-        `${articlePath}/${slug}.${format}`
-      );
-      if (!content) return null;
-
-      const outgoingLinks = extractInternalLinks(content);
-      return { slug, content, outgoingLinks };
-    });
-
-    const results = await Promise.all(fetchPromises);
-    for (const r of results) {
-      if (r) articles.push(r);
-    }
-
-    // 5-6. Build link matrix + compute stats
+    // 5-6. Build link matrix
     const slugSet = new Set(articles.map((a) => a.slug));
     const incomingCount: Record<string, number> = {};
     let totalInternalLinks = 0;
@@ -279,7 +342,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      site_key: siteKey,
+      site_key: siteKey ?? normalizedSiteName,
+      source: auditSource,
       total_articles: articles.length,
       total_internal_links: totalInternalLinks,
       avg_links_per_article: avgLinks,

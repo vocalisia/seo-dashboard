@@ -81,6 +81,6 @@ export async function listRepoFiles(
   if (!Array.isArray(data)) return [];
 
   return data
-    .filter((f) => f.type === "file" && f.name.endsWith(".mdx"))
-    .map((f) => f.name.replace(/\.mdx$/, ""));
+    .filter((f) => f.type === "file" && /\.(md|mdx)$/i.test(f.name))
+    .map((f) => f.name.replace(/\.(md|mdx)$/i, ""));
 }
