@@ -337,7 +337,7 @@ const NEWS_OR_CURIOSITY_PATTERNS = [
   /\b(soar with|grades|class|university|berkeley|notre dame|sagrada|lego|persepolis)\b/i,
   /\b(3d-printed book|raised lettering|homepage construction kit|small footprint)\b/i,
   /\b(kvarn|vllm|kv-cache|huawei|native backend|quantization)\b/i,
-  /['"“”]/,
+  /['"â€œâ€]/,
   /\b(breaking|wins|loses|charged|arrested|election|earthquake|storm|war|movie|series|episode)\b/i,
 ];
 
@@ -391,8 +391,17 @@ function opportunityQualityScore(opp: StoredOpportunity): number {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
+function hasSentenceLikeSignal(opp: StoredOpportunity): boolean {
+  const signals = [opp.niche, ...(opp.core_keywords ?? []), ...(opp.sample_queries ?? [])];
+  return signals.some((signal) => {
+    const words = signal.trim().split(/\s+/);
+    return words.length > 7 && /\b(can|is|are|was|were|will|would|should|wipes?|built|borrowed|clean)\b/i.test(signal);
+  });
+}
+
 function isHighQualityOpportunity(opp: StoredOpportunity): boolean {
   if (looksLikeRedditFragment(opp.niche)) return false;
+  if (hasSentenceLikeSignal(opp)) return false;
   if (looksLikeNewsOrCuriosity(opp)) return false;
   const quality = opportunityQualityScore(opp);
   if (quality < 58) return false;
@@ -423,48 +432,48 @@ async function enrichCandidatesWithAI(
   }));
 
   const categoryDirective = preferredCategories.length > 0
-    ? `\n\n🎯 CONTRAINTE OBLIGATOIRE site_type :
-Les niches DOIVENT être de type : ${preferredCategories.map((c) => `"${c}"`).join(" OU ")}.
-NE PROPOSE AUCUNE niche en dehors de ces types. Si un signal ne se prête pas à ${preferredCategories.join("/")}, IGNORE-le.
-${preferredCategories.includes("e-commerce") ? "Pour e-commerce : pense produits physiques (DTC, dropshipping, marques de niche, accessoires, gadgets, abonnement physique, alimentation spécialisée, beauté, lifestyle, maison)." : ""}
-${preferredCategories.includes("saas") ? "Pour saas : pense outils logiciels, dashboards, agents IA, automation, API, productivité, integration, AI tools." : ""}
+    ? `\n\nðŸŽ¯ CONTRAINTE OBLIGATOIRE site_type :
+Les niches DOIVENT Ãªtre de type : ${preferredCategories.map((c) => `"${c}"`).join(" OU ")}.
+NE PROPOSE AUCUNE niche en dehors de ces types. Si un signal ne se prÃªte pas Ã  ${preferredCategories.join("/")}, IGNORE-le.
+${preferredCategories.includes("e-commerce") ? "Pour e-commerce : pense produits physiques (DTC, dropshipping, marques de niche, accessoires, gadgets, abonnement physique, alimentation spÃ©cialisÃ©e, beautÃ©, lifestyle, maison)." : ""}
+${preferredCategories.includes("saas") ? "Pour saas : pense outils logiciels, dashboards, agents IA, automation, API, productivitÃ©, integration, AI tools." : ""}
 ${preferredCategories.includes("course") ? "Pour course : pense formations en ligne, certifications, coaching, infoproduits, cohort-based courses." : ""}
-${preferredCategories.includes("marketplace") ? "Pour marketplace : pense plateformes 2-sided (offre/demande), aggregateurs, places de marché de niche." : ""}`
+${preferredCategories.includes("marketplace") ? "Pour marketplace : pense plateformes 2-sided (offre/demande), aggregateurs, places de marchÃ© de niche." : ""}`
     : "";
 
-  const prompt = `Tu es analyste SEO + business senior connecté au web via Perplexity/Sonar quand disponible. À partir de signaux multi-sources (Amazon Best Sellers Rising, Indie Hackers revenus vérifiés, AppSumo nouveautés, Kickstarter trending, Reddit, HN, Product Hunt, Google Trends), tu dois SYNTHÉTISER des **niches business réelles à fort potentiel commercial**, pas répéter les titres bruts.
+  const prompt = `Tu es analyste SEO + business senior connectÃ© au web via Perplexity/Sonar quand disponible. Ã€ partir de signaux multi-sources (Amazon Best Sellers Rising, Indie Hackers revenus vÃ©rifiÃ©s, AppSumo nouveautÃ©s, Kickstarter trending, Reddit, HN, Product Hunt, Google Trends), tu dois SYNTHÃ‰TISER des **niches business rÃ©elles Ã  fort potentiel commercial**, pas rÃ©pÃ©ter les titres bruts.
 
-🎯 PRIORITÉ AUX SIGNAUX COMMERCIAUX :
+ðŸŽ¯ PRIORITÃ‰ AUX SIGNAUX COMMERCIAUX :
 - Amazon Best Sellers = vraie demande consommateurs (e-commerce / produit physique)
-- Indie Hackers verified revenue = SaaS qui font vraiment €€€ → modèle à reproduire
-- AppSumo = SaaS validés par marché (ils paient pour être listés)
-- Kickstarter = produits financés (validation marché précoce)
-- Ces sources sont 3× plus importantes que Reddit/HN pour identifier de VRAIS business.${categoryDirective}
+- Indie Hackers verified revenue = SaaS qui font vraiment â‚¬â‚¬â‚¬ â†’ modÃ¨le Ã  reproduire
+- AppSumo = SaaS validÃ©s par marchÃ© (ils paient pour Ãªtre listÃ©s)
+- Kickstarter = produits financÃ©s (validation marchÃ© prÃ©coce)
+- Ces sources sont 3Ã— plus importantes que Reddit/HN pour identifier de VRAIS business.${categoryDirective}
 
-⚠️ RÈGLE CAPITALE :
+âš ï¸ RÃˆGLE CAPITALE :
 - Une niche n'est JAMAIS une question. JAMAIS un titre Reddit. JAMAIS une phrase.
-- Une niche = un MARCHÉ ou un SECTEUR (2-5 mots, type "Outils SaaS pour freelances", "Gadgets cuisine zéro déchet", "Formation IA pour PME").
-- Les volumes et positions ne sont PAS une vérité Google. Tu ne dois PAS inventer un "volume/mois".
-- Le champ monthly_volume doit reprendre/agréger prudemment les signaux numériques fournis dans INPUT; si le signal est faible ou incertain, baisse confidence_score au lieu de gonfler le volume.
-- Si tu utilises du contexte web Perplexity, il sert à valider: concurrents, angles, problèmes clients, tendance, maturité marché. Il ne remplace pas GSC/Keyword Planner/VPS tracker.
-- Si le signal brut est "Quels sont vos tips de vie adulte que personne ne t'apprend ?" → la niche réelle est "Conseils pratiques jeunes adultes" ou "Education financière 18-25 ans".
-- Si le signal brut est "Drop your SaaS and I'll tell you how to get 100 users" → la niche réelle est "Acquisition utilisateurs early-stage SaaS".
+- Une niche = un MARCHÃ‰ ou un SECTEUR (2-5 mots, type "Outils SaaS pour freelances", "Gadgets cuisine zÃ©ro dÃ©chet", "Formation IA pour PME").
+- Les volumes et positions ne sont PAS une vÃ©ritÃ© Google. Tu ne dois PAS inventer un "volume/mois".
+- Le champ monthly_volume doit reprendre/agrÃ©ger prudemment les signaux numÃ©riques fournis dans INPUT; si le signal est faible ou incertain, baisse confidence_score au lieu de gonfler le volume.
+- Si tu utilises du contexte web Perplexity, il sert Ã  valider: concurrents, angles, problÃ¨mes clients, tendance, maturitÃ© marchÃ©. Il ne remplace pas GSC/Keyword Planner/VPS tracker.
+- Si le signal brut est "Quels sont vos tips de vie adulte que personne ne t'apprend ?" â†’ la niche rÃ©elle est "Conseils pratiques jeunes adultes" ou "Education financiÃ¨re 18-25 ans".
+- Si le signal brut est "Drop your SaaS and I'll tell you how to get 100 users" â†’ la niche rÃ©elle est "Acquisition utilisateurs early-stage SaaS".
 
-INPUT (signaux bruts à analyser, PAS à recopier):
+INPUT (signaux bruts Ã  analyser, PAS Ã  recopier):
 ${JSON.stringify(shortlist, null, 2)}
 
-MÉTHODE :
-1. Lis tous les signaux. Identifie les **PATTERNS** (groupes de signaux qui pointent vers le même besoin/marché).
-2. Pour chaque pattern, crée 1 niche commerciale précise (2-5 mots).
+MÃ‰THODE :
+1. Lis tous les signaux. Identifie les **PATTERNS** (groupes de signaux qui pointent vers le mÃªme besoin/marchÃ©).
+2. Pour chaque pattern, crÃ©e 1 niche commerciale prÃ©cise (2-5 mots).
 3. Choisis des niches avec un VRAI potentiel business (pas anecdotique).
-4. Mots-clés = termes commerciaux que les gens cherchent dans Google (pas le titre Reddit brut).
+4. Mots-clÃ©s = termes commerciaux que les gens cherchent dans Google (pas le titre Reddit brut).
 
-FORMAT JSON STRICT, 5 à 8 niches max :
+FORMAT JSON STRICT, 5 Ã  8 niches max :
 {
   "opportunities": [
     {
       "niche": "Nom court 2-5 mots (ex: 'Outils acquisition early SaaS')",
-      "reason": "Pourquoi cette niche, basée sur 2-3 signaux concrets que tu cites + validation web si disponible",
+      "reason": "Pourquoi cette niche, basÃ©e sur 2-3 signaux concrets que tu cites + validation web si disponible",
       "site_type": "blog | magazine | e-commerce | saas | directory",
       "core_keywords": ["mot-cle commercial 1", "mot-cle commercial 2", "..."],
       "monthly_volume": 12000,
@@ -481,14 +490,14 @@ FORMAT JSON STRICT, 5 à 8 niches max :
       "revenue_timeline": {"m1": 0, "m3": 120, "m6": 900, "m12": 2200},
       "business_model": {
         "type": "Type business court",
-        "how_to_monetize": "Plan monétisation concret"
+        "how_to_monetize": "Plan monÃ©tisation concret"
       },
       "confidence_score": 78
     }
   ]
 }
 
-Tout le contenu texte doit être en FRANÇAIS si les signaux sont francophones, sinon en ANGLAIS.`;
+Tout le contenu texte doit Ãªtre en FRANÃ‡AIS si les signaux sont francophones, sinon en ANGLAIS.`;
 
   const today = new Date().toISOString().slice(0, 10);
   const shortlistHash = createHash("sha256").update(JSON.stringify(shortlist.slice(0, 5))).digest("hex").slice(0, 16);
@@ -998,6 +1007,7 @@ export async function POST(request: NextRequest) {
       .slice(0, 8);
 
     if (opportunities.length === 0) {
+      await sql`DELETE FROM market_opportunities WHERE status IN ('pending', 'rejected') OR status IS NULL`;
       return NextResponse.json({
         success: true,
         opportunities: [],
@@ -1064,7 +1074,7 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * GET /api/opportunities/scan — Returns cached opportunities from DB
+ * GET /api/opportunities/scan â€” Returns cached opportunities from DB
  */
 export async function GET() {
   const authState = await requireApiSession();
