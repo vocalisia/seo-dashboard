@@ -362,7 +362,17 @@ async function probeEndpoint(
     try { parsed = JSON.parse(text); } catch {}
     if (parsed && typeof parsed === "object") {
       const obj = parsed as Record<string, unknown>;
-      const arr = ["data", "queries", "rows", "items", "opportunities", "results", "sites", "history", "pages", "gaps", "links", "checks"]
+      if (name === "GET /api/realtime (GA4)" && typeof obj.totalActive === "number") {
+        return { name, status: "ok", detail: `${obj.totalActive} active visitor(s) (${ms}ms)`, metric: obj.totalActive };
+      }
+      if (name === "GET /api/seo-health" && obj.success === true && typeof obj.overall_score === "number") {
+        return { name, status: "ok", detail: `grade ${String(obj.grade ?? "n/a")} / ${obj.overall_score} (${ms}ms)`, metric: obj.overall_score };
+      }
+      if (name === "GET /api/LLM readiness cache" && (obj.own_site_scan || Array.isArray(obj.scans))) {
+        const scanCount = Array.isArray(obj.scans) ? obj.scans.length : 0;
+        return { name, status: "ok", detail: `${scanCount} competitor scan(s) + own-site scan (${ms}ms)`, metric: scanCount + 1 };
+      }
+      const arr = ["data", "queries", "rows", "items", "opportunities", "results", "sites", "history", "pages", "gaps", "links", "checks", "scans"]
         .map((k) => obj[k]).find((v): v is unknown[] => Array.isArray(v));
       const count = arr ? arr.length : Array.isArray(parsed) ? parsed.length : 0;
       return { name, status: count === 0 ? "warn" : "ok", detail: count === 0 ? `200 but 0 results (${ms}ms)` : `${count} results (${ms}ms)`, metric: count };

@@ -37,7 +37,7 @@ function generateRecommendations(breakdown: Breakdown): string[] {
       );
     }
 
-    if (key === "pagespeed_score" && value < 80) {
+    if (key === "pagespeed_score" && value >= 0 && value < 80) {
       recs.push(
         value < 40
           ? "Page speed is critically low — optimize images, enable caching, and reduce JS bundles."
