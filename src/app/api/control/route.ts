@@ -279,16 +279,16 @@ async function runOperationalCoverageChecks(): Promise<{ checks: HealthCheck[]; 
     if (!site.gsc_property) {
       issues.push({ module: "GSC", status: "fail", site_id: site.id, site_name: site.name, detail: "No Search Console property configured.", action: "Add the GSC property, then rerun sync." });
     }
-    if (site.tracked === 0 || site.positioned_30d === 0) {
+    if (site.gsc_property && (site.tracked === 0 || site.positioned_30d === 0)) {
       keywordFail += 1;
       issues.push({ module: "Keywords", status: "fail", site_id: site.id, site_name: site.name, detail: `${site.tracked} tracked keywords, ${site.positioned_30d} positioned queries over 30d.`, action: "Rerun GSC sync and import/reconcile keyword volumes." });
-    } else if (volumeCoverage < 0.8 || positionCoverage < 0.5) {
+    } else if (site.gsc_property && (volumeCoverage < 0.8 || positionCoverage < 0.5)) {
       keywordWarn += 1;
       issues.push({ module: "Keywords", status: "warn", site_id: site.id, site_name: site.name, detail: `Volume coverage ${Math.round(volumeCoverage * 100)}%, position coverage ${Math.round(positionCoverage * 100)}%.`, action: "Reconcile tracked_keywords with GSC and import missing volumes." });
     }
     if (site.competitor_domains < 3 || site.competitor_rows < 5) {
-      competitorFail += 1;
-      issues.push({ module: "Competitors", status: "fail", site_id: site.id, site_name: site.name, detail: `${site.competitor_domains} competitor domains / ${site.competitor_rows} rows.`, action: "Run competitor analysis and persist the cache." });
+      competitorWarn += 1;
+      issues.push({ module: "Competitors", status: "warn", site_id: site.id, site_name: site.name, detail: `${site.competitor_domains} competitor domains / ${site.competitor_rows} rows. No verified competitor source is configured, so the dashboard does not fabricate AI estimates as real data.`, action: "Configure a verified competitor data source, then refresh the cache." });
     } else if (ageDays(site.competitor_latest) > 35) {
       competitorWarn += 1;
       issues.push({ module: "Competitors", status: "warn", site_id: site.id, site_name: site.name, detail: `Competitor cache age ${ageDays(site.competitor_latest)}d.`, action: "Run one grouped live AI rescan." });
