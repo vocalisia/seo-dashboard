@@ -391,7 +391,11 @@ export default function DashboardPage() {
 
   async function fetchQuality() {
     try {
-      const res = await timedFetch("Qualite dashboard", "/api/dashboard-quality");
+      const res = await timedFetch(
+        "Qualite dashboard",
+        `/api/dashboard-quality?refresh=${Date.now()}`,
+        { cache: "no-store" }
+      );
       const data = await res.json() as { sites?: DashboardQualitySite[] };
       if (Array.isArray(data.sites)) setQualitySites(data.sites);
     } catch {
@@ -619,6 +623,7 @@ export default function DashboardPage() {
         setSyncMsg({ type: "ok", text: `Sync OK — ${total} lignes GSC importées` });
         setKeywords({}); setGains({});
         await fetchSites(undefined, undefined, true);
+        await fetchQuality();
       }
     } catch (err) {
       setSyncMsg({ type: "err", text: err instanceof Error ? err.message : "Erreur réseau" });

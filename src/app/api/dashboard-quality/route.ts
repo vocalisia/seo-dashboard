@@ -148,8 +148,9 @@ export async function GET() {
     { total: 0, statuses: {} as Record<string, number> }
   );
 
-  return NextResponse.json({
-    success: true,
+  return NextResponse.json(
+    {
+      success: true,
     generated_at: new Date().toISOString(),
     rules: {
       positions: "Positions from search_console_query_data or reconciled tracked_keywords current_position.",
@@ -159,5 +160,7 @@ export async function GET() {
     },
     summary,
     sites: rows,
-  });
+    },
+    { headers: { "Cache-Control": "private, no-store, max-age=0" } }
+  );
 }
