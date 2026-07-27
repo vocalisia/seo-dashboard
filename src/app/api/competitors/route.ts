@@ -269,7 +269,7 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
 
   return {
     competitors: parsed.competitors || [],
-    gaps: filteredGaps,
+    gaps: filteredGaps.map((gap) => ({ ...gap, source: "ai_estimate" as const })),
     ourKeywordsCount: ourKeywords.length,
   };
 }
@@ -317,57 +317,21 @@ function inferFallbackCompetitors(site: Site): { domain: string; description: st
 }
 
 async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
-  let rows = (await sql`
-    SELECT
-      query,
-      SUM(impressions)::float8 AS signal,
-      GREATEST(100, (ROUND((SUM(impressions)::numeric / 10)) * 10)::int) AS volume
+  const rows = (await sql`
+    SELECT query
     FROM search_console_query_data
     WHERE site_id = ${site.id}
       AND date >= NOW() - INTERVAL '90 days'
       AND query IS NOT NULL
     GROUP BY query
-    ORDER BY SUM(impressions) DESC
     LIMIT 20
-  `) as { query: string; signal: string; volume: number }[];
+  `) as { query: string }[];
 
-  if (rows.length === 0) {
-    rows = (await sql`
-      SELECT
-        keyword AS query,
-        COALESCE(current_impressions, 0)::float8 AS signal,
-        GREATEST(
-          100,
-          COALESCE(NULLIF(volume_market, 1), NULLIF(volume_ch, 1), NULLIF(volume_fr, 1), current_impressions, 100)
-        )::int AS volume
-      FROM tracked_keywords
-      WHERE site_id = ${site.id}
-        AND is_active = TRUE
-        AND keyword IS NOT NULL
-      ORDER BY COALESCE(NULLIF(volume_market, 1), NULLIF(volume_ch, 1), NULLIF(volume_fr, 1), current_impressions, 0) DESC
-      LIMIT 20
-    `) as { query: string; signal: string; volume: number }[];
-  }
-
-  const competitors = inferFallbackCompetitors(site);
-  const seeds = rows.map((row) => row.query).filter(Boolean);
-  const fallbackSeeds = seeds.length > 0 ? seeds : [site.name.toLowerCase()];
-  const gaps = fallbackSeeds.slice(0, 12).map((keyword, index) => {
-    const questionPrefix = isQuestionLike(keyword) ? "" : index % 3 === 0 ? "meilleur " : index % 3 === 1 ? "comparatif " : "comment choisir ";
-    return {
-      keyword: `${questionPrefix}${keyword}`.trim().slice(0, 500),
-      volume: Math.max(100, Number(rows[index]?.volume ?? 100) || 100),
-      competitor: competitors[index % competitors.length]?.domain ?? competitors[0].domain,
-      competitor_position: (index % 10) + 1,
-      difficulty: index < 4 ? "medium" : "low",
-      intent: isQuestionLike(keyword) ? "informational" : index % 2 === 0 ? "commercial" : "informational",
-      source: "fallback_gsc_signal" as const,
-    };
-  });
-
+  // GSC can show our own search demand, but cannot prove a competitor's rank or
+  // monthly volume. Keep useful competitor candidates without fabricating gaps.
   return {
-    competitors,
-    gaps,
+    competitors: inferFallbackCompetitors(site),
+    gaps: [],
     ourKeywordsCount: rows.length,
   };
 }
@@ -521,7 +485,7 @@ export async function POST(req: NextRequest) {
           const r = aiFallbackOnly
             ? await runFallbackResearchForSite(s, sql)
             : await runResearchForSite(s, sql);
-          if (aiFallbackOnly) await persistResearchForSite(s, sql, r);
+          if (!aiFallbackOnly) await persistResearchForSite(s, sql, r);
           perSite.push({ site: s.name, competitors: r.competitors.length, gaps: r.gaps.length });
         } catch (err) {
           const msg = formatAIError(err);
@@ -531,7 +495,6 @@ export async function POST(req: NextRequest) {
             perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length });
           } else {
             const fallback = await runFallbackResearchForSite(s, sql);
-            await persistResearchForSite(s, sql, fallback);
             perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length, error: `fallback: ${msg}` });
           }
           // Once the provider is clearly unavailable, finish remaining sites with dashboard-derived fallback.
@@ -580,6 +543,7 @@ export async function POST(req: NextRequest) {
 
     try {
       const result = await runResearchForSite(site, sql);
+      await persistResearchForSite(site, sql, result);
       return NextResponse.json({
         success: true,
         site: site.name,
@@ -607,7 +571,6 @@ export async function POST(req: NextRequest) {
         });
       }
       const fallback = await runFallbackResearchForSite(site, sql);
-      await persistResearchForSite(site, sql, fallback);
       return NextResponse.json({
         success: true,
         site: site.name,
