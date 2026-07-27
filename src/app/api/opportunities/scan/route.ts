@@ -399,9 +399,18 @@ function hasSentenceLikeSignal(opp: StoredOpportunity): boolean {
   });
 }
 
+function hasEnoughDemandVariants(opp: StoredOpportunity): boolean {
+  const variants = new Set(
+    [...(opp.core_keywords ?? []), ...(opp.sample_queries ?? [])]
+      .map((signal) => signal.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim())
+      .filter(Boolean)
+  );
+  return variants.size >= 2;
+}
 function isHighQualityOpportunity(opp: StoredOpportunity): boolean {
   if (looksLikeRedditFragment(opp.niche)) return false;
   if (hasSentenceLikeSignal(opp)) return false;
+  if (!hasEnoughDemandVariants(opp)) return false;
   if (looksLikeNewsOrCuriosity(opp)) return false;
   const quality = opportunityQualityScore(opp);
   if (quality < 58) return false;
