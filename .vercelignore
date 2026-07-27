@@ -20,3 +20,12 @@ e2e
 .env.*.local
 README.md
 docs/
+*.png
+data/
+exports/
+scripts/gsc_*.json
+scripts/gsc_*.md
+scripts/portfolio_*.json
+scripts/portfolio_*.py
+scripts/keyword-planner-*.mjs
+scripts/proxi-*.mjs
