@@ -110,7 +110,7 @@ export async function GET(req: NextRequest) {
       FROM search_console_data
       WHERE site_id = ${siteIdNum}
         AND date >= NOW() - INTERVAL '30 days'
-        AND country IS NULL
+        AND COALESCE(country, '') = ''
         AND query IS NOT NULL
         AND query != ''
       GROUP BY query
