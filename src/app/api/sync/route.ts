@@ -1,4 +1,4 @@
-import { getSQL } from "@/lib/db";
+import { ensureSchemaOnce, getSQL } from "@/lib/db";
 import { getAnalyticsClient, getSearchConsoleClient } from "@/lib/google-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { mapWithConcurrency, parseSyncDays } from "@/lib/data-sync";
@@ -228,6 +228,7 @@ async function syncSearchConsole(siteId: number, siteUrl: string, days = 45) {
 export async function POST(request: NextRequest) {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
+  await ensureSchemaOnce();
 
   try {
     // Google data sync always uses the server-side service account. OAuth tokens

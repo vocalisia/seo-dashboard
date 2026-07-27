@@ -227,7 +227,12 @@ export async function ensureSchema(): Promise<void> {
       ON search_console_query_data (site_id, date)
   `;
 
+  // Preserve full GSC query/page dimensions; Google can return values beyond legacy VARCHAR limits.
+  await sql`ALTER TABLE search_console_data ALTER COLUMN query TYPE TEXT`;
+  await sql`ALTER TABLE search_console_data ALTER COLUMN page TYPE TEXT`;
+
   // pagespeed_scores — strategy column so daily cron stores per-strategy rows + indices
+
   await sql`ALTER TABLE pagespeed_scores ADD COLUMN IF NOT EXISTS strategy VARCHAR(10)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_pagespeed_site_checked ON pagespeed_scores(site_id, checked_at DESC)`;
 
