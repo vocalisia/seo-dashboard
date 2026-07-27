@@ -79,6 +79,20 @@ export async function POST(request: Request) {
     );
   }
 
+  const url = new URL(request.url);
+  const siteIdRaw = url.searchParams.get("siteId");
+  const limitRaw = url.searchParams.get("limit");
+  const siteId = siteIdRaw ? Number(siteIdRaw) : null;
+  const limitPerSite = limitRaw ? Number(limitRaw) : 30;
+
+  if (siteIdRaw && (!Number.isInteger(siteId) || (siteId ?? 0) <= 0)) {
+    return NextResponse.json({ success: false, error: "siteId must be a positive integer" }, { status: 400 });
+  }
+  if (!Number.isInteger(limitPerSite) || limitPerSite < 1 || limitPerSite > 30) {
+    return NextResponse.json({ success: false, error: "limit must be an integer between 1 and 30" }, { status: 400 });
+  }
+
+  const requestedSiteId = siteId ?? null;
   const sql = getSQL();
   await ensureRankTable(sql);
 
@@ -87,6 +101,7 @@ export async function POST(request: Request) {
       (SELECT market FROM tracked_keywords WHERE site_id = sites.id AND market IS NOT NULL LIMIT 1) AS market
     FROM sites
     WHERE is_active = true
+      AND (${requestedSiteId} IS NULL OR id = ${requestedSiteId})
     ORDER BY id ASC
   `) as SiteRow[];
 
@@ -109,7 +124,7 @@ export async function POST(request: Request) {
       SELECT id, keyword FROM tracked_keywords
       WHERE site_id = ${site.id} AND is_active = true
       ORDER BY COALESCE(volume_market, volume_fr, 0) DESC, id ASC
-      LIMIT 30
+      LIMIT ${limitPerSite}
     `) as KwRow[];
 
     let ranked = 0;
@@ -160,6 +175,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     success: true,
     engine: "brave",
+    limit_per_site: limitPerSite,
     sites: sites.length,
     total_checks: totalChecks,
     total_errors: totalErrors,
