@@ -208,7 +208,8 @@ async function runOperationalCoverageChecks(): Promise<{ checks: HealthCheck[]; 
         COUNT(*) FILTER (WHERE is_active = TRUE) AS tracked,
         COUNT(*) FILTER (
           WHERE is_active = TRUE
-            AND COALESCE(NULLIF(volume_market, 1), NULLIF(volume_ch, 1), NULLIF(volume_fr, 1), current_impressions, 0) > 0
+            AND COALESCE(volume_market, volume_ch, volume_fr, 0) > 1
+            AND volume_source LIKE 'google_kp_real_%'
         ) AS volume_ok,
         COUNT(*) FILTER (WHERE is_active = TRUE AND COALESCE(current_position, 0) > 0) AS pos_ok,
         COUNT(*) FILTER (WHERE is_active = TRUE AND (current_impressions > 0 OR current_clicks > 0)) AS signal_ok
@@ -268,7 +269,8 @@ async function runOperationalCoverageChecks(): Promise<{ checks: HealthCheck[]; 
     ORDER BY s.name ASC
   `) as OperationalSiteRow[];
 
-  let keywordWarn = 0, keywordFail = 0, competitorWarn = 0, competitorFail = 0;
+  let keywordWarn = 0, keywordFail = 0, competitorWarn = 0;
+  const competitorFail = 0;
   let llmWarn = 0, llmFail = 0, linkWarn = 0, linkFail = 0;
   let pagespeedWarn = 0, pagespeedFail = 0, rankWarn = 0, rankFail = 0;
 
@@ -284,7 +286,7 @@ async function runOperationalCoverageChecks(): Promise<{ checks: HealthCheck[]; 
       issues.push({ module: "Keywords", status: "fail", site_id: site.id, site_name: site.name, detail: `${site.tracked} tracked keywords, ${site.positioned_30d} positioned queries over 30d.`, action: "Rerun GSC sync and import/reconcile keyword volumes." });
     } else if (site.gsc_property && (volumeCoverage < 0.8 || positionCoverage < 0.5)) {
       keywordWarn += 1;
-      issues.push({ module: "Keywords", status: "warn", site_id: site.id, site_name: site.name, detail: `Volume coverage ${Math.round(volumeCoverage * 100)}%, position coverage ${Math.round(positionCoverage * 100)}%.`, action: "Reconcile tracked_keywords with GSC and import missing volumes." });
+      issues.push({ module: "Keywords", status: "warn", site_id: site.id, site_name: site.name, detail: `Keyword Planner coverage ${Math.round(volumeCoverage * 100)}%, GSC position coverage ${Math.round(positionCoverage * 100)}%.`, action: "Reconcile tracked_keywords with GSC and import missing volumes." });
     }
     if (site.competitor_domains < 3 || site.competitor_rows < 5) {
       competitorWarn += 1;

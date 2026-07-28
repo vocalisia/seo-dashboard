@@ -1,6 +1,7 @@
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -21,11 +22,17 @@ interface CannibRow {
 }
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   const siteId = request.nextUrl.searchParams.get("siteId");
-  const days = parseInt(request.nextUrl.searchParams.get("days") || "28");
-  const limit = parseInt(request.nextUrl.searchParams.get("limit") || "50");
+  const days = Number(request.nextUrl.searchParams.get("days") || "28");
+  const limit = Number(request.nextUrl.searchParams.get("limit") || "50");
 
   if (!siteId) return NextResponse.json({ error: "siteId required" }, { status: 400 });
+  const parsedSiteId = siteId === "all" ? null : Number(siteId);
+  if ((parsedSiteId !== null && (!Number.isInteger(parsedSiteId) || parsedSiteId <= 0)) || !Number.isInteger(days) || days < 1 || days > 365 || !Number.isInteger(limit) || limit < 1 || limit > 500) {
+    return NextResponse.json({ error: "invalid query parameters" }, { status: 400 });
+  }
   if (isLocalDevDemoMode()) return NextResponse.json([]);
 
   try {
@@ -50,13 +57,13 @@ export async function GET(request: NextRequest) {
       : await sql`
           SELECT
             query, page,
-            ${parseInt(siteId)}::int AS site_id,
+            ${parsedSiteId}::int AS site_id,
             NULL::text AS site_name,
             SUM(impressions) AS impressions,
             SUM(clicks) AS clicks,
             SUM(position * impressions)::float / NULLIF(SUM(impressions), 0) AS position
           FROM search_console_data
-          WHERE site_id = ${parseInt(siteId)}
+          WHERE site_id = ${parsedSiteId}
             AND date >= NOW() - INTERVAL '1 day' * ${days}
             AND query IS NOT NULL
             AND page IS NOT NULL
@@ -131,8 +138,7 @@ export async function GET(request: NextRequest) {
 
     cannibs.sort((a, b) => b.estimated_loss - a.estimated_loss);
     return NextResponse.json(cannibs.slice(0, limit));
-  } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

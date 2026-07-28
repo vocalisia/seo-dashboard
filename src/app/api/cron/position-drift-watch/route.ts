@@ -23,6 +23,7 @@ import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { logError } from "@/lib/logger";
+import { escapeHtml } from "@/lib/safe-output";
 
 const DRIFT_THRESHOLD = 5; // positions worse to fire alert
 const COMPARE_WINDOW_DAYS = 7;
@@ -118,13 +119,13 @@ function buildEmailHtml(alerts: DriftAlert[]): string {
   for (const [, list] of bySite) {
     const first = list[0];
     list.sort((a, b) => b.drift - a.drift);
-    html += `<h3>${first.site_name} <small>(${first.site_url})</small></h3>`;
+    html += `<h3>${escapeHtml(first.site_name)} <small>(${escapeHtml(first.site_url)})</small></h3>`;
     html += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:13px">`;
     html += `<tr><th>Keyword</th><th>Market</th><th>Was</th><th>Now</th><th>Drift</th><th>Baseline</th></tr>`;
     for (const a of list) {
       html += `<tr>`;
-      html += `<td>${a.keyword}</td>`;
-      html += `<td>${a.market ?? "—"}</td>`;
+      html += `<td>${escapeHtml(a.keyword)}</td>`;
+      html += `<td>${escapeHtml(a.market ?? "-")}</td>`;
       html += `<td>${a.position_then.toFixed(1)}</td>`;
       html += `<td><strong>${a.position_now.toFixed(1)}</strong></td>`;
       html += `<td style="color:#b91c1c">+${a.drift.toFixed(1)}</td>`;

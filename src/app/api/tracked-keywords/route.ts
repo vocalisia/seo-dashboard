@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 import { ensureSchemaOnce, getSQL } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -24,14 +25,24 @@ interface KeywordRow {
 }
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   await ensureSchemaOnce();
   const sql = getSQL();
   const { searchParams } = new URL(req.url);
   const siteId = searchParams.get("siteId");
-  const minVol = parseInt(searchParams.get("minVol") || "0", 10);
-  const posMin = parseFloat(searchParams.get("posMin") || "1");
-  const posMax = parseFloat(searchParams.get("posMax") || "100");
+  const minVol = Number(searchParams.get("minVol") || "0");
+  const posMin = Number(searchParams.get("posMin") || "1");
+  const posMax = Number(searchParams.get("posMax") || "100");
   const onlyQuickWins = searchParams.get("quickWins") === "1";
+  const parsedSiteId = siteId && siteId !== "all" ? Number(siteId) : null;
+
+  if (parsedSiteId !== null && (!Number.isInteger(parsedSiteId) || parsedSiteId <= 0)) {
+    return NextResponse.json({ error: "siteId must be a positive integer" }, { status: 400 });
+  }
+  if (!Number.isFinite(minVol) || minVol < 0 || !Number.isFinite(posMin) || !Number.isFinite(posMax) || posMin < 1 || posMax > 200 || posMin > posMax) {
+    return NextResponse.json({ error: "invalid keyword filters" }, { status: 400 });
+  }
 
   const minPos = onlyQuickWins ? 4 : posMin;
   const maxPos = onlyQuickWins ? 15 : posMax;
@@ -41,7 +52,7 @@ export async function GET(req: NextRequest) {
   if (siteId && siteId !== "all") {
     rows = (await sql`
       WITH live AS (
-        SELECT site_id, LOWER(query) AS keyword_key,
+        SELECT site_id, LOWER(BTRIM(query)) AS keyword_key,
           SUM(clicks) AS current_clicks,
           SUM(impressions) AS current_impressions,
           SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS current_position
@@ -56,9 +67,9 @@ export async function GET(req: NextRequest) {
              k.site_id, s.name AS site_name, s.url AS site_url
       FROM tracked_keywords k
       JOIN sites s ON s.id = k.site_id
-      LEFT JOIN live ON live.site_id = k.site_id AND live.keyword_key = LOWER(k.keyword)
+      LEFT JOIN live ON live.site_id = k.site_id AND live.keyword_key = LOWER(BTRIM(k.keyword))
       WHERE k.is_active = TRUE
-        AND k.site_id = ${parseInt(siteId, 10)}
+        AND k.site_id = ${parsedSiteId}
         AND COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) >= ${minVolFilter}
         AND COALESCE(live.current_position, 100) BETWEEN ${minPos} AND ${maxPos}
       ORDER BY COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) DESC, live.current_position ASC NULLS LAST
@@ -67,7 +78,7 @@ export async function GET(req: NextRequest) {
   } else {
     rows = (await sql`
       WITH live AS (
-        SELECT site_id, LOWER(query) AS keyword_key,
+        SELECT site_id, LOWER(BTRIM(query)) AS keyword_key,
           SUM(clicks) AS current_clicks,
           SUM(impressions) AS current_impressions,
           SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS current_position
@@ -82,7 +93,7 @@ export async function GET(req: NextRequest) {
              k.site_id, s.name AS site_name, s.url AS site_url
       FROM tracked_keywords k
       JOIN sites s ON s.id = k.site_id
-      LEFT JOIN live ON live.site_id = k.site_id AND live.keyword_key = LOWER(k.keyword)
+      LEFT JOIN live ON live.site_id = k.site_id AND live.keyword_key = LOWER(BTRIM(k.keyword))
       WHERE k.is_active = TRUE
         AND COALESCE(k.volume_market, k.volume_ch, k.volume_fr, 0) >= ${minVolFilter}
         AND COALESCE(live.current_position, 100) BETWEEN ${minPos} AND ${maxPos}

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { GSC_LAG_DAYS } from "@/lib/gsc-window";
@@ -7,19 +8,24 @@ import { siteCountryCode } from "@/lib/site-country";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   try {
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get("site_id");
-    const days = parseInt(searchParams.get("days") ?? "30", 10);
+    const days = Number(searchParams.get("days") ?? "30");
 
     if (!siteId) return NextResponse.json({ error: "site_id required" }, { status: 400 });
+    const siteIdNum = Number(siteId);
+    if (!Number.isInteger(siteIdNum) || siteIdNum <= 0 || !Number.isInteger(days) || days < 1 || days > 365) {
+      return NextResponse.json({ error: "invalid query parameters" }, { status: 400 });
+    }
 
     if (isLocalDevDemoMode()) {
       return NextResponse.json({ overview: [], topQueriesByDevice: {} });
     }
 
     const sql = getSQL();
-    const siteIdNum = parseInt(siteId, 10);
 
     const siteRow = (await sql`SELECT url FROM sites WHERE id = ${siteIdNum}`) as Array<{ url: string }>;
     const cc = siteCountryCode(siteRow[0]?.url ?? "");

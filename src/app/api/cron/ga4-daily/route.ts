@@ -11,16 +11,12 @@ import { getSQL } from "@/lib/db";
 import { getAnalyticsClient } from "@/lib/google-auth";
 import { ensureSyncStatusTable, saveSyncStatus } from "@/lib/sync-status";
 import { mapWithConcurrency } from "@/lib/data-sync";
+import { aggregateGa4Daily } from "@/lib/ga4-daily-aggregation";
 
 interface SiteRow {
   id: number;
   name: string;
   ga_property_id: string;
-}
-
-function parseNum(v: string | null | undefined): number {
-  const n = Number(v ?? 0);
-  return Number.isFinite(n) ? n : 0;
 }
 
 function dateRange(days: number) {
@@ -51,64 +47,42 @@ async function syncSite(
   const { startDate, endDate } = dateRange(days);
 
   try {
-    const res = await analytics.properties.runReport({
-      property: `properties/${propId}`,
-      requestBody: {
-        dateRanges: [{ startDate, endDate }],
-        dimensions: [{ name: "date" }, { name: "sessionDefaultChannelGroup" }],
-        metrics: [
-          { name: "sessions" },
-          { name: "totalUsers" },
-          { name: "newUsers" },
-          { name: "screenPageViews" },
-          { name: "bounceRate" },
-          { name: "averageSessionDuration" },
-        ],
-        limit: "100000",
-      },
-    });
+    const [dailyResponse, channelResponse] = await Promise.all([
+      analytics.properties.runReport({
+        property: `properties/${propId}`,
+        requestBody: {
+          dateRanges: [{ startDate, endDate }],
+          dimensions: [{ name: "date" }],
+          metrics: [
+            { name: "sessions" }, { name: "totalUsers" }, { name: "newUsers" },
+            { name: "screenPageViews" }, { name: "bounceRate" }, { name: "averageSessionDuration" },
+          ],
+          limit: "100000",
+        },
+      }),
+      analytics.properties.runReport({
+        property: `properties/${propId}`,
+        requestBody: {
+          dateRanges: [{ startDate, endDate }],
+          dimensions: [{ name: "date" }, { name: "sessionDefaultChannelGroup" }],
+          metrics: [{ name: "sessions" }],
+          limit: "100000",
+        },
+      }),
+    ]);
 
-    const rows = res.data.rows ?? [];
-
-    const byDate: Record<string, {
-      sessions: number; users: number; new_users: number; pageviews: number;
-      bounce: number; duration: number; count: number;
-      organic: number; direct: number; referral: number; social: number;
-    }> = {};
-
-    for (const row of rows) {
-      const dateRaw = row.dimensionValues?.[0]?.value ?? "";
-      const channel = (row.dimensionValues?.[1]?.value ?? "").toLowerCase();
-      const date = `${dateRaw.slice(0, 4)}-${dateRaw.slice(4, 6)}-${dateRaw.slice(6, 8)}`;
-      const sessions = parseNum(row.metricValues?.[0]?.value);
-
-      if (!byDate[date]) {
-        byDate[date] = { sessions: 0, users: 0, new_users: 0, pageviews: 0, bounce: 0, duration: 0, count: 0, organic: 0, direct: 0, referral: 0, social: 0 };
-      }
-      const d = byDate[date];
-      d.sessions += sessions;
-      d.users += parseNum(row.metricValues?.[1]?.value);
-      d.new_users += parseNum(row.metricValues?.[2]?.value);
-      d.pageviews += parseNum(row.metricValues?.[3]?.value);
-      d.bounce += parseNum(row.metricValues?.[4]?.value);
-      d.duration += parseNum(row.metricValues?.[5]?.value);
-      d.count++;
-      if (channel.includes("organic")) d.organic += sessions;
-      else if (channel.includes("direct")) d.direct += sessions;
-      else if (channel.includes("referral")) d.referral += sessions;
-      else if (channel.includes("social")) d.social += sessions;
-    }
+    const byDate = aggregateGa4Daily(dailyResponse.data.rows ?? [], channelResponse.data.rows ?? []);
 
     let inserted = 0;
-    for (const [date, d] of Object.entries(byDate)) {
+    for (const [date, d] of byDate) {
       await sql`
         INSERT INTO analytics_daily
           (site_id, date, sessions, users, new_users, pageviews, bounce_rate, avg_session_duration,
            organic_sessions, direct_sessions, referral_sessions, social_sessions)
         VALUES (
-          ${site.id}, ${date}, ${d.sessions}, ${d.users}, ${d.new_users}, ${d.pageviews},
-          ${d.count > 0 ? d.bounce / d.count : 0},
-          ${d.count > 0 ? d.duration / d.count : 0},
+          ${site.id}, ${date}, ${d.sessions}, ${d.users}, ${d.newUsers}, ${d.pageviews},
+          ${d.bounceRate},
+          ${d.averageSessionDuration},
           ${d.organic}, ${d.direct}, ${d.referral}, ${d.social}
         )
         ON CONFLICT (site_id, date) DO UPDATE SET

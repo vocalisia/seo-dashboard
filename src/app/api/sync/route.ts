@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { mapWithConcurrency, parseSyncDays } from "@/lib/data-sync";
 import { ensureSyncStatusTable, saveSyncStatus, type SyncSource } from "@/lib/sync-status";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { aggregateGa4Daily } from "@/lib/ga4-daily-aggregation";
 
 const GSC_PAGE_SIZE = 25000;
 
@@ -47,65 +48,39 @@ async function syncAnalytics(siteId: number, propertyId: string) {
   const endDate = isoDateDaysAgo(1);
   const startDate = isoDateDaysAgo(30);
 
-  const response = await analytics.properties.runReport({
-    property: `properties/${propertyId}`,
-    requestBody: {
-      dateRanges: [{ startDate, endDate }],
-      dimensions: [{ name: "date" }, { name: "sessionDefaultChannelGroup" }],
-      metrics: [
-        { name: "sessions" }, { name: "totalUsers" }, { name: "newUsers" },
-        { name: "screenPageViews" }, { name: "bounceRate" }, { name: "averageSessionDuration" },
-      ],
-    },
-  });
+  const [dailyResponse, channelResponse] = await Promise.all([
+    analytics.properties.runReport({
+      property: `properties/${propertyId}`,
+      requestBody: {
+        dateRanges: [{ startDate, endDate }],
+        dimensions: [{ name: "date" }],
+        metrics: [
+          { name: "sessions" }, { name: "totalUsers" }, { name: "newUsers" },
+          { name: "screenPageViews" }, { name: "bounceRate" }, { name: "averageSessionDuration" },
+        ],
+      },
+    }),
+    analytics.properties.runReport({
+      property: `properties/${propertyId}`,
+      requestBody: {
+        dateRanges: [{ startDate, endDate }],
+        dimensions: [{ name: "date" }, { name: "sessionDefaultChannelGroup" }],
+        metrics: [{ name: "sessions" }],
+      },
+    }),
+  ]);
 
-  if (!response.data.rows) return 0;
-
-  const dailyStats: Record<string, {
-    sessions: number; users: number; new_users: number; pageviews: number;
-    bounce_rate: number; avg_duration: number; organic: number;
-    direct: number; referral: number; social: number; count: number;
-  }> = {};
-
-  for (const row of response.data.rows) {
-    const dateRaw = row.dimensionValues?.[0]?.value || "";
-    const channel = row.dimensionValues?.[1]?.value || "";
-    const formattedDate = `${dateRaw.slice(0, 4)}-${dateRaw.slice(4, 6)}-${dateRaw.slice(6, 8)}`;
-    const sessions = parseInt(row.metricValues?.[0]?.value || "0");
-
-    if (!dailyStats[formattedDate]) {
-      dailyStats[formattedDate] = {
-        sessions: 0, users: 0, new_users: 0, pageviews: 0,
-        bounce_rate: 0, avg_duration: 0, organic: 0,
-        direct: 0, referral: 0, social: 0, count: 0,
-      };
-    }
-
-    const s = dailyStats[formattedDate];
-    s.sessions += sessions;
-    s.users += parseInt(row.metricValues?.[1]?.value || "0");
-    s.new_users += parseInt(row.metricValues?.[2]?.value || "0");
-    s.pageviews += parseInt(row.metricValues?.[3]?.value || "0");
-    s.bounce_rate += parseFloat(row.metricValues?.[4]?.value || "0");
-    s.avg_duration += parseFloat(row.metricValues?.[5]?.value || "0");
-    s.count++;
-
-    const ch = channel.toLowerCase();
-    if (ch.includes("organic")) s.organic += sessions;
-    else if (ch.includes("direct")) s.direct += sessions;
-    else if (ch.includes("referral")) s.referral += sessions;
-    else if (ch.includes("social")) s.social += sessions;
-  }
+  const dailyStats = aggregateGa4Daily(dailyResponse.data.rows ?? [], channelResponse.data.rows ?? []);
 
   let inserted = 0;
-  for (const [date, stats] of Object.entries(dailyStats)) {
+  for (const [date, stats] of dailyStats) {
     await sql`
       INSERT INTO analytics_daily
       (site_id, date, sessions, users, new_users, pageviews, bounce_rate,
        avg_session_duration, organic_sessions, direct_sessions, referral_sessions, social_sessions)
-      VALUES (${siteId}, ${date}, ${stats.sessions}, ${stats.users}, ${stats.new_users},
-              ${stats.pageviews}, ${stats.count > 0 ? stats.bounce_rate / stats.count : 0},
-              ${stats.count > 0 ? stats.avg_duration / stats.count : 0},
+      VALUES (${siteId}, ${date}, ${stats.sessions}, ${stats.users}, ${stats.newUsers},
+              ${stats.pageviews}, ${stats.bounceRate},
+              ${stats.averageSessionDuration},
               ${stats.organic}, ${stats.direct}, ${stats.referral}, ${stats.social})
       ON CONFLICT (site_id, date) DO UPDATE SET
         sessions = EXCLUDED.sessions, users = EXCLUDED.users,
@@ -190,14 +165,14 @@ async function syncSearchConsole(siteId: number, siteUrl: string, days = 45) {
     console.error(`Country sync failed for site ${siteId}:`, err instanceof Error ? err.message : err);
   }
 
-  // Query 3 (Bug B fix): QUERY-LEVEL — no page split. Returns the position Google
-  // actually displays in the GSC UI (query+country aggregate). Stored in a separate
-  // table so page-level analyses still work but the keyword position is the real one.
+  // Query 3 (Bug B fix): query-level, no page split.
+  let queryLevelSynced = false;
   try {
     const queryRows = await fetchAllSearchAnalyticsRows(searchConsole, siteUrl, {
-        startDate, endDate,
-        dimensions: ["query", "country", "date"],
-        dataState: "final",
+      startDate,
+      endDate,
+      dimensions: ["query", "country", "date"],
+      dataState: "final",
     });
     for (const row of queryRows) {
       if ((row.position || 0) > 200) continue;
@@ -210,16 +185,50 @@ async function syncSearchConsole(siteId: number, siteUrl: string, days = 45) {
                 ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0})
         ON CONFLICT (site_id, date, query, country, device)
         DO UPDATE SET
-          clicks      = EXCLUDED.clicks,
+          clicks = EXCLUDED.clicks,
           impressions = EXCLUDED.impressions,
-          ctr         = EXCLUDED.ctr,
-          position    = EXCLUDED.position,
-          synced_at   = NOW()
+          ctr = EXCLUDED.ctr,
+          position = EXCLUDED.position,
+          synced_at = NOW()
       `;
       totalInserted++;
     }
+    queryLevelSynced = true;
   } catch (err) {
     console.error(`Query-level sync failed for site ${siteId}:`, err instanceof Error ? err.message : err);
+  }
+
+  if (queryLevelSynced) {
+    // Keep legacy fallbacks aligned with the same query-level GSC metric.
+    await sql`
+      WITH anchor AS (
+        SELECT MAX(date) AS latest_date
+        FROM search_console_query_data
+        WHERE site_id = ${siteId} AND position BETWEEN 1 AND 200
+      ),
+      live AS (
+        SELECT LOWER(BTRIM(q.query)) AS keyword_key,
+          SUM(q.clicks)::int AS current_clicks,
+          SUM(q.impressions)::int AS current_impressions,
+          SUM(q.impressions * q.position)::float / NULLIF(SUM(q.impressions), 0) AS current_position
+        FROM search_console_query_data q
+        CROSS JOIN anchor a
+        WHERE q.site_id = ${siteId}
+          AND q.date >= (a.latest_date - INTERVAL '29 days')::date
+          AND q.date <= a.latest_date
+          AND q.position BETWEEN 1 AND 200
+        GROUP BY LOWER(BTRIM(q.query))
+      )
+      UPDATE tracked_keywords tk
+      SET current_position = live.current_position,
+          current_impressions = live.current_impressions,
+          current_clicks = live.current_clicks,
+          updated_at = NOW()
+      FROM live
+      WHERE tk.site_id = ${siteId}
+        AND tk.is_active = TRUE
+        AND LOWER(BTRIM(tk.keyword)) = live.keyword_key
+    `;
   }
 
   return totalInserted;

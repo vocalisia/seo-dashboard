@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getGoogleAuth } from "@/lib/google-auth";
 import { requireApiSession } from "@/lib/api-auth";
 
 interface IndexingRequestBody {
@@ -38,49 +37,14 @@ export async function POST(req: NextRequest): Promise<NextResponse<IndexingRespo
     return NextResponse.json({ success: false, error: "url (string) required" }, { status: 400 });
   }
 
-  try {
-    const auth = getGoogleAuth();
-    const client = await (auth as { getClient: () => Promise<{ getAccessToken: () => Promise<{ token?: string | null }> }> }).getClient();
-    const tokenResponse = await client.getAccessToken();
-    const accessToken = tokenResponse.token;
-
-    if (!accessToken) {
-      return NextResponse.json({ success: false, error: "Failed to obtain access token" }, { status: 500 });
-    }
-
-    const response = await fetch("https://indexing.googleapis.com/v3/urlNotifications:publish", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        url,
-        type: "URL_UPDATED",
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[indexing] Google API error ${response.status}:`, errorText);
-      return NextResponse.json(
-        { success: false, error: `Google Indexing API error: ${response.status} - ${errorText}` },
-        { status: response.status }
-      );
-    }
-
-    const notification = await response.json();
-    console.log(`[indexing] Successfully requested indexing for: ${url}`);
-
-    return NextResponse.json({
-      success: true,
+  // Google Indexing API is restricted to JobPosting and livestream VideoObject.
+  // Regular SEO articles must be discovered through the sitemap and normal crawl.
+  return NextResponse.json(
+    {
+      success: false,
       url,
-      notification,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("[indexing] Error:", err);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
-  }
+      error: "Google Indexing API is disabled for ordinary content. Submit or refresh the sitemap instead.",
+    },
+    { status: 422 },
+  );
 }

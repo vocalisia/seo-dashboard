@@ -819,41 +819,10 @@ REMINDER: integrate 4-6 internal links spread throughout the article with anchor
       publishedUrl = buildPublishedArticleUrl(site.url, keyword, language, repoConfig, today);
     }
 
-    // 8. Request Google indexing for the new article
-    let indexingRequested = false;
+    // Google Indexing API is not used for ordinary articles; sitemap discovery is compliant.
+    const indexingRequested = false;
     if (publishedUrl && !dry_run) {
-      try {
-        logAutopilot("indexing_request_start", { liveUrl: publishedUrl });
-
-        const auth = getGoogleAuth();
-        const client = await (auth as { getClient: () => Promise<{ getAccessToken: () => Promise<{ token?: string | null }> }> }).getClient();
-        const tokenResponse = await client.getAccessToken();
-        const accessToken = tokenResponse.token;
-
-        if (accessToken) {
-          const idxRes = await fetch("https://indexing.googleapis.com/v3/urlNotifications:publish", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${accessToken}`,
-            },
-            body: JSON.stringify({ url: publishedUrl, type: "URL_UPDATED" }),
-            signal: AbortSignal.timeout(15_000),
-          });
-
-          if (idxRes.ok) {
-            indexingRequested = true;
-            logAutopilot("indexing_request_ok", { liveUrl: publishedUrl });
-          } else {
-            const errText = await idxRes.text();
-            console.error(`[autopilot] indexing API error ${idxRes.status}:`, errText);
-          }
-        } else {
-          console.error("[autopilot] could not obtain access token for indexing");
-        }
-      } catch (err) {
-        console.error("[autopilot] indexing request failed (non-blocking):", err);
-      }
+      logAutopilot("indexing_request_skipped", { liveUrl: publishedUrl, reason: "ordinary_content" });
     }
 
     // 8b. Ping Google sitemap endpoint (timeout guards against external hang)

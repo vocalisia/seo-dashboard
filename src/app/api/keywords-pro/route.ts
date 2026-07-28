@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 import { ensureSchemaOnce, getSQL } from "@/lib/db";
 
 function classifyIntent(keyword: string): string {
@@ -15,12 +16,22 @@ function classifyIntent(keyword: string): string {
 }
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   const sp = req.nextUrl.searchParams;
   const siteId = sp.get("siteId");
-  const minClicks = parseInt(sp.get("minClicks") ?? "1", 10);
-  const minWords = parseInt(sp.get("minWords") ?? "1", 10);
-  const posMin = parseFloat(sp.get("posMin") ?? "1");
-  const posMax = parseFloat(sp.get("posMax") ?? "100");
+  const minClicks = Number(sp.get("minClicks") ?? "1");
+  const minWords = Number(sp.get("minWords") ?? "1");
+  const posMin = Number(sp.get("posMin") ?? "1");
+  const posMax = Number(sp.get("posMax") ?? "100");
+
+  const parsedSiteId = siteId && siteId !== "all" ? Number(siteId) : null;
+  if (parsedSiteId !== null && (!Number.isInteger(parsedSiteId) || parsedSiteId <= 0)) {
+    return NextResponse.json({ success: false, error: "siteId must be a positive integer" }, { status: 400 });
+  }
+  if (!Number.isInteger(minClicks) || minClicks < 0 || !Number.isInteger(minWords) || minWords < 1 || !Number.isFinite(posMin) || !Number.isFinite(posMax) || posMin < 1 || posMax > 200 || posMin > posMax) {
+    return NextResponse.json({ success: false, error: "invalid keyword filters" }, { status: 400 });
+  }
 
   if (!siteId) {
     return NextResponse.json(
@@ -77,7 +88,7 @@ export async function GET(req: NextRequest) {
         ON tk.site_id = scq.site_id
        AND LOWER(tk.keyword) = LOWER(scq.query)
        AND tk.is_active = TRUE
-      WHERE scq.site_id = ${parseInt(siteId, 10)}
+      WHERE scq.site_id = ${parsedSiteId}
         AND scq.date >= NOW() - INTERVAL '30 days'
         AND scq.query IS NOT NULL
       GROUP BY scq.query
@@ -100,11 +111,10 @@ export async function GET(req: NextRequest) {
     });
 
     return NextResponse.json({ success: true, keywords: enriched });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+  } catch {
     return NextResponse.json(
-      { success: false, error: message },
-      { status: 500 }
+      { success: false, error: "Unable to read keywords" },
+      { status: 500 },
     );
   }
 }

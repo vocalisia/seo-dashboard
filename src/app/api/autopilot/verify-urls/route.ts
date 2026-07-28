@@ -8,6 +8,7 @@ import { requireApiSession } from "@/lib/api-auth";
 import { getGoogleAuth } from "@/lib/google-auth";
 import { logAutopilot } from "@/lib/autopilot-log";
 import { isPublishBlockedByDomain } from "@/lib/autopilot-config";
+import { escapeHtml, safeHttpHref } from "@/lib/safe-output";
 
 interface PublishedRun {
   id: number;
@@ -234,7 +235,7 @@ async function runVerification() {
 <h2>Auto-cleanup 404 articles</h2>
 <p>${cleaned.length} article(s) en 404 détecté(s) et nettoyé(s) automatiquement.</p>
 <ul>
-${cleaned.map((c) => `<li><a href="${c.url}">${c.url}</a> — Google: ${c.deindexed ? "✓" : "✗"} | GitHub: ${c.githubDeleted ? "✓" : "✗"}</li>`).join("")}
+${cleaned.map((c) => { const href = safeHttpHref(c.url); const label = href ? `<a href="${escapeHtml(href)}">${escapeHtml(c.url)}</a>` : escapeHtml(c.url); return `<li>${label} - Google: ${c.deindexed ? "OK" : "failed"} | GitHub: ${c.githubDeleted ? "OK" : "failed"}</li>`; }).join("")}
 </ul>
 <p style="color:#888;font-size:12px">Vérification automatique quotidienne — ${new Date().toLocaleString("fr-FR")}</p>
           `.trim(),

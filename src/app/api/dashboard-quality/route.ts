@@ -45,7 +45,7 @@ export async function GET() {
         COUNT(*) FILTER (
           WHERE is_active = TRUE
             AND COALESCE(volume_market, volume_ch, volume_fr, 0) > 1
-            AND volume_source IS NOT NULL
+            AND volume_source LIKE 'google_kp_real_%'
         ) AS kp_volumes_imported,
         COUNT(*) FILTER (
           WHERE is_active = TRUE
@@ -154,7 +154,7 @@ export async function GET() {
     generated_at: new Date().toISOString(),
     rules: {
       positions: "Positions from search_console_query_data or reconciled tracked_keywords current_position.",
-      volumes: "Volumes from imported Keyword Planner data when present, otherwise explicit GSC/dashboard-derived estimates with source labels.",
+      volumes: "Volumes only from verified Keyword Planner imports; GSC impressions remain a visibility signal, never a search-volume fallback.",
       no_fake_positions: true,
       no_silent_empty_modules: true,
     },
