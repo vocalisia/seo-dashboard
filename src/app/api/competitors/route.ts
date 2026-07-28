@@ -5,6 +5,7 @@ import { getSQL } from "@/lib/db";
 import { askAI, AIProviderError } from "@/lib/ai";
 import { requireApiSession } from "@/lib/api-auth";
 import { logError } from "@/lib/logger";
+import { hasSufficientCompetitorResearch, prepareCompetitorResearchRows } from "@/lib/competitor-research-guard";
 
 interface Site {
   id: number;
@@ -231,43 +232,6 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
   // Also filter competitors list (UI shows them)
   parsed.competitors = (parsed.competitors || []).filter((c) => !isPortfolioDomain(c.domain));
 
-  // Persist to DB (best effort)
-  try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS competitor_research (
-        id SERIAL PRIMARY KEY,
-        site_id INTEGER REFERENCES sites(id),
-        competitor_domain VARCHAR(500),
-        competitor_description TEXT,
-        keyword VARCHAR(500),
-        estimated_volume INTEGER,
-        competitor_position DECIMAL(6,2),
-        difficulty VARCHAR(20),
-        intent VARCHAR(30),
-        researched_at TIMESTAMP DEFAULT NOW()
-      )
-    `;
-    await sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`;
-
-    // Lookup map: competitor_domain -> description (from parsed.competitors)
-    const descMap = new Map<string, string>();
-    for (const c of parsed.competitors || []) {
-      if (c.domain) descMap.set(c.domain.toLowerCase(), c.description || "");
-    }
-
-    for (const gap of filteredGaps) {
-      const desc = descMap.get((gap.competitor || "").toLowerCase()) || null;
-      await sql`
-        INSERT INTO competitor_research
-        (site_id, competitor_domain, competitor_description, keyword, estimated_volume, competitor_position, difficulty, intent)
-        VALUES (${site.id}, ${gap.competitor}, ${desc}, ${gap.keyword}, ${gap.volume},
-                ${gap.competitor_position}, ${gap.difficulty}, ${gap.intent})
-      `;
-    }
-  } catch (err) {
-    logError("competitors.storeResearch", err, { siteId: site.id });
-  }
-
   return {
     competitors: parsed.competitors || [],
     gaps: filteredGaps.map((gap) => ({ ...gap, source: "ai_estimate" as const })),
@@ -407,7 +371,13 @@ async function loadCachedResearch(sql: SQLClient, siteId: number, maxAgeDays = 6
   };
 }
 
-async function persistResearchForSite(site: Site, sql: SQLClient, research: ResearchResult): Promise<void> {
+async function persistResearchForSite(site: Site, sql: SQLClient, research: ResearchResult): Promise<boolean> {
+  const rows = prepareCompetitorResearchRows(research.gaps ?? [], research.competitors ?? []);
+  if (!hasSufficientCompetitorResearch(rows)) {
+    console.warn(`Competitor research preserved for site ${site.id}: replacement was insufficient`);
+    return false;
+  }
+
   try {
     await sql`
       CREATE TABLE IF NOT EXISTS competitor_research (
@@ -423,29 +393,22 @@ async function persistResearchForSite(site: Site, sql: SQLClient, research: Rese
         researched_at TIMESTAMP DEFAULT NOW()
       )
     `;
-    await sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`;
 
-    const descMap = new Map<string, string>();
-    for (const competitor of research.competitors ?? []) {
-      if (competitor.domain) descMap.set(competitor.domain.toLowerCase(), competitor.description || "");
-    }
-
-    for (const gap of research.gaps ?? []) {
-      const domain = (gap.competitor || "").trim();
-      if (!domain || !gap.keyword) continue;
-      const desc = descMap.get(domain.toLowerCase()) || null;
-      await sql`
+    await sql.transaction([
+      sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`,
+      ...rows.map((row) => sql`
         INSERT INTO competitor_research
         (site_id, competitor_domain, competitor_description, keyword, estimated_volume, competitor_position, difficulty, intent)
-        VALUES (${site.id}, ${domain}, ${desc}, ${gap.keyword}, ${Number(gap.volume) || 0},
-                ${Number(gap.competitor_position) || 0}, ${gap.difficulty || "unknown"}, ${gap.intent || "informational"})
-      `;
-    }
+        VALUES (${site.id}, ${row.domain}, ${row.description}, ${row.keyword}, ${row.volume},
+                ${row.position}, ${row.difficulty}, ${row.intent})
+      `),
+    ]);
+    return true;
   } catch (err) {
     logError("competitors.persistResearchForSite", err, { siteId: site.id });
+    return false;
   }
 }
-
 export async function POST(req: NextRequest) {
   const authState = await requireApiSession();
   if (authState.unauthorized) return authState.unauthorized;
@@ -489,9 +452,10 @@ export async function POST(req: NextRequest) {
           const r = aiFallbackOnly
             ? await runFallbackResearchForSite(s, sql)
             : await runResearchForSite(s, sql);
-          if (!aiFallbackOnly) await persistResearchForSite(s, sql, r);
-          perSite.push({ site: s.name, competitors: r.competitors.length, gaps: r.gaps.length });
-        } catch (err) {
+          const persisted = !aiFallbackOnly && await persistResearchForSite(s, sql, r);
+          const preserved = persisted ? null : await loadCachedResearch(sql, s.id, 3650);
+          const reported = preserved ?? r;
+          perSite.push({ site: s.name, competitors: reported.competitors.length, gaps: reported.gaps.length });        } catch (err) {
           const msg = formatAIError(err);
           // Try fallback to recent cache only. Older cache must not look fresh.
           const cached = await loadCachedResearch(sql, s.id, 60);
@@ -547,18 +511,35 @@ export async function POST(req: NextRequest) {
 
     try {
       const result = await runResearchForSite(site, sql);
-      await persistResearchForSite(site, sql, result);
+      const persisted = await persistResearchForSite(site, sql, result);
+      if (!persisted) {
+        const preserved = await loadCachedResearch(sql, site.id, 3650);
+        if (preserved) {
+          return NextResponse.json({
+            success: true,
+            site: site.name,
+            cached: true,
+            stale: true,
+            warning: "The new rescan was insufficient. The previous analysis was preserved.",
+            competitors: preserved.competitors,
+            gaps: preserved.gaps,
+            our_keywords_count: preserved.ourKeywordsCount,
+            total_gaps: preserved.gaps.length,
+            min_volume: 1000,
+          });
+        }
+      }
       return NextResponse.json({
         success: true,
         site: site.name,
         cached: false,
+        warning: persisted ? undefined : "The rescan is insufficient and was not saved.",
         competitors: result.competitors,
         gaps: result.gaps,
         our_keywords_count: result.ourKeywordsCount,
         total_gaps: result.gaps.length,
         min_volume: 1000,
-      });
-    } catch (err) {
+      });    } catch (err) {
       // Fallback to recent cache only. Older cache must not look fresh.
       const cached = await loadCachedResearch(sql, site.id, 60);
       if (cached) {
