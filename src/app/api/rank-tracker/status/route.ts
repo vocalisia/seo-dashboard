@@ -132,18 +132,18 @@ export async function GET(req: NextRequest) {
       const total = Number(row.total_keywords) || 0;
       const checked = Number(row.checked_in_cycle) || 0;
       const gscPositioned = Number(row.gsc_positioned) || 0;
-      const usesGscFallback = checked === 0 && gscPositioned > 0;
-      const effectiveChecked = usesGscFallback ? gscPositioned : checked;
-      const coverage = total > 0 ? effectiveChecked / total : 0;
-      const latestValue = usesGscFallback ? row.latest_gsc_position_at : row.latest_checked_at;
+      const coverage = total > 0 ? checked / total : 0;
+      const gscFallbackCoverage = total > 0 ? gscPositioned / total : 0;
+      const latestValue = row.latest_checked_at;
       const latest = latestValue ? new Date(latestValue) : null;
       const ageHours = latest ? Math.round((Date.now() - latest.getTime()) / 36_000) / 100 : null;
       return {
         ...row,
         engine,
-        source: usesGscFallback ? "gsc_tracked_keywords_fallback" : "rank_tracking",
-        checked_in_cycle: effectiveChecked,
+        source: checked > 0 ? "rank_tracking" : "no_rank_tracking_run",
         latest_checked_at: latestValue,
+        gsc_fallback_coverage_pct: Math.round(gscFallbackCoverage * 100),
+        latest_gsc_fallback_at: row.latest_gsc_position_at,
         cycle_days: cycleDays,
         coverage_pct: Math.round(coverage * 100),
         age_hours: ageHours,
@@ -152,15 +152,11 @@ export async function GET(req: NextRequest) {
     });
 
     const totalKeywords = sites.reduce((sum, site) => sum + site.total_keywords, 0);
-    const checkedInCycle = sites.reduce((sum, site) => sum + (site.source === "gsc_tracked_keywords_fallback" ? site.gsc_positioned : site.checked_in_cycle), 0);
+    const checkedInCycle = sites.reduce((sum, site) => sum + site.checked_in_cycle, 0);
+    const gscFallbackPositioned = sites.reduce((sum, site) => sum + site.gsc_positioned, 0);
     const coverage = totalKeywords > 0 ? checkedInCycle / totalKeywords : 0;
     const latestTimes = sites
-      .map((site) => {
-        const latestValue = site.source === "gsc_tracked_keywords_fallback"
-          ? site.latest_gsc_position_at
-          : site.latest_checked_at;
-        return latestValue ? new Date(latestValue).getTime() : 0;
-      })
+      .map((site) => (site.latest_checked_at ? new Date(site.latest_checked_at).getTime() : 0))
       .filter((time) => time > 0);
     const latestCheckedAt = latestTimes.length > 0 ? new Date(Math.max(...latestTimes)).toISOString() : null;
     const summaryAgeHours = latestCheckedAt ? Math.round((Date.now() - new Date(latestCheckedAt).getTime()) / 36_000) / 100 : null;
@@ -175,6 +171,8 @@ export async function GET(req: NextRequest) {
         total_keywords: totalKeywords,
         checked_in_cycle: checkedInCycle,
         coverage_pct: Math.round(coverage * 100),
+        gsc_fallback_positioned: gscFallbackPositioned,
+        gsc_fallback_coverage_pct: totalKeywords > 0 ? Math.round((gscFallbackPositioned / totalKeywords) * 100) : 0,
         latest_checked_at: latestCheckedAt,
         age_hours: summaryAgeHours,
         level: levelFromCoverage(coverage, summaryAgeHours, cycleDays),

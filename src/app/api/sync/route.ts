@@ -322,8 +322,14 @@ export async function GET(request: NextRequest) {
   const results = sites.map((site) => ({
     site_id: site.id,
     site: site.name,
-    gsc: statusByKey.get(`${site.id}:gsc`) ?? { status: site.gsc_property ? "never_run" : "not_configured", latest_data_date: gscBySite.get(Number(site.id)) ?? null },
-    ga4: statusByKey.get(`${site.id}:ga4`) ?? { status: site.ga_property_id ? "never_run" : "not_configured", latest_data_date: ga4BySite.get(Number(site.id)) ?? null },
+    gsc: {
+      ...(statusByKey.get(`${site.id}:gsc`) ?? { status: site.gsc_property ? "never_run" : "not_configured" }),
+      latest_data_date: statusByKey.get(`${site.id}:gsc`)?.latest_data_date ?? gscBySite.get(Number(site.id)) ?? null,
+    },
+    ga4: {
+      ...(statusByKey.get(`${site.id}:ga4`) ?? { status: site.ga_property_id ? "never_run" : "not_configured" }),
+      latest_data_date: statusByKey.get(`${site.id}:ga4`)?.latest_data_date ?? ga4BySite.get(Number(site.id)) ?? null,
+    },
   }));
 
   return NextResponse.json({ success: true, generated_at: new Date().toISOString(), sites: results });

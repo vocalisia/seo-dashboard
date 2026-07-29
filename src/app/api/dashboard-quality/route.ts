@@ -95,6 +95,7 @@ export async function GET() {
       SELECT
         site_id,
         MAX(date) AS latest_ga4_date,
+        COUNT(DISTINCT date) FILTER (WHERE date >= (CURRENT_DATE - INTERVAL '29 days')::date)::int AS ga4_days_30d,
         SUM(users) FILTER (WHERE date >= (CURRENT_DATE - INTERVAL '30 days')::date) AS users_30d
       FROM analytics_daily
       GROUP BY site_id
@@ -113,6 +114,7 @@ export async function GET() {
       COALESCE(tk.kp_volumes_missing, 0)::int AS kp_volumes_missing,
       COALESCE(gains.gain_candidates, 0)::int AS gain_candidates,
       ga.latest_ga4_date::text,
+      COALESCE(ga.ga4_days_30d, 0)::int AS ga4_days_30d,
       COALESCE(ga.users_30d, 0)::int AS users_30d,
       CASE
         WHEN s.gsc_property IS NULL THEN 'gsc_not_configured'
@@ -120,6 +122,8 @@ export async function GET() {
         WHEN q.latest_gsc_date < (CURRENT_DATE - INTERVAL '1 day' * (${GSC_LAG_DAYS} + 2))::date THEN 'gsc_stale'
         WHEN COALESCE(tk.kp_volumes_imported, 0) = 0 THEN 'kp_missing'
         WHEN s.ga_property_id IS NOT NULL AND ga.latest_ga4_date IS NULL THEN 'ga4_no_daily_data'
+        WHEN s.ga_property_id IS NOT NULL AND ga.latest_ga4_date < (CURRENT_DATE - INTERVAL '3 days')::date THEN 'ga4_stale'
+        WHEN s.ga_property_id IS NOT NULL AND COALESCE(ga.ga4_days_30d, 0) < 28 THEN 'ga4_incomplete'
         ELSE 'ok'
       END AS status
     FROM sites s

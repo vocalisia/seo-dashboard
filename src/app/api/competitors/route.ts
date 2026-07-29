@@ -57,7 +57,7 @@ async function runResearchForSite(site: Site, sql: SQLClient): Promise<ResearchR
            SUM(clicks) AS clicks,
            SUM(impressions) AS impressions,
            AVG(position) AS position
-    FROM search_console_data
+    FROM search_console_query_data
     WHERE site_id = ${site.id}
       AND date >= NOW() - INTERVAL '30 days'
       AND query IS NOT NULL
@@ -109,6 +109,7 @@ Rules:
 - Maximum 30 keyword gaps
 - Be accurate with volume estimates`;
 
+/* Legacy synthetic fallback removed: it fabricated competitor gaps from our own GSC data.
 function inferCompetitors(site: Site): { domain: string; description: string }[] {
   const host = site.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "").toLowerCase();
   if (host.includes("meilleurartisan")) {
@@ -185,6 +186,7 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
     ourKeywordsCount: rows.length,
   };
 }
+*/
 
   const aiResponse = await askAI(
     [{ role: "user", content: competitorPrompt }],
@@ -239,48 +241,6 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
   };
 }
 
-function inferFallbackCompetitors(site: Site): { domain: string; description: string }[] {
-  const host = site.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "").toLowerCase();
-  if (host.includes("meilleurartisan")) {
-    return [
-      { domain: "renovero.ch", description: "Plateforme suisse de devis travaux et artisans." },
-      { domain: "ofri.ch", description: "Marketplace suisse pour demandes de travaux et artisans." },
-      { domain: "local.ch", description: "Annuaire local suisse avec fiches d'entreprises et artisans." },
-      { domain: "houzy.ch", description: "Services suisses autour de la maison et renovation." },
-      { domain: "devis.ch", description: "Service suisse de demandes de devis pour travaux." },
-    ];
-  }
-  if (host.includes("recouvrementpro")) {
-    return [
-      { domain: "frontenacrecouvrement.com", description: "Cabinet de recouvrement au Canada." },
-      { domain: "agence-recouvrement.ca", description: "Services de recouvrement pour entreprises." },
-      { domain: "groupechoquette.com", description: "Recouvrement et gestion de comptes clients." },
-      { domain: "legalwizz.com", description: "Services juridiques et documents pour entreprises." },
-    ];
-  }
-  if (host.includes("boursier") || host.includes("stock-market")) {
-    return [
-      { domain: "cash.ch", description: "Actualite financiere et marches suisses." },
-      { domain: "zonebourse.com", description: "Donnees boursieres, actions et analyses." },
-      { domain: "swissquote.ch", description: "Courtier et contenus de marche en Suisse." },
-      { domain: "investing.com", description: "Portail global de donnees financieres." },
-    ];
-  }
-  if (host.includes("facture") || host.includes("recouvrement")) {
-    return [
-      { domain: "litige.fr", description: "Procedures et modeles pour litiges et impayes." },
-      { domain: "legalstart.fr", description: "Services juridiques en ligne pour entreprises." },
-      { domain: "captaincontrat.com", description: "Contrats et accompagnement juridique." },
-      { domain: "rubypayeur.com", description: "Recouvrement et information entreprise." },
-    ];
-  }
-  return [
-    { domain: "competitor-a.example", description: `Concurrent a valider pour ${site.name}.` },
-    { domain: "competitor-b.example", description: `Acteur de marche proche de ${site.name}.` },
-    { domain: "competitor-c.example", description: `Site thematique comparable a ${site.name}.` },
-  ];
-}
-
 async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
   const rows = (await sql`
     SELECT query
@@ -292,19 +252,12 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
     LIMIT 20
   `) as { query: string }[];
 
-  // GSC can show our own search demand, but cannot prove a competitor's rank or
-  // monthly volume. Keep useful competitor candidates without fabricating gaps.
+  // GSC can only show our own visibility. It cannot prove a competitor's rank or volume.
   return {
-    competitors: inferFallbackCompetitors(site),
+    competitors: [],
     gaps: [],
     ourKeywordsCount: rows.length,
   };
-}
-
-interface CompetitorData {
-  domain: string;
-  description: string;
-  keywords: { keyword: string; volume: number; position: number }[];
 }
 
 /**
@@ -393,6 +346,10 @@ async function persistResearchForSite(site: Site, sql: SQLClient, research: Rese
         researched_at TIMESTAMP DEFAULT NOW()
       )
     `;
+    await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_competitor_research_natural_key
+        ON competitor_research(site_id, LOWER(competitor_domain), LOWER(keyword))
+    `;
 
     await sql.transaction([
       sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`,
@@ -435,7 +392,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: "Aucun site actif" });
       }
 
-      const perSite: { site: string; competitors: number; gaps: number; error?: string }[] = [];
+      const perSite: { site: string; competitors: number; gaps: number; status: "cached" | "complete" | "preserved" | "unavailable"; error?: string }[] = [];
       const errors: string[] = [];
       let aiFallbackOnly = false;
 
@@ -444,36 +401,50 @@ export async function POST(req: NextRequest) {
         if (!force_refresh) {
           const cached = await loadCachedResearch(sql, s.id);
           if (cached) {
-            perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length });
+            perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length, status: "cached" });
             continue;
           }
         }
+        if (aiFallbackOnly) {
+          const fallback = await runFallbackResearchForSite(s, sql);
+          const message = "AI provider unavailable; no competitor volume or position was generated.";
+          errors.push(`${s.name}: ${message}`);
+          perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length, status: "unavailable", error: message });
+          continue;
+        }
         try {
-          const r = aiFallbackOnly
-            ? await runFallbackResearchForSite(s, sql)
-            : await runResearchForSite(s, sql);
-          const persisted = !aiFallbackOnly && await persistResearchForSite(s, sql, r);
+          const r = await runResearchForSite(s, sql);
+          const persisted = await persistResearchForSite(s, sql, r);
           const preserved = persisted ? null : await loadCachedResearch(sql, s.id, 3650);
           const reported = preserved ?? r;
-          perSite.push({ site: s.name, competitors: reported.competitors.length, gaps: reported.gaps.length });        } catch (err) {
+          if (!persisted) {
+            const message = "The rescan was insufficient; the existing cache was preserved.";
+            errors.push(`${s.name}: ${message}`);
+            perSite.push({ site: s.name, competitors: reported.competitors.length, gaps: reported.gaps.length, status: "preserved", error: message });
+          } else {
+            perSite.push({ site: s.name, competitors: reported.competitors.length, gaps: reported.gaps.length, status: "complete" });
+          }
+        } catch (err) {
           const msg = formatAIError(err);
+          errors.push(`${s.name}: ${msg}`);
           // Try fallback to recent cache only. Older cache must not look fresh.
           const cached = await loadCachedResearch(sql, s.id, 60);
           if (cached) {
-            perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length });
+            perSite.push({ site: s.name, competitors: cached.competitors.length, gaps: cached.gaps.length, status: "cached", error: `Rescan unavailable: ${msg}` });
           } else {
             const fallback = await runFallbackResearchForSite(s, sql);
-            perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length, error: `fallback: ${msg}` });
+            perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length, status: "unavailable", error: msg });
           }
           // Once the provider is clearly unavailable, finish remaining sites with dashboard-derived fallback.
-          if (err instanceof AIProviderError && (err.code === "credit_low" || err.code === "no_key" || err.code === "auth")) {
+          if (err instanceof AIProviderError && (err.code === "credit_low" || err.code === "no_key" || err.code === "auth" || err.code === "rate_limit")) {
             aiFallbackOnly = true;
           }
         }
       }
 
       return NextResponse.json({
-        success: errors.length < activeSites.length,
+        success: errors.length === 0,
+        status: errors.length === 0 ? "complete" : errors.length === activeSites.length ? "failed" : "partial",
         mode: "all",
         sites_processed: perSite.length,
         sites_total: activeSites.length,

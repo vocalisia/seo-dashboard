@@ -102,11 +102,11 @@ function cleanEnvValue(value: string | undefined): string | undefined {
 }
 
 function readEnv(name: string): string | undefined {
-  return cleanEnvValue(SERVER_ENV[name as keyof typeof SERVER_ENV] ?? process.env[name]);
+  return cleanEnvValue(process.env[name]) ?? cleanEnvValue(SERVER_ENV[name as keyof typeof SERVER_ENV]);
 }
 
 function readRawEnv(name: string): string | undefined {
-  const value = (SERVER_ENV[name as keyof typeof SERVER_ENV] ?? process.env[name])?.trim();
+  const value = process.env[name]?.trim() || SERVER_ENV[name as keyof typeof SERVER_ENV]?.trim();
   return value || undefined;
 }
 
@@ -164,6 +164,7 @@ export async function askAI(
   const geminiModel = GEMINI_MODELS[model] ?? GEMINI_MODELS.fast;
   const pplxKey = readEnv("PERPLEXITY_API_KEY");
   const tryPerplexityFirst = shouldTryPerplexityFirst(model);
+  let lastProviderError: AIProviderError | null = null;
 
   if (tryPerplexityFirst && pplxKey) {
     try {
@@ -173,6 +174,7 @@ export async function askAI(
       if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
         throw err;
       }
+      lastProviderError = err;
     }
   }
 
@@ -183,6 +185,7 @@ export async function askAI(
       if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
         throw err;
       }
+      lastProviderError = err;
     }
   }
 
@@ -194,6 +197,7 @@ export async function askAI(
       if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
         throw err;
       }
+      lastProviderError = err;
     }
   }
 
@@ -205,6 +209,7 @@ export async function askAI(
       if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
         throw err;
       }
+      lastProviderError = err;
     }
   }
 
@@ -216,6 +221,7 @@ export async function askAI(
       if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
         throw err;
       }
+      lastProviderError = err;
     }
   }
 
@@ -227,10 +233,11 @@ export async function askAI(
       if (!(err instanceof AIProviderError) || !canTryNextProvider(err)) {
         throw err;
       }
+      lastProviderError = err;
     }
   }
 
-  throw new AIProviderError(
+  throw lastProviderError ?? new AIProviderError(
     "No AI provider configured. Set GEMINI_API_KEY/GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT with service account credentials, PERPLEXITY_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or MAMMOUTH_API_KEY.",
     { provider: "none", code: "no_key" }
   );
