@@ -111,6 +111,7 @@ export async function GET(req: NextRequest) {
              raw_findings, scanned_at
       FROM competitor_llm_scan
       WHERE site_id = ${siteId}
+        AND scanned_at >= NOW() - (${CACHE_DAYS} || ' days')::interval
       ORDER BY llm_readiness_score DESC, scanned_at DESC
     `) as CachedScanRow[];
 

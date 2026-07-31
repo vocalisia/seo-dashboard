@@ -2,18 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
+import { computePageRank, extractInternalLinks, normalizeUrlForGraph, type PageNode } from "@/lib/pagerank-graph";
 import { assertPublicHttpUrl, assertSameSiteUrl, fetchPublicUrl } from "@/lib/safe-url";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
-
-interface PageNode {
-  url: string;
-  outLinks: string[];
-  inLinks: string[];
-  pr: number;
-  clicks: number;
-}
 
 interface PageRankResult {
   rank: number;
@@ -29,6 +22,9 @@ interface ApiResponse {
   orphans: string[];
   suggestions: string[];
   total: number;
+  discovered: number;
+  crawled: number;
+  failed: number;
   partial?: boolean;
   duration_ms?: number;
 }
@@ -46,82 +42,45 @@ async function fetchWithTimeout(url: string): Promise<string | null> {
   }
 }
 
-async function fetchSitemapUrls(siteUrl: string, limit: number): Promise<string[]> {
+interface SitemapDiscovery {
+  urls: string[];
+  discovered: number;
+  limited: boolean;
+}
+
+async function fetchSitemapUrls(siteUrl: string, limit: number): Promise<SitemapDiscovery> {
   const base = await assertPublicHttpUrl(siteUrl);
-  const html = await fetchWithTimeout(new URL("/sitemap.xml", base).toString());
-  if (!html) return [];
-  const urls: string[] = [];
-  for (const m of html.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)) {
-    try {
-      const page = assertSameSiteUrl(m[1].trim(), base);
-      if (!page.pathname.endsWith(".xml")) urls.push(page.toString());
-    } catch {
-      // Ignore malformed or cross-site sitemap entries.
-    }
-    if (urls.length >= limit) break;
-  }
-  return urls;
-}
+  const queue = [new URL("/sitemap.xml", base).toString()];
+  const visitedSitemaps = new Set<string>();
+  const pages = new Map<string, string>();
 
-function normalizeHost(hostname: string): string {
-  return hostname.replace(/^www\./i, "").toLowerCase();
-}
+  while (queue.length > 0) {
+    const sitemapUrl = queue.shift()!;
+    if (visitedSitemaps.has(sitemapUrl)) continue;
+    visitedSitemaps.add(sitemapUrl);
+    const xml = await fetchWithTimeout(sitemapUrl);
+    if (!xml) continue;
 
-function normalizeUrlForGraph(rawUrl: string): string {
-  const u = new URL(rawUrl);
-  const path = u.pathname.replace(/\/$/, "") || "/";
-  return `${u.protocol}//${normalizeHost(u.hostname)}${path}`;
-}
-
-function extractInternalLinks(html: string, baseHost: string): string[] {
-  const hrefs: string[] = [];
-  for (const m of html.matchAll(/href="([^"]+)"/gi)) {
-    const href = m[1];
-    try {
-      const resolved = new URL(href, `https://${baseHost}`);
-      if (normalizeHost(resolved.hostname) === normalizeHost(baseHost) && !resolved.pathname.match(/\.(jpg|jpeg|png|gif|svg|css|js|woff|pdf|xml)$/i)) {
-        hrefs.push(normalizeUrlForGraph(resolved.href));
-      }
-    } catch {
-      // ignore malformed href
-    }
-  }
-  return [...new Set(hrefs)];
-}
-
-function computePageRank(nodes: Map<string, PageNode>, iterations: number, damping: number): void {
-  const N = nodes.size;
-  if (N === 0) return;
-
-  const incomingByUrl = new Map<string, string[]>();
-  for (const [url] of nodes) incomingByUrl.set(url, []);
-  for (const [sourceUrl, source] of nodes) {
-    for (const targetUrl of source.outLinks) {
-      incomingByUrl.get(targetUrl)?.push(sourceUrl);
-    }
-  }
-
-  for (const node of nodes.values()) {
-    node.pr = 1 / N;
-  }
-
-  for (let i = 0; i < iterations; i++) {
-    const newPr = new Map<string, number>();
-    for (const [url] of nodes) {
-      let sum = 0;
-      for (const sourceUrl of incomingByUrl.get(url) ?? []) {
-        const other = nodes.get(sourceUrl);
-        if (other) {
-          sum += other.pr / Math.max(other.outLinks.length, 1);
+    for (const match of xml.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)) {
+      try {
+        const candidate = assertSameSiteUrl(match[1].trim(), base);
+        if (candidate.pathname.endsWith(".xml")) {
+          queue.push(candidate.toString());
+        } else {
+          pages.set(normalizeUrlForGraph(candidate.toString()), candidate.toString());
         }
+      } catch {
+        // Ignore malformed or cross-site sitemap entries.
       }
-      newPr.set(url, (1 - damping) / N + damping * sum);
-    }
-    for (const [url, pr] of newPr) {
-      const node = nodes.get(url);
-      if (node) node.pr = pr;
     }
   }
+
+  const allUrls = [...pages.values()];
+  return {
+    urls: allUrls.slice(0, limit),
+    discovered: allUrls.length,
+    limited: allUrls.length > limit,
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -130,7 +89,7 @@ export async function POST(request: NextRequest) {
 
   let siteId: number;
   let siteUrl: string;
-  let maxPages = 80;
+  let maxPages = 600;
   const startedAt = Date.now();
 
   try {
@@ -144,7 +103,7 @@ export async function POST(request: NextRequest) {
     }
     siteUrl = body.site_url;
     if (typeof body.max_pages === "number" && body.max_pages > 0) {
-      maxPages = Math.min(120, Math.floor(body.max_pages));
+      maxPages = Math.min(600, Math.floor(body.max_pages));
     }
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
@@ -168,44 +127,57 @@ export async function POST(request: NextRequest) {
           AND date >= NOW() - INTERVAL '30 days'
         GROUP BY page
       ` as { page: string; clicks: number }[];
-      for (const r of rows) gscClicks.set(r.page, r.clicks);
+      for (const r of rows) {
+        try {
+          gscClicks.set(normalizeUrlForGraph(r.page), Number(r.clicks) || 0);
+        } catch {
+          // Ignore malformed GSC URLs instead of corrupting the graph keyspace.
+        }
+      }
     } catch {
       // continue without GSC data
     }
   }
 
-  const sitemapUrls = await fetchSitemapUrls(siteUrl, maxPages);
+  const sitemap = await fetchSitemapUrls(siteUrl, maxPages);
+  if (sitemap.urls.length === 0) {
+    return NextResponse.json({ error: "Aucune URL exploitable trouvée dans le sitemap" }, { status: 422 });
+  }
   const baseUrl = new URL(siteUrl);
   const baseHost = baseUrl.hostname;
 
-  const nodes = new Map<string, PageNode>();
-  for (const url of sitemapUrls) {
+  const candidateNodes = new Map<string, PageNode>();
+  for (const url of sitemap.urls) {
     const normalized = normalizeUrlForGraph(url);
-    nodes.set(normalized, { url: normalized, outLinks: [], inLinks: [], pr: 0, clicks: gscClicks.get(url) ?? 0 });
+    candidateNodes.set(normalized, { url: normalized, outLinks: [], inLinks: [], pr: 0, clicks: gscClicks.get(normalized) ?? 0 });
   }
 
-  // Crawl pages concurrently in batches of 5
-  const urlList = [...nodes.keys()];
-  for (let i = 0; i < urlList.length; i += 5) {
-    const batch = urlList.slice(i, i + 5);
-    const results = await Promise.all(
-      batch.map(async (url) => {
-        const html = await fetchWithTimeout(url);
-        return { url, html };
-      })
-    );
-    for (const { url, html } of results) {
-      if (!html) continue;
-      const links = extractInternalLinks(html, baseHost);
-      const node = nodes.get(url);
-      if (!node) continue;
-      node.outLinks = links.filter((l) => nodes.has(l));
-      for (const link of node.outLinks) {
-        const target = nodes.get(link);
-        if (target && !target.inLinks.includes(url)) {
-          target.inLinks.push(url);
-        }
-      }
+  // Crawl the whole graph when possible. A strict deadline keeps the handler inside its runtime.
+  const urlList = [...candidateNodes.keys()];
+  const capturedLinks = new Map<string, string[]>();
+  const crawlDeadline = Date.now() + 48_000;
+  let cursor = 0;
+  async function crawlWorker() {
+    while (Date.now() < crawlDeadline) {
+      const url = urlList[cursor++];
+      if (!url) return;
+      const html = await fetchWithTimeout(url);
+      if (html) capturedLinks.set(url, extractInternalLinks(html, baseHost));
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(12, urlList.length) }, () => crawlWorker()));
+
+  // Only calculate graph metrics from pages actually fetched. Missing pages cannot be labelled orphaned.
+  const nodes = new Map<string, PageNode>();
+  for (const url of capturedLinks.keys()) {
+    const candidate = candidateNodes.get(url);
+    if (candidate) nodes.set(url, candidate);
+  }
+  for (const [url, node] of nodes) {
+    node.outLinks = (capturedLinks.get(url) ?? []).filter((link) => nodes.has(link));
+    for (const link of node.outLinks) {
+      const target = nodes.get(link);
+      if (target && !target.inLinks.includes(url)) target.inLinks.push(url);
     }
   }
 
@@ -222,8 +194,11 @@ export async function POST(request: NextRequest) {
     clicks: n.clicks,
   }));
 
+  const partial = sitemap.limited || nodes.size < candidateNodes.size;
   const baseGraphUrl = normalizeUrlForGraph(siteUrl);
-  const orphans = sorted.filter((n) => n.inLinks.length === 0 && n.url !== baseGraphUrl).map((n) => n.url);
+  const orphans = partial
+    ? []
+    : sorted.filter((n) => n.inLinks.length === 0 && n.url !== baseGraphUrl).map((n) => n.url);
 
   // Suggestions: orphans with 0 links but best PR donors nearby
   const suggestions: string[] = [];
@@ -239,7 +214,10 @@ export async function POST(request: NextRequest) {
     orphans: orphans.slice(0, 50),
     suggestions: suggestions.slice(0, 10),
     total: nodes.size,
-    partial: sitemapUrls.length >= maxPages,
+    discovered: sitemap.discovered,
+    crawled: nodes.size,
+    failed: candidateNodes.size - nodes.size,
+    partial,
     duration_ms: Date.now() - startedAt,
   };
 

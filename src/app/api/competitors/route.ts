@@ -526,19 +526,12 @@ export async function POST(req: NextRequest) {
           min_volume: 1000,
         });
       }
-      const fallback = await runFallbackResearchForSite(site, sql);
       return NextResponse.json({
-        success: true,
+        success: false,
         site: site.name,
-        cached: false,
-        fallback: true,
-        warning: `${formatAIError(err)} Aucun volume ni position concurrentielle non vérifiée n'est affiché.`,
-        competitors: fallback.competitors,
-        gaps: fallback.gaps,
-        our_keywords_count: fallback.ourKeywordsCount,
-        total_gaps: fallback.gaps.length,
-        min_volume: 100,
-      });
+        data_status: "unavailable",
+        error: `${formatAIError(err)} Aucune donnée concurrentielle vérifiée n'est disponible.`,
+      }, { status: 503 });
     }
   } catch (err) {
     logError("competitors.research", err);

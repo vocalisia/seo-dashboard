@@ -24,6 +24,9 @@ interface PRResponse {
   orphans: string[];
   suggestions: string[];
   total: number;
+  discovered?: number;
+  crawled?: number;
+  failed?: number;
   partial?: boolean;
   duration_ms?: number;
   error?: string;
@@ -59,7 +62,7 @@ export default function PageRankPage() {
       const res = await fetch("/api/pagerank", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ site_id: selectedSite, site_url: site.url, max_pages: 80 }),
+        body: JSON.stringify({ site_id: selectedSite, site_url: site.url, max_pages: 600 }),
         signal: controller.signal,
       });
       window.clearTimeout(timeout);
@@ -104,7 +107,7 @@ export default function PageRankPage() {
             {loading ? "Calcul PageRank..." : "Calculer PageRank"}
           </button>
           {loading && (
-            <span className="text-xs text-gray-400">Crawl jusqu&apos;à 80 pages, avec timeout de sécurité</span>
+            <span className="text-xs text-gray-400">Crawl du sitemap, avec limite de temps de sécurité</span>
           )}
         </div>
 
@@ -114,20 +117,20 @@ export default function PageRankPage() {
             <div className="grid grid-cols-3 gap-4">
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                 <div className="text-2xl font-bold text-teal-400">{result.total}</div>
-                <div className="text-xs text-gray-400 mt-1">Pages crawlées</div>
+                <div className="text-xs text-gray-400 mt-1">Pages analysées</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                <div className="text-2xl font-bold text-orange-400">{result.orphans.length}</div>
+                <div className="text-2xl font-bold text-orange-400">{result.partial ? "—" : result.orphans.length}</div>
                 <div className="text-xs text-gray-400 mt-1">Pages orphelines</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                <div className="text-2xl font-bold text-purple-400">{result.suggestions.length}</div>
+                <div className="text-2xl font-bold text-purple-400">{result.partial ? "—" : result.suggestions.length}</div>
                 <div className="text-xs text-gray-400 mt-1">Suggestions maillage</div>
               </div>
             </div>
             {result.partial && (
               <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
-                Calcul partiel: le crawl a été borné pour garder l&apos;outil réactif.
+                Analyse incomplète : {result.crawled ?? result.total}/{result.discovered ?? result.total} pages du sitemap ont été crawlées. Les orphelines et suggestions ne sont pas concluantes.
               </div>
             )}
 
@@ -144,8 +147,8 @@ export default function PageRankPage() {
                   }`}
                 >
                   {t === "top" && `Top 20`}
-                  {t === "orphans" && `Orphelines (${result.orphans.length})`}
-                  {t === "suggestions" && `Suggestions (${result.suggestions.length})`}
+                  {t === "orphans" && `Orphelines (${result.partial ? "—" : result.orphans.length})`}
+                  {t === "suggestions" && `Suggestions (${result.partial ? "—" : result.suggestions.length})`}
                 </button>
               ))}
             </div>
@@ -196,7 +199,9 @@ export default function PageRankPage() {
             {/* Orphans */}
             {tab === "orphans" && (
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-2">
-                {result.orphans.length === 0 ? (
+                {result.partial ? (
+                  <p className="text-gray-400 text-sm">Diagnostic indisponible tant que le crawl est incomplet.</p>
+                ) : result.orphans.length === 0 ? (
                   <p className="text-gray-400 text-sm">Aucune page orpheline détectée.</p>
                 ) : (
                   result.orphans.map((url) => (
@@ -211,7 +216,9 @@ export default function PageRankPage() {
             {/* Suggestions */}
             {tab === "suggestions" && (
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-3">
-                {result.suggestions.length === 0 ? (
+                {result.partial ? (
+                  <p className="text-gray-400 text-sm">Suggestions indisponibles tant que le crawl est incomplet.</p>
+                ) : result.suggestions.length === 0 ? (
                   <p className="text-gray-400 text-sm">Aucune suggestion disponible.</p>
                 ) : (
                   result.suggestions.map((s, i) => (

@@ -243,6 +243,54 @@ export default function CompetitorsPage() {
     } catch { setCached({ gaps: [], competitors: [] }); }
   }
 
+  async function viewCachedAnalysis() {
+    if (!selectedSite) return;
+    if (selectedSite === "all") {
+      setError("Sélectionne un site pour consulter une analyse en cache. Un rescan multi-sites reste une action IA explicite.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setActiveCompetitorFilter(null);
+    try {
+      // GET only: this control must never start an AI request when no cache exists.
+      const res = await fetch(`/api/competitors?site_id=${selectedSite}`);
+      const d = await res.json() as {
+        success?: boolean;
+        error?: string;
+        gaps?: KeywordGap[];
+        competitors?: CompetitorStat[];
+      };
+      if (d.success === false) {
+        setError(d.error ?? "Impossible de lire l'analyse en cache");
+        return;
+      }
+
+      const nextCached = { gaps: d.gaps ?? [], competitors: d.competitors ?? [] };
+      setCached(nextCached);
+      if (nextCached.gaps.length === 0 && nextCached.competitors.length === 0) {
+        setError("Aucune analyse concurrentielle en cache pour ce site. Utilise « Rescan IA live » (avec confirmation) pour lancer une nouvelle analyse.");
+        return;
+      }
+
+      setResult({
+        success: true,
+        cached: true,
+        competitors: nextCached.competitors,
+        gaps: nextCached.gaps,
+        our_keywords_count: 0,
+        total_gaps: nextCached.gaps.length,
+      });
+      showNotification("success", `Analyse en cache : ${nextCached.competitors.length} concurrents, ${nextCached.gaps.length} gaps`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur réseau lors de la lecture du cache");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function fetchCompetitorKeywords(domain: string) {
     if (!selectedSite || selectedSite === "all") return;
     if (competitorKw[domain]) return; // already cached locally
@@ -333,6 +381,10 @@ export default function CompetitorsPage() {
 
   async function runResearch(forceRefresh = false) {
     if (!selectedSite) return;
+    if (!forceRefresh) {
+      await viewCachedAnalysis();
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
@@ -545,7 +597,9 @@ export default function CompetitorsPage() {
 
   // Derived data
   const gaps = cached.gaps;
-  const competitors = cached.competitors;
+  // A cached competitor without a recorded gap is not evidence of a keyword footprint.
+  // Do not render a misleading "0 keywords" competitor card.
+  const competitors = cached.competitors.filter((competitor) => competitor.found_keywords_count > 0);
   const totalVolume = gaps.reduce((s, g) => s + (g.volume ?? 0), 0);
   const hasVolumes = gaps.some((g) => (g.volume ?? 0) > 0);
   const selectedSiteObj = sites.find((s) => s.id === selectedSite);
@@ -787,15 +841,15 @@ export default function CompetitorsPage() {
                 </select>
               </div>
               <button
-                onClick={() => runResearch(false)}
+                onClick={() => void viewCachedAnalysis()}
                 disabled={loading || !selectedSite}
                 className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors"
                 title="Affiche les données mises en cache (rapide, sans appel IA)"
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                 {loading
-                  ? (selectedSite === "all" ? "Analyse multi-sites en cours..." : "Recherche IA en cours...")
-                  : (selectedSite === "all" ? "Lancer l'analyse sur tous les sites" : "Voir l'analyse (cache)")}
+                  ? "Chargement du cache..."
+                  : "Voir l'analyse (cache)"}
               </button>
               <button
                 onClick={() => {
@@ -828,7 +882,7 @@ export default function CompetitorsPage() {
           {(result?.fallback || result?.stale || result?.warning) && (
             <div className="bg-yellow-950/40 border border-yellow-700/60 rounded-lg px-4 py-3 text-sm text-yellow-200">
               {result?.fallback
-                ? "Mode secours: donnees derivees du dashboard/GSC. Ce ne sont pas des volumes Keyword Planner valides."
+                ? "Analyse concurrentielle indisponible : aucune donnée concurrentielle vérifiée n'est disponible."
                 : result?.stale
                   ? "Cache concurrent ancien: a utiliser comme signal, pas comme verite de volume."
                   : result?.warning}
