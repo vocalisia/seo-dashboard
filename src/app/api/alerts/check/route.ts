@@ -200,7 +200,47 @@ async function checkGA4TagDown(
   const yesterday = Number(r.sessions_yesterday);
   const prev7d = Number(r.sessions_prev_7d);
 
-  if (yesterday === 0 && prev7d > 0) {
+  const previousDailyAverage = prev7d / 7;
+  const severeMeasurementDrop = prev7d >= 70
+    && yesterday <= Math.max(3, Math.floor(previousDailyAverage * 0.2));
+
+  if (severeMeasurementDrop) {
+    const health = await sql`
+      SELECT ga4_id, has_consent_mode, http_status
+      FROM site_health_checks
+      WHERE site_id = ${siteId}
+      ORDER BY scanned_at DESC
+      LIMIT 1
+    `;
+    const latestHealth = health[0] as {
+      ga4_id?: string | null;
+      has_consent_mode?: boolean | null;
+      http_status?: number | null;
+    } | undefined;
+    const tagHealthy = latestHealth?.http_status === 200
+      && Boolean(latestHealth.ga4_id)
+      && latestHealth.has_consent_mode === true;
+
+    if (tagHealthy) {
+      return {
+        site_id: siteId,
+        alert_type: "ga4_measurement_drop",
+        severity: "high",
+        keyword: `ga4:${siteName}`,
+        message:
+          `Mesure GA4 en forte baisse : ${yesterday} session(s) hier vs ${prev7d} sur les 7 derniers jours. ` +
+          "La balise et le Consent Mode sont visibles : vérifier le taux de consentement avant de conclure à une chute de trafic.",
+        data: {
+          sessions_yesterday: yesterday,
+          sessions_prev_7d: prev7d,
+          previous_daily_average: previousDailyAverage,
+          property_id: r.ga_property_id,
+          tag_healthy: true,
+          consent_mode_detected: true,
+        },
+      };
+    }
+
     return {
       site_id: siteId,
       alert_type: "ga4_tag_down",
