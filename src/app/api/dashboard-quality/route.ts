@@ -120,10 +120,10 @@ export async function GET() {
         WHEN s.gsc_property IS NULL THEN 'gsc_not_configured'
         WHEN q.latest_gsc_date IS NULL THEN 'gsc_no_query_data'
         WHEN q.latest_gsc_date < (CURRENT_DATE - INTERVAL '1 day' * (${GSC_LAG_DAYS} + 2))::date THEN 'gsc_stale'
-        WHEN COALESCE(tk.kp_volumes_imported, 0) = 0 THEN 'kp_missing'
         WHEN s.ga_property_id IS NOT NULL AND ga.latest_ga4_date IS NULL THEN 'ga4_no_daily_data'
         WHEN s.ga_property_id IS NOT NULL AND ga.latest_ga4_date < (CURRENT_DATE - INTERVAL '3 days')::date THEN 'ga4_stale'
         WHEN s.ga_property_id IS NOT NULL AND COALESCE(ga.ga4_days_30d, 0) < 28 THEN 'ga4_incomplete'
+        WHEN COALESCE(tk.kp_volumes_imported, 0) = 0 THEN 'kp_missing'
         ELSE 'ok'
       END AS status
     FROM sites s
@@ -136,13 +136,29 @@ export async function GET() {
       CASE
         WHEN q.latest_gsc_date IS NULL THEN 0
         WHEN q.latest_gsc_date < (CURRENT_DATE - INTERVAL '1 day' * (${GSC_LAG_DAYS} + 2))::date THEN 1
-        WHEN COALESCE(tk.kp_volumes_imported, 0) = 0 THEN 2
-        ELSE 3
+        WHEN s.ga_property_id IS NOT NULL AND ga.latest_ga4_date IS NULL THEN 2
+        WHEN s.ga_property_id IS NOT NULL AND ga.latest_ga4_date < (CURRENT_DATE - INTERVAL '3 days')::date THEN 3
+        WHEN s.ga_property_id IS NOT NULL AND COALESCE(ga.ga4_days_30d, 0) < 28 THEN 4
+        WHEN COALESCE(tk.kp_volumes_imported, 0) = 0 THEN 5
+        ELSE 6
       END,
       s.name ASC
   `;
 
-  const summary = rows.reduce(
+  const sites: (Record<string, unknown> & { issues: string[] })[] = rows.map((row) => {
+    const site = row as Record<string, unknown>;
+    const issues: string[] = [];
+    if (!site.gsc_property) issues.push("gsc_not_configured");
+    else if (!site.latest_gsc_date) issues.push("gsc_no_query_data");
+    else if (new Date(String(site.latest_gsc_date)) < new Date(Date.now() - (GSC_LAG_DAYS + 2) * 86_400_000)) issues.push("gsc_stale");
+    if (site.ga_property_id && !site.latest_ga4_date) issues.push("ga4_no_daily_data");
+    else if (site.ga_property_id && new Date(String(site.latest_ga4_date)) < new Date(Date.now() - 3 * 86_400_000)) issues.push("ga4_stale");
+    else if (site.ga_property_id && Number(site.ga4_days_30d) < 28) issues.push("ga4_incomplete");
+    if (Number(site.kp_volumes_imported) === 0) issues.push("kp_missing");
+    return { ...site, issues };
+  });
+
+  const summary = sites.reduce(
     (acc, row) => {
       const status = String(row.status);
       acc.total += 1;
@@ -163,7 +179,7 @@ export async function GET() {
       no_silent_empty_modules: true,
     },
     summary,
-    sites: rows,
+    sites,
     },
     { headers: { "Cache-Control": "private, no-store, max-age=0" } }
   );
