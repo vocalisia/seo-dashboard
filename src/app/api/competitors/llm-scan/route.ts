@@ -143,7 +143,17 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     logError("competitors.llmScan.GET", err, { siteId });
-    return NextResponse.json({ success: true, site_id: siteId, scans: [], total: 0 });
+    return NextResponse.json(
+      {
+        success: false,
+        site_id: siteId,
+        scans: [],
+        total: 0,
+        data_status: "unavailable",
+        error: err instanceof Error ? err.message : "Unable to load LLM scans",
+      },
+      { status: 500 },
+    );
   }
 }
 

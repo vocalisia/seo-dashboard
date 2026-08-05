@@ -236,7 +236,9 @@ async function runOperationalCoverageChecks(): Promise<{ checks: HealthCheck[]; 
     ),
     gl AS (
       SELECT site_id, COUNT(*) AS link_rows, COUNT(DISTINCT linking_domain) AS link_domains, COALESCE(SUM(link_count), 0) AS link_count
-      FROM gsc_links GROUP BY site_id
+      FROM gsc_links
+      WHERE LOWER(linking_domain) <> 'gsc visibility signal'
+      GROUP BY site_id
     ),
     ps AS (
       SELECT site_id, COUNT(*) AS pagespeed_rows, MAX(checked_at) AS pagespeed_latest
@@ -304,10 +306,10 @@ async function runOperationalCoverageChecks(): Promise<{ checks: HealthCheck[]; 
     }
     if (site.gsc_property && site.link_rows === 0) {
       linkFail += 1;
-      issues.push({ module: "Backlinks/GSC links", status: "fail", site_id: site.id, site_name: site.name, detail: "No gsc_links cache.", action: "Load GSC links endpoint, then fallback to GSC visibility if the API has no links." });
+      issues.push({ module: "Backlinks/GSC links", status: "fail", site_id: site.id, site_name: site.name, detail: "No verified backlink cache.", action: "Import a verified links export or connect an authorized backlink source." });
     } else if (site.link_rows > 0 && site.link_domains <= 1) {
       linkWarn += 1;
-      issues.push({ module: "Backlinks/GSC links", status: "warn", site_id: site.id, site_name: site.name, detail: `${site.link_rows} rows, ${site.link_domains} source domain; likely GSC visibility fallback.`, action: "Import a real GSC links export when available." });
+      issues.push({ module: "Backlinks/GSC links", status: "warn", site_id: site.id, site_name: site.name, detail: `${site.link_rows} rows, ${site.link_domains} referring domain.`, action: "Validate the backlinks source and refresh its export." });
     }
     if (site.pagespeed_rows === 0) pagespeedFail += 1;
     else if (ageDays(site.pagespeed_latest) > 14) pagespeedWarn += 1;
@@ -319,7 +321,7 @@ async function runOperationalCoverageChecks(): Promise<{ checks: HealthCheck[]; 
   checks.push(summarizeCoverage("Keyword table coverage", keywordWarn, keywordFail, `Keywords, volumes and positions usable on ${rows.length} sites.`, "sites lack usable keywords, volumes or positions"));
   checks.push(summarizeCoverage("Competitor cache coverage", competitorWarn, competitorFail, `Competitor cache usable on ${rows.length} sites.`, "competitor caches are empty or stale"));
   checks.push(summarizeCoverage("LLM readiness coverage", llmWarn, llmFail, `LLM scans available on ${rows.length} sites.`, "LLM scans are missing or stale"));
-  checks.push(summarizeCoverage("Backlinks/GSC links coverage", linkWarn, linkFail, `Links or GSC visibility signals available on ${gscSites} GSC sites.`, "GSC link/visibility caches are missing"));
+  checks.push(summarizeCoverage("Backlinks coverage", linkWarn, linkFail, `Verified backlink data available on ${gscSites} GSC sites.`, "verified backlink data is missing"));
   checks.push({
     name: "PageSpeed configuration",
     status: envPresent("PAGESPEED_API_KEY") ? (pagespeedFail > 0 ? "warn" : "ok") : "warn",

@@ -613,7 +613,17 @@ export async function GET(req: NextRequest) {
       competitors: Object.values(competitorMap).sort((a, b) => b.total_volume - a.total_volume),
       total: rows.length,
     });
-  } catch {
-    return NextResponse.json({ success: true, gaps: [], competitors: [], total: 0 });
+  } catch (err) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: err instanceof Error ? err.message : "Unable to load competitor cache",
+        data_status: "unavailable",
+        gaps: [],
+        competitors: [],
+        total: 0,
+      },
+      { status: 500 },
+    );
   }
 }
