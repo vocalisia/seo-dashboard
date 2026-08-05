@@ -1,5 +1,5 @@
 /**
- * POST /api/cron/trends-weekly
+ * GET/POST /api/cron/trends-weekly
  *
  * Refreshes the Google Trends cache for the top 30 tracked_keywords by
  * volume_market across all active sites. Runs once a week.
@@ -52,7 +52,7 @@ function geoFromUrl(url: string): string {
   return map[tld] ?? "";
 }
 
-export async function POST(request: Request): Promise<NextResponse> {
+async function runTrendsCron(request: Request): Promise<NextResponse> {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
@@ -127,4 +127,14 @@ export async function POST(request: Request): Promise<NextResponse> {
     failed: results.filter((r) => r.status === "failed").length,
     results,
   });
+}
+
+// Vercel cron invokes configured paths with GET; POST remains available for an
+// authenticated manual retry through the dashboard.
+export async function GET(request: Request): Promise<NextResponse> {
+  return runTrendsCron(request);
+}
+
+export async function POST(request: Request): Promise<NextResponse> {
+  return runTrendsCron(request);
 }

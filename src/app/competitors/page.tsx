@@ -108,7 +108,9 @@ interface GapRow {
   keyword: string;
   our_position: number | null;
   competitor_positions: { domain: string; pos: number }[];
-  volume: number;
+  volume: number | null;
+  impressions?: number;
+  source?: "competitor_cache" | "gsc_opportunity";
   derived_question?: boolean;
 }
 
@@ -509,7 +511,7 @@ export default function CompetitorsPage() {
   });
   const derivedQuestionRows: GapRow[] = gapsTypeFilter === "questions" && filteredGapRows.length === 0 && gapRows.length > 0
     ? gapRows
-        .filter((g) => isLongTail(g.keyword) || g.volume >= 100)
+        .filter((g) => isLongTail(g.keyword) || (g.volume ?? 0) >= 100)
         .slice(0, 10)
         .map((g) => ({ ...g, keyword: questionVariant(g.keyword), derived_question: true }))
     : [];
@@ -747,7 +749,7 @@ export default function CompetitorsPage() {
                           <CopyKeywordsButton keywords={visibleGapRows.map((g) => g.keyword)} />
                         </span>
                       </th>
-                      <th className="px-5 py-3 text-right">Vol. estimé</th>
+                      <th className="px-5 py-3 text-right">Volume / impr. GSC</th>
                       <th className="px-5 py-3 text-right">Notre pos.</th>
                       <th className="px-5 py-3 text-left">Concurrents</th>
                       <th className="px-5 py-3 text-center">Brief</th>
@@ -764,7 +766,13 @@ export default function CompetitorsPage() {
                             </span>
                           )}
                         </td>
-                        <td className="px-5 py-3 text-right text-blue-400 font-semibold">{g.volume.toLocaleString()}</td>
+                        <td className="px-5 py-3 text-right text-blue-400 font-semibold">
+                          {g.source === "gsc_opportunity"
+                            ? `${(g.impressions ?? 0).toLocaleString()} impr.`
+                            : g.volume === null
+                              ? "—"
+                              : g.volume.toLocaleString()}
+                        </td>
                         <td className="px-5 py-3 text-right">
                           {g.our_position !== null
                             ? <span className={Number(g.our_position) <= 30 ? "text-yellow-400" : "text-red-400"}>{Number(g.our_position).toFixed(0)}</span>
@@ -798,7 +806,7 @@ export default function CompetitorsPage() {
                             <button
                               onClick={() => void callBriefIA({
                                 keyword: g.keyword,
-                                volume: g.volume,
+                                volume: g.volume ?? 0,
                                 competitor: g.competitor_positions[0]?.domain ?? "—",
                                 competitor_domain: g.competitor_positions[0]?.domain ?? "—",
                                 competitor_position: g.competitor_positions[0]?.pos ?? 0,

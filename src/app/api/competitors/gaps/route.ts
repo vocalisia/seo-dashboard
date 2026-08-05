@@ -2,14 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-
-interface GapRow {
-  keyword: string;
-  our_position: number | null;
-  competitor_positions: { domain: string; pos: number }[];
-  volume: number;
-  source?: "competitor_cache" | "fallback_gsc_signal";
-}
+import { sortGapsByKnownVolume, toGscOpportunities, type CompetitorGap } from "@/lib/competitor-gaps";
 
 export async function GET(req: NextRequest) {
   const siteId = req.nextUrl.searchParams.get("siteId");
@@ -60,7 +53,7 @@ export async function GET(req: NextRequest) {
         }
 
         // Group by keyword
-        const keywordMap: Record<string, GapRow> = {};
+        const keywordMap: Record<string, CompetitorGap> = {};
         for (const row of competitorRows) {
           const ourPos = ourPosMap[row.keyword] ?? null;
           // Only include if we're not in top 50
@@ -81,12 +74,13 @@ export async function GET(req: NextRequest) {
           });
         }
 
-        const gaps = Object.values(keywordMap).sort((a, b) => b.volume - a.volume);
-        return NextResponse.json({ success: true, gaps });
+        const gaps = sortGapsByKnownVolume(Object.values(keywordMap));
+        return NextResponse.json({ success: true, gaps, data_status: "competitor_cache" });
       }
     }
 
-    // Fallback: positions > 30 from our own data = potential gaps
+    // Without verified competitor research, expose only first-party GSC opportunities.
+    // Impressions are deliberately kept separate from search volume.
     const fallbackRows = await sql`
       SELECT
         query AS keyword,
@@ -102,21 +96,14 @@ export async function GET(req: NextRequest) {
       LIMIT 100
     ` as { keyword: string; our_position: number; impressions: number }[];
 
-    const gaps: GapRow[] = fallbackRows.map((r) => {
-      const pos = Number(r.our_position);
-      const imp = Number(r.impressions);
-      const share = pos <= 50 ? 0.02 : 0.01;
-      const volume = Math.round(imp / share);
-      return {
-        keyword: r.keyword,
-        our_position: pos,
-        competitor_positions: [],
-        volume,
-        source: "fallback_gsc_signal",
-      };
-    });
+    const gaps = toGscOpportunities(fallbackRows);
 
-    return NextResponse.json({ success: true, gaps, fallback: true });
+    return NextResponse.json({
+      success: true,
+      gaps,
+      fallback: true,
+      data_status: "own_gsc_opportunities",
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(

@@ -1,5 +1,5 @@
 /**
- * POST /api/cron/pagespeed-daily
+ * GET/POST /api/cron/pagespeed-daily
  *
  * Daily PageSpeed Insights cron. Loops all active sites and runs PSI for both
  * mobile + desktop strategies, storing one row per (site, strategy) in
@@ -80,7 +80,7 @@ async function fetchPageSpeed(
   return extractMetrics(data);
 }
 
-export async function POST(request: Request): Promise<NextResponse> {
+async function runPageSpeedCron(request: Request): Promise<NextResponse> {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
@@ -155,4 +155,14 @@ export async function POST(request: Request): Promise<NextResponse> {
     failed: results.filter((r) => r.status === "failed").length,
     results,
   });
+}
+
+// Vercel cron invokes configured paths with GET; POST remains available for an
+// authenticated manual retry through the dashboard.
+export async function GET(request: Request): Promise<NextResponse> {
+  return runPageSpeedCron(request);
+}
+
+export async function POST(request: Request): Promise<NextResponse> {
+  return runPageSpeedCron(request);
 }

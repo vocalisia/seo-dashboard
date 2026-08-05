@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { resolvePublishedArticleLiveUrl } from "@/lib/autopilot-published-url";
 import { requireApiSession } from "@/lib/api-auth";
+import { hasGscVisibility, normalizeGscPageUrl } from "@/lib/gsc-page-visibility";
 
 interface AutopilotRow {
   id: number;
@@ -24,6 +25,8 @@ interface ArticleIndexation {
   language: string;
   url: string;
   status_code: number | null;
+  gsc_impressions: number;
+  gsc_last_seen: string | null;
   indexed: boolean;
 }
 
@@ -90,8 +93,20 @@ export async function GET(req: NextRequest) {
         createdAt: run.created_at,
       });
 
+      const normalizedUrl = normalizeGscPageUrl(liveUrl);
+      const normalizedPageKey = normalizedUrl.replace(/\/$/, "");
+      const visibilityRows = await sql`
+        SELECT
+          COALESCE(SUM(impressions), 0)::int AS impressions,
+          MAX(date)::text AS last_seen
+        FROM search_console_data
+        WHERE site_id = ${siteId}
+          AND regexp_replace(page, '/+$', '') = ${normalizedPageKey}
+          AND date >= CURRENT_DATE - INTERVAL '90 days'
+      ` as { impressions: number; last_seen: string | null }[];
+      const gscImpressions = Number(visibilityRows[0]?.impressions ?? 0);
+      const gscLastSeen = visibilityRows[0]?.last_seen ?? null;
       let statusCode: number | null = null;
-      let indexed = false;
 
       try {
         const controller = new AbortController();
@@ -105,11 +120,9 @@ export async function GET(req: NextRequest) {
 
         clearTimeout(timeout);
         statusCode = response.status;
-        indexed = statusCode === 200;
       } catch {
         // Network error, timeout, etc. → not indexed
         statusCode = null;
-        indexed = false;
       }
 
       articles.push({
@@ -118,7 +131,10 @@ export async function GET(req: NextRequest) {
         language: run.language,
         url: liveUrl,
         status_code: statusCode,
-        indexed,
+        gsc_impressions: gscImpressions,
+        gsc_last_seen: gscLastSeen,
+        // GSC impressions prove Google Search visibility; HTTP 200 does not.
+        indexed: hasGscVisibility(gscImpressions),
       });
     }
 
