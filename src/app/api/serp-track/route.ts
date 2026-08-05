@@ -6,21 +6,24 @@ import { getSQL } from "@/lib/db";
 import { askAICached } from "@/lib/ai-cache";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { logError } from "@/lib/logger";
+import { searchWebNoKey, type WebSearchProvider, type WebSearchResult } from "@/lib/web-research";
 
 interface SerpEntry {
   position: number;
   url: string;
   domain: string;
   title: string;
+  source: WebSearchProvider;
 }
 
 interface SerpInsight {
   query: string;
   site_id: number;
   site_name: string;
+  result_source: WebSearchProvider;
   our_position: number | null;
   top_3_domains: string[];
-  new_competitors_top10: string[]; // domains that weren't in top 10 last week
+  new_competitors_top10: string[]; // domains absent from the previous same-source snapshot
   ai_analysis: string;
 }
 
@@ -32,29 +35,41 @@ async function ensureSerpTable(sql: ReturnType<typeof getSQL>): Promise<void> {
       query TEXT NOT NULL,
       snapshot_at DATE DEFAULT CURRENT_DATE,
       results JSONB NOT NULL,
+      source VARCHAR(32) NOT NULL DEFAULT 'legacy_unknown',
       created_at TIMESTAMP DEFAULT NOW(),
       UNIQUE(site_id, query, snapshot_at)
     )
   `;
+  await sql`ALTER TABLE competitor_serp_history ADD COLUMN IF NOT EXISTS source VARCHAR(32) NOT NULL DEFAULT 'legacy_unknown'`;
   await sql`CREATE INDEX IF NOT EXISTS idx_serp_site_query ON competitor_serp_history(site_id, query, snapshot_at DESC)`;
 }
 
-// Parse Perplexity-style structured response into entries
-function parseSerpResults(text: string): SerpEntry[] {
-  const lines = text.split("\n").filter(Boolean);
-  const entries: SerpEntry[] = [];
-  let pos = 1;
-  for (const line of lines) {
-    const urlMatch = line.match(/https?:\/\/[^\s\])"]+/);
-    if (!urlMatch) continue;
-    const url = urlMatch[0].replace(/[.,;:!?\)\]"]+$/, "");
-    let domain = "";
-    try { domain = new URL(url).hostname.replace(/^www\./, ""); } catch { continue; }
-    const title = line.replace(url, "").replace(/^[\d.\-\)\s*]+/, "").replace(/[\[\]*]/g, "").trim().slice(0, 200);
-    entries.push({ position: pos++, url, domain, title });
-    if (entries.length >= 10) break;
+type SearchProviderStates = Awaited<ReturnType<typeof searchWebNoKey>>["providers"];
+
+export function resultsForSource(results: WebSearchResult[], source: WebSearchProvider): SerpEntry[] {
+  return results
+    .filter((result) => result.providers.includes(source))
+    .sort((a, b) => (a.positions[source] ?? Number.MAX_SAFE_INTEGER) - (b.positions[source] ?? Number.MAX_SAFE_INTEGER))
+    .slice(0, 10)
+    .map((result, index) => ({
+      position: result.positions[source] ?? index + 1,
+      url: result.url,
+      domain: result.domain,
+      title: result.title,
+      source,
+    }));
+}
+
+export function selectResultSnapshot(
+  results: WebSearchResult[],
+  providers: SearchProviderStates,
+): { source: WebSearchProvider; results: SerpEntry[] } | null {
+  for (const source of ["bing_rss", "duckduckgo_html"] as const) {
+    if (providers[source] !== "ok") continue;
+    const sourceResults = resultsForSource(results, source);
+    if (sourceResults.length > 0) return { source, results: sourceResults };
   }
-  return entries;
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -95,35 +110,38 @@ export async function POST(request: Request) {
 
     for (const kw of topKw) {
       try {
-        // Use Perplexity to get current top 10 results
-        const { reply: serpText } = await askAICached({
-          cacheKey: `serp-track:${site.id}:${kw.query}:${today}`,
-          messages: [
-            { role: "system", content: "Tu es un crawler SERP. Tu retournes UNIQUEMENT les 10 premiers résultats Google pour le mot-clé donné, format strict ligne par ligne : `position. titre — https://url`. Pas de blabla, pas d'intro." },
-            { role: "user", content: `Top 10 résultats Google FR actuels pour : "${kw.query}". Retourne 10 lignes au format "1. Titre — URL" — c'est tout.` },
-          ],
-          model: "search",
-          maxTokens: 800,
-        });
-        const top10 = parseSerpResults(serpText);
-        if (top10.length === 0) continue;
+        // Source snapshot: Bing RSS first, DuckDuckGo HTML only as fallback.
+        const search = await searchWebNoKey(kw.query, "fr-FR", 20);
+        const snapshot = selectResultSnapshot(search.results, search.providers);
+        if (!snapshot) {
+          logError("serp-track.searchUnavailable", new Error("No sourced search results"), {
+            site: site.name,
+            query: kw.query,
+            providers: search.providers,
+          });
+          continue;
+        }
+        const { source: resultSource, results: sourceResults } = snapshot;
 
         // Save snapshot
         await sql`
-          INSERT INTO competitor_serp_history (site_id, query, snapshot_at, results)
-          VALUES (${site.id}, ${kw.query}, CURRENT_DATE, ${JSON.stringify(top10)})
-          ON CONFLICT (site_id, query, snapshot_at) DO UPDATE SET results = EXCLUDED.results
+          INSERT INTO competitor_serp_history (site_id, query, snapshot_at, results, source)
+          VALUES (${site.id}, ${kw.query}, CURRENT_DATE, ${JSON.stringify(sourceResults)}, ${resultSource})
+          ON CONFLICT (site_id, query, snapshot_at) DO UPDATE SET
+            results = EXCLUDED.results,
+            source = EXCLUDED.source
         `;
 
-        // Compare with last week
-        const prevRows = await sql`
+        // Compare only with the latest snapshot from the same provider.
+        const prevRows = (await sql`
           SELECT results FROM competitor_serp_history
           WHERE site_id = ${site.id}
             AND query = ${kw.query}
+            AND source = ${resultSource}
             AND snapshot_at < CURRENT_DATE
           ORDER BY snapshot_at DESC
           LIMIT 1
-        `;
+        `) as Array<{ results: SerpEntry[] }>;
         const prev: SerpEntry[] = prevRows.length > 0 ? (prevRows[0].results as SerpEntry[]) : [];
         const prevDomains = new Set(prev.map((p) => p.domain));
         let ourDomain = "";
@@ -133,20 +151,22 @@ export async function POST(request: Request) {
           if (!d || !ourDomain) return false;
           return d === ourDomain || d.endsWith(`.${ourDomain}`);
         };
-        const currDomains = top10.map((c) => c.domain);
-        const newCompetitors = currDomains.filter((d) => !prevDomains.has(d) && !isOurs(d));
+        const currDomains = sourceResults.map((c) => c.domain);
+        const newCompetitors = prevRows.length === 0
+          ? []
+          : [...new Set(currDomains.filter((d) => !prevDomains.has(d) && !isOurs(d)))];
 
-        const ourEntry = top10.find((e) => isOurs(e.domain));
+        const ourEntry = sourceResults.find((e) => isOurs(e.domain));
 
-        // AI analyse
+        // Optional AI narrative runs only after a sourced provider snapshot exists.
         let analysis = "";
         if (newCompetitors.length > 0) {
           try {
             const { reply: analysisReply } = await askAICached({
-              cacheKey: `serp-track-analysis:${site.id}:${kw.query}:${today}:${newCompetitors.join(",")}`,
+              cacheKey: `serp-track-analysis:web-source-v1:${resultSource}:${site.id}:${kw.query}:${today}:${newCompetitors.join(",")}`,
               messages: [
-                { role: "system", content: "Tu es un Head of SEO. Analyse en max 80 mots français : pourquoi ce concurrent vient de monter dans le top 10 ? quel risque pour nous ? quoi faire cette semaine ?" },
-                { role: "user", content: `Mot-clé : "${kw.query}"\nNotre site : ${site.name} (${ourEntry ? `position ${ourEntry.position}` : "hors top 10"})\nNouveaux concurrents top 10 cette semaine : ${newCompetitors.join(", ")}\nTop 3 actuel : ${top10.slice(0, 3).map((e) => `${e.position}. ${e.domain}`).join(" | ")}` },
+                { role: "system", content: "Tu es un Head of SEO. Analyse en max 80 mots français. Formule des hypothèses explicites, n'invente aucun fait, puis propose une action pour cette semaine." },
+                { role: "user", content: `Mot-clé : "${kw.query}"\nSource vérifiée du snapshot : ${resultSource}\nNotre site : ${site.name} (${ourEntry ? `position ${ourEntry.position} dans ce snapshot` : "absent du top 10 de ce snapshot"})\nNouveaux domaines depuis le précédent snapshot de même source : ${newCompetitors.join(", ")}\nTop 3 du snapshot : ${sourceResults.slice(0, 3).map((e) => `${e.position}. ${e.domain}`).join(" | ")}` },
               ],
               model: "smart",
               maxTokens: 300,
@@ -159,8 +179,9 @@ export async function POST(request: Request) {
           query: kw.query,
           site_id: site.id,
           site_name: site.name,
+          result_source: resultSource,
           our_position: ourEntry?.position ?? null,
-          top_3_domains: top10.slice(0, 3).map((e) => e.domain),
+          top_3_domains: sourceResults.slice(0, 3).map((e) => e.domain),
           new_competitors_top10: newCompetitors,
           ai_analysis: analysis,
         });
@@ -187,7 +208,8 @@ export async function GET() {
 
     // Recent insights from last 14 days
     const rows = await sql`
-      SELECT h.site_id, s.name AS site_name, h.query, h.snapshot_at, h.results
+      SELECT h.site_id, s.name AS site_name, h.query, h.snapshot_at, h.results,
+             h.source AS result_source
       FROM competitor_serp_history h
       JOIN sites s ON s.id = h.site_id
       WHERE h.snapshot_at >= CURRENT_DATE - 14

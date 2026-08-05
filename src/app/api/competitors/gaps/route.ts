@@ -3,10 +3,15 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { sortGapsByKnownVolume, toGscOpportunities, type CompetitorGap } from "@/lib/competitor-gaps";
+import { requireApiSession } from "@/lib/api-auth";
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const siteId = req.nextUrl.searchParams.get("siteId");
-  if (!siteId) {
+  const parsedSiteId = Number(siteId);
+  if (!Number.isInteger(parsedSiteId) || parsedSiteId <= 0) {
     return NextResponse.json(
       { success: false, error: "siteId required" },
       { status: 400 }
@@ -29,7 +34,7 @@ export async function GET(req: NextRequest) {
       const competitorRows = await sql`
         SELECT cr.keyword, cr.competitor_domain, cr.competitor_position::float, cr.estimated_volume
         FROM competitor_research cr
-        WHERE cr.site_id = ${parseInt(siteId, 10)}
+        WHERE cr.site_id = ${parsedSiteId}
           AND cr.competitor_position <= 10
         ORDER BY cr.estimated_volume DESC
         LIMIT 100
@@ -41,7 +46,7 @@ export async function GET(req: NextRequest) {
         const ourPositions = await sql`
           SELECT query, SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos
           FROM search_console_query_data
-          WHERE site_id = ${parseInt(siteId, 10)}
+          WHERE site_id = ${parsedSiteId}
             AND query = ANY(${keywords})
             AND date >= NOW() - INTERVAL '30 days'
           GROUP BY query
@@ -64,7 +69,7 @@ export async function GET(req: NextRequest) {
               keyword: row.keyword,
               our_position: ourPos,
               competitor_positions: [],
-              volume: row.estimated_volume,
+              volume: Number(row.estimated_volume) > 0 ? Number(row.estimated_volume) : null,
               source: "competitor_cache",
             };
           }
@@ -87,7 +92,7 @@ export async function GET(req: NextRequest) {
         SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS our_position,
         SUM(impressions)::int AS impressions
       FROM search_console_query_data
-      WHERE site_id = ${parseInt(siteId, 10)}
+      WHERE site_id = ${parsedSiteId}
         AND date >= NOW() - INTERVAL '30 days'
         AND query IS NOT NULL
       GROUP BY query

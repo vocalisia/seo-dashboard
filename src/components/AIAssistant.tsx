@@ -343,14 +343,14 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
             </div>
           )}
 
-          {/* E-E-A-T tab: Perplexity research, Gemini writing */}
+          {/* E-E-A-T tab: sourced no-key research and deterministic brief */}
           {activeTab === "eeat" && (
             <div className="space-y-3">
               <div className="bg-yellow-900/30 border border-yellow-700/40 rounded p-2 text-xs text-yellow-200">
-                🏆 <strong>Pipeline E-E-A-T 2 phases</strong>:<br />
-                1️⃣ Perplexity → recherche sources réelles 2026<br />
-                2️⃣ Gemini → rédaction avec citations<br />
-                ⏱️ ~60-90s · Article 1500-2500 mots avec sources URL
+                🏆 <strong>Brief E-E-A-T sourcé sans API</strong>:<br />
+                1️⃣ Recherche publique Bing RSS + DuckDuckGo<br />
+                2️⃣ Preuves reliées aux URL et plan éditorial vérifiable<br />
+                Aucun volume, backlink ou classement Google inventé
               </div>
               <label className="text-xs text-gray-400">Sujet de l&apos;article</label>
               <textarea
@@ -377,16 +377,16 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
                 className="w-full py-2 rounded bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 disabled:opacity-50 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2"
               >
                 {loading ? <Loader2 size={14} className="animate-spin" /> : null}
-                {loading ? "Recherche + rédaction..." : "Générer article E-E-A-T"}
+                {loading ? "Recherche des sources..." : "Créer le brief E-E-A-T sourcé"}
               </button>
             </div>
           )}
 
-          {/* Research tab — Perplexity sonar-pro live SERP */}
+          {/* Research tab — no-key public web research */}
           {activeTab === "research" && (
             <div className="space-y-3">
               <div className="bg-blue-900/30 border border-blue-700/40 rounded p-2 text-xs text-blue-200">
-                🌐 <strong>Perplexity sonar-pro</strong> — accès SERP Google live + sources URL citées. Idéal: concurrents, mots-clés tendance, contenu récent.
+                🌐 <strong>Recherche web sourcée sans API</strong> — Bing RSS + DuckDuckGo, crawl sécurisé et URL citées. Les positions restent propres à chaque source et ne sont jamais présentées comme Google.
               </div>
               <label className="text-xs text-gray-400">Question / recherche</label>
               <textarea
@@ -397,10 +397,10 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
               />
               <div className="flex flex-wrap gap-1">
                 {[
-                  "Top 10 SERP pour [mot-clé]",
+                  "Résultats publics pour [mot-clé]",
                   "Concurrents directs de [marque]",
                   "Articles tendance sur [sujet] 2026",
-                  "Backlinks visibles de [domaine]",
+                  "Pages et sources visibles de [domaine]",
                 ].map((q) => (
                   <button
                     key={q}
@@ -417,7 +417,7 @@ export function AIAssistant({ context, defaultTab = "write" }: AIAssistantProps)
                 className="w-full py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium transition-colors flex items-center justify-center gap-2"
               >
                 {loading ? <Loader2 size={14} className="animate-spin" /> : null}
-                Rechercher (live)
+                Rechercher avec sources
               </button>
             </div>
           )}

@@ -6,6 +6,10 @@ import { getSQL } from "@/lib/db";
 import { z } from "zod";
 import { createHash } from "crypto";
 import { logError } from "@/lib/logger";
+import { runWebResearch, type WebResearchReport } from "@/lib/web-research";
+import { requireApiSession } from "@/lib/api-auth";
+
+const GROUNDED_RESEARCH_CACHE_VERSION = "web-research-v1";
 
 const schema = z.object({
   action: z.enum(["write", "translate", "image", "analyze", "research", "competitor", "eeat"]),
@@ -33,13 +37,95 @@ async function ensureCacheTable(sql: ReturnType<typeof getSQL>): Promise<void> {
   `;
 }
 
+function isGroundedResearchAction(action: string): boolean {
+  return action === "research" || action === "competitor" || action === "eeat";
+}
+
 function makeCacheKey(action: string, prompt: string, context?: string): string {
-  return createHash("sha256").update(`${action}|${prompt}|${context ?? ""}`).digest("hex");
+  const version = isGroundedResearchAction(action) ? `${GROUNDED_RESEARCH_CACHE_VERSION}|` : "";
+  return createHash("sha256").update(`${version}${action}|${prompt}|${context ?? ""}`).digest("hex");
+}
+
+function parseCachedResearch(response: string): WebResearchReport | null {
+  try {
+    const parsed = JSON.parse(response) as Partial<WebResearchReport>;
+    if (
+      typeof parsed.answer !== "string"
+      || !["complete", "partial", "unavailable"].includes(parsed.data_status ?? "")
+      || !Array.isArray(parsed.sources)
+      || !Array.isArray(parsed.evidence)
+    ) {
+      return null;
+    }
+    return parsed as WebResearchReport;
+  } catch {
+    return null;
+  }
+}
+
+function researchPayload(report: WebResearchReport, cached: boolean, cachedAt?: string) {
+  const success = report.data_status !== "unavailable";
+  return {
+    success,
+    ...(!success ? { error: "Aucune source publique vérifiable n'a pu être récupérée." } : {}),
+    reply: report.answer,
+    cached,
+    ...(cachedAt ? { cached_at: cachedAt } : {}),
+    sources: report.sources,
+    evidence: report.evidence,
+    data_status: report.data_status,
+  };
+}
+
+function makeResearchQuery(prompt: string, context?: string): string {
+  return [prompt.trim(), context?.trim() ? `Contexte: ${context.trim()}` : ""]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .slice(0, 300);
+}
+
+function buildGroundedEeatBrief(
+  topic: string,
+  tone: string | undefined,
+  report: WebResearchReport,
+): string {
+  const claims = report.evidence.slice(0, 6).map((item) => `- ${item.claim} [${item.source_id}]`);
+  const headings = [...new Set(report.sources.flatMap((source) => source.headings))]
+    .filter(Boolean)
+    .slice(0, 8);
+  return [
+    `# ${topic.trim()}`,
+    "",
+    `**Brief E-E-A-T sourcé — ton : ${tone ?? "expert professionnel"}**`,
+    "",
+    "## Réponse documentée",
+    ...(claims.length > 0 ? claims : ["Les sources récupérées ne permettent pas encore une synthèse factuelle suffisante."]),
+    "",
+    "## Plan éditorial recommandé",
+    ...(headings.length > 0 ? headings.map((heading) => `- ${heading}`) : [
+      "- Réponse courte à la question principale",
+      "- Méthode et critères vérifiables",
+      "- Limites et cas particuliers",
+      "- Questions fréquentes",
+    ]),
+    "",
+    "## Sources à citer",
+    ...report.sources.map((source) => `- [${source.id}] ${source.title} — ${source.url}`),
+    "",
+    "_Ce brief n'invente ni volume, ni difficulté, ni backlink, ni position Google._",
+  ].join("\n");
 }
 
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   try {
     const body = schema.parse(await req.json());
+    const cacheContext = [body.context, body.tone ? `tone:${body.tone}` : "", body.targetLang ? `lang:${body.targetLang}` : ""]
+      .filter(Boolean)
+      .join("|");
 
     if (body.action === "image") {
       const url = await generateImage(body.prompt);
@@ -50,7 +136,7 @@ export async function POST(req: NextRequest) {
     const sql = getSQL();
     try {
       await ensureCacheTable(sql);
-      const cacheKey = makeCacheKey(body.action, body.prompt, body.context);
+      const cacheKey = makeCacheKey(body.action, body.prompt, cacheContext);
       const cached = (await sql`
         SELECT response, cached_at FROM ai_widget_cache
         WHERE cache_key = ${cacheKey}
@@ -58,16 +144,65 @@ export async function POST(req: NextRequest) {
         LIMIT 1
       `) as CacheRow[];
       if (cached.length > 0) {
-        return NextResponse.json({
-          success: true,
-          reply: cached[0].response,
-          cached: true,
-          cached_at: cached[0].cached_at,
-        });
+        if (isGroundedResearchAction(body.action)) {
+          const report = parseCachedResearch(cached[0].response);
+          if (report && report.data_status !== "unavailable") {
+            return NextResponse.json(researchPayload(report, true, cached[0].cached_at));
+          }
+        } else {
+          return NextResponse.json({
+            success: true,
+            reply: cached[0].response,
+            cached: true,
+            cached_at: cached[0].cached_at,
+          });
+        }
       }
     } catch (cacheErr) {
-      // Cache miss / table not ready — fall through to AI call
+      // Cache miss / table not ready — fall through to the requested provider.
       logError("ai.assistant.cacheLookup", cacheErr, { action: body.action });
+    }
+
+    if (isGroundedResearchAction(body.action)) {
+      try {
+        const researched = await runWebResearch(makeResearchQuery(body.prompt, body.context), {
+          locale: "fr-FR",
+          maxSources: body.action === "research" ? 5 : 8,
+        });
+        const report = body.action === "eeat"
+          ? { ...researched, answer: buildGroundedEeatBrief(body.prompt, body.tone, researched) }
+          : researched;
+
+        // Do not cache provider outages so a later request retries public search.
+        if (report.data_status !== "unavailable") {
+          try {
+            const cacheKey = makeCacheKey(body.action, body.prompt, cacheContext);
+            await sql`
+              INSERT INTO ai_widget_cache (cache_key, action, prompt, context, response)
+              VALUES (${cacheKey}, ${body.action}, ${body.prompt}, ${body.context ?? null}, ${JSON.stringify(report)})
+              ON CONFLICT (cache_key) DO UPDATE
+                SET response = EXCLUDED.response, cached_at = NOW()
+            `;
+          } catch { /* cache write failure shouldn't block sourced research */ }
+        }
+
+        return NextResponse.json(
+          researchPayload(report, false),
+          { status: report.data_status === "unavailable" ? 502 : 200 },
+        );
+      } catch (researchErr) {
+        const msg = researchErr instanceof Error ? researchErr.message : "Web research unavailable";
+        return NextResponse.json({
+          success: false,
+          error: "Recherche web temporairement indisponible.",
+          reply: "**Recherche web temporairement indisponible.** Aucune source publique vérifiable n'a pu être récupérée. Réessaie dans quelques instants.",
+          cached: false,
+          sources: [],
+          evidence: [],
+          data_status: "unavailable",
+          error_detail: msg,
+        }, { status: 502 });
+      }
     }
 
     let systemPrompt = "";
@@ -91,16 +226,6 @@ export async function POST(req: NextRequest) {
     } else if (body.action === "analyze") {
       systemPrompt = `Tu es un consultant SEO senior. Analyse les données fournies et donne 3-5 recommandations actionnables et priorisées. Format markdown concis. Contexte: ${body.context ?? "aucun"}.`;
       model = "smart";
-    } else if (body.action === "research") {
-      systemPrompt = `Tu es un expert SEO avec accès SERP temps réel. Recherche les données 2026 actuelles. Cite tes sources (URLs). Réponds en markdown structuré FR. Contexte: ${body.context ?? "aucun"}.`;
-      model = "search";
-    } else if (body.action === "competitor") {
-      systemPrompt = `Tu es un analyste concurrentiel SEO avec accès web temps réel. Identifie concurrents directs (top 10 SERP), extrait leurs mots-clés, contenu récent, backlinks visibles, faiblesses. Cite URLs. Format markdown FR. Contexte: ${body.context ?? "aucun"}.`;
-      model = "search";
-    } else if (body.action === "eeat") {
-      // E-E-A-T pipeline kept for completeness; same cache-first applied above
-      systemPrompt = "Tu es rédacteur SEO senior expert E-E-A-T. Tu cites systématiquement tes sources. Tu n'inventes jamais de faits.";
-      model = "smart";
     }
 
     try {
@@ -115,7 +240,7 @@ export async function POST(req: NextRequest) {
 
       // Persist to cache for future calls
       try {
-        const cacheKey = makeCacheKey(body.action, body.prompt, body.context);
+        const cacheKey = makeCacheKey(body.action, body.prompt, cacheContext);
         await sql`
           INSERT INTO ai_widget_cache (cache_key, action, prompt, context, response)
           VALUES (${cacheKey}, ${body.action}, ${body.prompt}, ${body.context ?? null}, ${reply})
@@ -129,7 +254,7 @@ export async function POST(req: NextRequest) {
       // AI call failed — return graceful fallback (instead of raw error)
       const msg = aiErr instanceof AIProviderError ? aiErr.message : (aiErr instanceof Error ? aiErr.message : "AI unavailable");
       const friendly = msg.includes("fallback is disabled")
-        ? "**Fallback IA local/cache.** Le dashboard privilegie Gemini/Perplexity et le cache. Aucun appel Anthropic/OpenAI n'est lance par defaut."
+        ? "**Action générative indisponible.** Recherche, Concurrents et brief E-E-A-T restent disponibles sans API; cette action de rédaction ou traduction nécessite un provider configuré ou une réponse déjà en cache."
         : msg.includes("Crédit") || msg.includes("ExceededBudget") || msg.includes("budget")
           ? "**Credit AI epuise.** Cette analyse n'est pas encore en cache. Relance via cache local ou change de provider seulement si necessaire."
           : `**Erreur AI temporaire**: ${msg}. Reessaie dans quelques secondes ou utilise un autre provider.`;

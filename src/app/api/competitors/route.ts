@@ -6,6 +6,8 @@ import { askAI, AIProviderError } from "@/lib/ai";
 import { requireApiSession } from "@/lib/api-auth";
 import { logError } from "@/lib/logger";
 import { hasSufficientCompetitorResearch, prepareCompetitorResearchRows } from "@/lib/competitor-research-guard";
+import { runWebResearch } from "@/lib/web-research";
+import { buildPublicCompetitorResearch } from "@/lib/competitor-public-research";
 
 interface Site {
   id: number;
@@ -24,7 +26,7 @@ interface ResearchResult {
     competitor_position: number;
     difficulty: string;
     intent: string;
-    source?: "ai_estimate" | "keyword_planner" | "cache" | "fallback_gsc_signal";
+    source?: "ai_estimate" | "keyword_planner" | "cache" | "fallback_gsc_signal" | "public_web";
   }[];
   ourKeywordsCount: number;
 }
@@ -51,7 +53,7 @@ function formatAIError(err: unknown): string {
   return "AI research failed — réessaie";
 }
 
-async function runResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
+export async function runLegacyAIResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
   const ourKeywords = (await sql`
     SELECT query,
            SUM(clicks) AS clicks,
@@ -241,6 +243,57 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
   };
 }
 
+function hostnameFromSiteUrl(raw: string): string {
+  const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+  return url.hostname.toLowerCase().replace(/^www\./, "");
+}
+
+export async function runResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
+  const [ourKeywordRows, siteRows] = await Promise.all([
+    sql`
+      SELECT query
+      FROM search_console_query_data
+      WHERE site_id = ${site.id}
+        AND date >= NOW() - INTERVAL '90 days'
+        AND query IS NOT NULL
+      GROUP BY query
+      ORDER BY SUM(impressions) DESC
+      LIMIT 100
+    `,
+    sql`SELECT url FROM sites`,
+  ]);
+  const ourKeywords = ourKeywordRows as Array<{ query: string }>;
+  const portfolioRows = siteRows as Array<{ url: string }>;
+  const ownDomain = hostnameFromSiteUrl(site.url);
+  const researchQuery = ourKeywords.find((row) => row.query.trim().length >= 2)?.query.trim()
+    ?? site.name.trim()
+    ?? ownDomain;
+  const report = await runWebResearch(researchQuery, {
+    locale: "fr-FR",
+    maxSources: 8,
+  });
+  if (report.data_status === "unavailable") {
+    throw new Error("Public competitor research providers are unavailable");
+  }
+  const portfolioDomains = portfolioRows
+    .map((row) => {
+      try { return hostnameFromSiteUrl(row.url); } catch { return ""; }
+    })
+    .filter(Boolean);
+  const extracted = buildPublicCompetitorResearch(report, {
+    ownDomain,
+    portfolioDomains,
+    ownKeywords: ourKeywords.map((row) => row.query),
+    maxCompetitors: 8,
+    maxGaps: 30,
+  });
+  return {
+    competitors: extracted.competitors,
+    gaps: extracted.gaps,
+    ourKeywordsCount: ourKeywords.length,
+  };
+}
+
 async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
   const rows = (await sql`
     SELECT query
@@ -264,11 +317,11 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
  * POST /api/competitors
  * body: { site_id: number | "all" }
  *
- * Uses the unified Gemini/Perplexity router to:
- * 1. Find 5-10 direct competitors
- * 2. Extract their top keywords with estimated volume
- * 3. Compare with our GSC keywords
- * 4. Return gaps (keywords where competitor ranks but we don't, volume >= 1000)
+ * Active flow:
+ * 1. Discover public competitor pages through the no-key web engine
+ * 2. Extract visible title/H1/H2 phrases
+ * 3. Exclude exact first-party GSC queries
+ * 4. Keep volume, difficulty and position unknown until a dedicated source validates them
  *
  * site_id === "all" → loops through all active sites and aggregates.
  */
@@ -475,7 +528,8 @@ export async function POST(req: NextRequest) {
           gaps: cached.gaps,
           our_keywords_count: cached.ourKeywordsCount,
           total_gaps: cached.gaps.length,
-          min_volume: 1000,
+          min_volume: null,
+          volume_status: "source_required",
         });
       }
     }
@@ -496,7 +550,8 @@ export async function POST(req: NextRequest) {
             gaps: preserved.gaps,
             our_keywords_count: preserved.ourKeywordsCount,
             total_gaps: preserved.gaps.length,
-            min_volume: 1000,
+            min_volume: null,
+            volume_status: "source_required",
           });
         }
       }
@@ -509,7 +564,8 @@ export async function POST(req: NextRequest) {
         gaps: result.gaps,
         our_keywords_count: result.ourKeywordsCount,
         total_gaps: result.gaps.length,
-        min_volume: 1000,
+        min_volume: null,
+        volume_status: "source_required",
       });    } catch (err) {
       // Fallback to recent cache only. Older cache must not look fresh.
       const cached = await loadCachedResearch(sql, site.id, 60);
@@ -523,7 +579,8 @@ export async function POST(req: NextRequest) {
           gaps: cached.gaps,
           our_keywords_count: cached.ourKeywordsCount,
           total_gaps: cached.gaps.length,
-          min_volume: 1000,
+          min_volume: null,
+          volume_status: "source_required",
         });
       }
       return NextResponse.json({

@@ -30,7 +30,7 @@ interface KeywordGap {
   competitor_position: number;
   difficulty: string;
   intent: string;
-  source?: "ai_estimate" | "cache" | "fallback_gsc_signal";
+  source?: "ai_estimate" | "cache" | "fallback_gsc_signal" | "public_web";
 }
 
 interface ResearchResult {
@@ -68,6 +68,7 @@ function gapSourceLabel(source?: KeywordGap["source"]): string {
   if (source === "fallback_gsc_signal") return "Signal GSC";
   if (source === "cache") return "Cache";
   if (source === "ai_estimate") return "IA";
+  if (source === "public_web") return "Web public";
   return "Estime";
 }
 
@@ -273,7 +274,7 @@ export default function CompetitorsPage() {
       const nextCached = { gaps: d.gaps ?? [], competitors: d.competitors ?? [] };
       setCached(nextCached);
       if (nextCached.gaps.length === 0 && nextCached.competitors.length === 0) {
-        setError("Aucune analyse concurrentielle en cache pour ce site. Utilise « Rescan IA live » (avec confirmation) pour lancer une nouvelle analyse.");
+        setError("Aucune analyse concurrentielle en cache pour ce site. Utilise « Rescan web sourcé » pour lancer une nouvelle recherche publique.");
         return;
       }
 
@@ -464,7 +465,6 @@ export default function CompetitorsPage() {
 
   async function refreshGapsFromAI() {
     if (!selectedSite || selectedSite === "all" || gapsRefreshing) return;
-    if (!confirm("Relancer l'audit concurrentiel via IA (consomme du crédit AI) ?")) return;
     setGapsRefreshing(true);
     try {
       const res = await fetch("/api/competitors", {
@@ -474,7 +474,7 @@ export default function CompetitorsPage() {
       });
       const d = await res.json() as { success: boolean; error?: string };
       if (d.success) {
-        showNotification("success", "Audit relancé. Rechargement des gaps...");
+        showNotification("success", "Recherche web relancée. Rechargement des gaps...");
         await fetchGapRows();
       } else {
         showNotification("error", d.error || "Échec relance audit");
@@ -717,9 +717,9 @@ export default function CompetitorsPage() {
                 </div>
                 <button type="button" onClick={() => void refreshGapsFromAI()} disabled={gapsRefreshing || !selectedSite || selectedSite === "all"}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-600/20 border border-orange-600/40 text-orange-300 hover:bg-orange-600/40 disabled:opacity-40 disabled:cursor-not-allowed transition"
-                  title="Relancer l'audit IA pour avoir les gaps à jour">
+                  title="Relancer la recherche web publique pour actualiser les gaps">
                   {gapsRefreshing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                  {gapsRefreshing ? "Audit en cours..." : "Lancer audit IA live"}
+                  {gapsRefreshing ? "Recherche en cours..." : "Actualiser par le web"}
                 </button>
                 <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
                   className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none w-48">
@@ -790,7 +790,7 @@ export default function CompetitorsPage() {
                                     rel="noopener noreferrer"
                                     className="inline-flex items-center gap-1 text-xs bg-gray-800 hover:bg-gray-700 text-blue-400 px-2 py-0.5 rounded transition-colors"
                                   >
-                                    {cp.domain} <span className="text-green-400">#{cp.pos}</span>
+                                    {cp.domain} {cp.pos > 0 && <span className="text-green-400">#{cp.pos}</span>}
                                     <ExternalLink className="w-2.5 h-2.5 opacity-60" />
                                   </a>
                                 ))
@@ -860,22 +860,18 @@ export default function CompetitorsPage() {
                   : "Voir l'analyse (cache)"}
               </button>
               <button
-                onClick={() => {
-                  if (confirm("Forcer un nouveau scan IA live peut consommer du quota IA configuré. Continuer ?")) {
-                    void runResearch(true);
-                  }
-                }}
+                onClick={() => void runResearch(true)}
                 disabled={loading || !selectedSite}
                 className="flex items-center gap-2 px-4 py-2 bg-orange-600/80 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors border border-orange-500/40"
-                title="Force un nouvel appel IA live et ignore le cache (consomme du quota)"
+                title="Relance la découverte web publique et ignore le cache"
               >
                 <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-                Rescan IA live
+                Rescan web sourcé
               </button>
             </div>
             <p className="text-xs text-gray-400">
               <strong>Voir l&apos;analyse (cache)</strong> = lit les données stockées (rapide, sans appel IA).
-              <strong className="ml-2">Rescan IA live</strong> = nouvel appel via le provider IA disponible (OpenAI, Anthropic, Mammouth, Gemini ou Perplexity selon env), puis stockage du resultat.
+              <strong className="ml-2">Rescan web sourcé</strong> = recherche publique sans clé, puis extraction des expressions visibles dans les titres et H1/H2 concurrents.
               Le cache expire automatiquement après 60 jours.
             </p>
           </div>
@@ -903,7 +899,7 @@ export default function CompetitorsPage() {
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="text-sm text-gray-400">Keyword Gaps trouvés</div>
                 <div className="text-3xl font-bold text-purple-400 mt-1">{gaps.length}</div>
-                <div className="text-xs text-gray-400 mt-1">volumes estimes, source indiquee par ligne</div>
+                <div className="text-xs text-gray-400 mt-1">{hasVolumes ? "volumes estimés, source indiquée par ligne" : "expressions visibles, sans volume inventé"}</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="text-sm text-gray-400">Volume total ciblable</div>
@@ -1167,7 +1163,7 @@ export default function CompetitorsPage() {
                 {!hasVolumes && (
                   <div className="flex items-start gap-2 text-xs text-gray-400 bg-gray-800/60 rounded-lg px-3 py-2">
                     <span className="text-blue-400 flex-shrink-0">i</span>
-                    Volumes source non importes pour ces gaps. Le tableau garde les concurrents et positions; importe les volumes Keyword Planner/DataForSEO pour les valider.
+                    Expressions extraites des titres et H1/H2 publics. Volumes, difficulté et positions restent absents tant qu&apos;une source dédiée ne les valide pas.
                   </div>
                 )}
               </div>
@@ -1224,9 +1220,11 @@ export default function CompetitorsPage() {
                             )}
                           </td>
                           <td className="px-5 py-3 text-right">
-                            <span className={(g.competitor_position ?? 99) <= 5 ? "text-green-400" : (g.competitor_position ?? 99) <= 10 ? "text-yellow-400" : "text-gray-400"}>
-                              {g.competitor_position ?? "—"}
-                            </span>
+                            {(g.competitor_position ?? 0) > 0
+                              ? <span className={(g.competitor_position ?? 99) <= 5 ? "text-green-400" : (g.competitor_position ?? 99) <= 10 ? "text-yellow-400" : "text-gray-400"}>
+                                  {g.competitor_position}
+                                </span>
+                              : <span className="text-gray-600">—</span>}
                           </td>
                           <td className="px-5 py-3 text-center">
                             <span className={`text-xs font-medium ${DIFF_COLOR[g.difficulty] ?? "text-gray-400"}`}>
