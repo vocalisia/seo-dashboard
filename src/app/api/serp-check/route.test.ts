@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResearchSource } from "@/lib/web-research";
 
 const mocks = vi.hoisted(() => ({
   runWebResearch: vi.fn(),
@@ -10,7 +11,7 @@ vi.mock("@/lib/api-auth", () => ({
 }));
 vi.mock("@/lib/web-research", () => ({ runWebResearch: mocks.runWebResearch }));
 
-import { POST } from "./route";
+import { POST, sourceMatchesExactQuery } from "./route";
 
 function request(body: unknown): NextRequest {
   return new NextRequest("http://dashboard.test/api/serp-check", {
@@ -37,6 +38,7 @@ function report(status: "complete" | "unavailable" = "complete") {
       snippet: "",
       providers: ["bing_rss"],
       positions: { bing_rss: 1 },
+      matched_queries: ["audit SEO"],
       fetch_status: "ok",
       description: "",
       headings: [],
@@ -46,6 +48,23 @@ function report(status: "complete" | "unavailable" = "complete") {
     }],
   };
 }
+
+const expandedQuerySource = {
+  id: "S1",
+  url: "https://example.org/",
+  domain: "example.org",
+  title: "Example",
+  snippet: "",
+  providers: ["bing_rss"],
+  positions: { bing_rss: 1 },
+  matched_queries: ["audit seo définition"],
+  fetch_status: "search_only",
+  description: "",
+  headings: [],
+  schema_types: [],
+  word_count: 0,
+  excerpt: "",
+} satisfies ResearchSource;
 
 describe("sourced SERP check", () => {
   beforeEach(() => mocks.runWebResearch.mockReset());
@@ -72,5 +91,15 @@ describe("sourced SERP check", () => {
     const response = await POST(request({ query: "audit SEO" }));
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ success: false, data_status: "unavailable", sources: [] });
+  });
+});
+
+describe("exact SERP query boundary", () => {
+  it("does not claim visibility from an expanded query", () => {
+    expect(sourceMatchesExactQuery(expandedQuerySource, "audit seo")).toBe(false);
+  });
+
+  it("normalizes case and whitespace for the exact query only", () => {
+    expect(sourceMatchesExactQuery(expandedQuerySource, "  AUDIT SEO DÉFINITION ")).toBe(true);
   });
 });

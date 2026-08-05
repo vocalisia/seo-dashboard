@@ -74,14 +74,20 @@ describe("competitor research without API", () => {
       sql as never,
     );
 
-    expect(mocks.runWebResearch).toHaveBeenCalledWith("bourse suisse", { locale: "fr-FR", maxSources: 8 });
+    expect(mocks.runWebResearch).toHaveBeenCalledWith("bourse suisse", {
+      locale: "fr-FR",
+      maxSources: 12,
+      maxQueries: 8,
+      depth: "deep",
+      focus: "competitors",
+    });
     expect(mocks.askAI).not.toHaveBeenCalled();
     expect(result.competitors.map((item) => item.domain).sort()).toEqual(["cash.ch", "zonebourse.com"]);
     expect(result.gaps.length).toBeGreaterThanOrEqual(3);
     expect(result.gaps.every((gap) =>
       gap.source === "public_web" &&
-      gap.volume === 0 &&
-      gap.competitor_position === 0
+      gap.volume === null &&
+      gap.competitor_position === null
     )).toBe(true);
   });
 });

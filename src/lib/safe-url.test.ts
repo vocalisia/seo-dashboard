@@ -9,6 +9,10 @@ describe("parsePublicHttpUrl", () => {
     "http://10.0.0.1",
     "http://192.168.1.1",
     "http://[::1]/",
+    "http://[::ffff:127.0.0.1]/",
+    "http://[::ffff:7f00:1]/",
+    "https://example.com:8443/admin",
+    "https://attacker.test/",
     "file:///etc/passwd",
     "https://user:pass@example.com",
   ])("rejects unsafe URL %s", (raw) => {

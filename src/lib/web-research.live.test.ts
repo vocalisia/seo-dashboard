@@ -45,8 +45,8 @@ describe("live no-key web research", () => {
     expect(extracted.competitors.length).toBeGreaterThan(0);
     expect(extracted.gaps.length).toBeGreaterThan(0);
     expect(extracted.gaps.every((gap) =>
-      gap.volume === 0 &&
-      gap.competitor_position === 0 &&
+      gap.volume === null &&
+      gap.competitor_position === null &&
       gap.source === "public_web" &&
       /^https?:\/\//.test(gap.source_url)
     )).toBe(true);

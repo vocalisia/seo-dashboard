@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { WebSearchResult } from "@/lib/web-research";
 
 vi.mock("@/lib/db", () => ({ getSQL: vi.fn() }));
-vi.mock("@/lib/ai-cache", () => ({ askAICached: vi.fn() }));
 vi.mock("@/lib/cron-auth", () => ({ requireCronOrUser: vi.fn() }));
+vi.mock("@/lib/api-auth", () => ({ requireApiSession: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logError: vi.fn() }));
 
-import { resultsForSource, selectResultSnapshot } from "./route";
+import { buildLocalMovementAnalysis, resultsForSource, selectResultSnapshot } from "./route";
 
 function result(
   url: string,
@@ -46,5 +46,28 @@ describe("SERP snapshot source boundaries", () => {
     });
     expect(snapshot?.source).toBe("bing_rss");
     expect(snapshot?.results.map((entry) => entry.source)).toEqual(["bing_rss", "bing_rss"]);
+  });
+
+  it("builds a deterministic sourced movement analysis without an AI provider", () => {
+    const analysis = buildLocalMovementAnalysis({
+      query: "audit seo",
+      resultSource: "bing_rss",
+      ourPosition: null,
+      newCompetitors: ["new.example"],
+      topDomains: ["one.example", "two.example"],
+    });
+    expect(analysis).toContain("Snapshot bing_rss");
+    expect(analysis).toContain("new.example");
+    expect(analysis).toContain("Action :");
+  });
+
+  it("does not invent a movement when no new competitor was observed", () => {
+    expect(buildLocalMovementAnalysis({
+      query: "audit seo",
+      resultSource: "bing_rss",
+      ourPosition: 4,
+      newCompetitors: [],
+      topDomains: ["one.example"],
+    })).toBe("");
   });
 });

@@ -367,6 +367,11 @@ export async function ensureOpportunitySchema() {
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS why_now JSONB`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS revenue_range JSONB`;
   await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS domain_available JSONB`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS metric_status VARCHAR(40)`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS signal_sources JSONB`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS engine_version VARCHAR(40)`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS volume_source VARCHAR(80)`;
+  await sql`ALTER TABLE market_opportunities ADD COLUMN IF NOT EXISTS gsc_impressions_30d INTEGER`;
 
   await sql`CREATE INDEX IF NOT EXISTS idx_market_opportunities_confidence ON market_opportunities(confidence_score DESC, created_at DESC)`;
 

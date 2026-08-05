@@ -21,7 +21,7 @@ vi.mock("@/lib/web-research", () => ({
   runWebResearch: mocks.runWebResearch,
 }));
 
-import { POST } from "./route";
+import { POST, researchDocumentId } from "./route";
 
 function request(body: unknown): NextRequest {
   return new NextRequest("http://dashboard.test/api/research", {
@@ -78,6 +78,13 @@ describe("research API truth and cache contracts", () => {
     expect(response.status).toBe(400);
     expect(mocks.sql).not.toHaveBeenCalled();
     expect(mocks.runWebResearch).not.toHaveBeenCalled();
+  });
+
+  it("uses a stable URL hash instead of report-local S1 identifiers", () => {
+    const first = researchDocumentId("https://example.com/audit");
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+    expect(researchDocumentId("https://example.com/audit")).toBe(first);
+    expect(researchDocumentId("https://example.com/other")).not.toBe(first);
   });
 
   it("returns a fresh cache entry without launching web research", async () => {

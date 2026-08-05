@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAICached } from "@/lib/ai-cache";
 import { logError } from "@/lib/logger";
+import { requireApiSession } from "@/lib/api-auth";
 import {
   buildFallbackClusters,
-  normalizeClusters,
   normalizePriority,
-  parseAIClusters,
   type KeywordStats,
 } from "./utils";
 
@@ -21,10 +19,6 @@ interface Cluster {
   priority: string;
 }
 
-interface AIClustersResponse {
-  clusters: Cluster[];
-}
-
 interface ClusterWithStats {
   cluster_name: string;
   keywords: string[];
@@ -36,11 +30,12 @@ interface ClusterWithStats {
 }
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   try {
     const { searchParams } = new URL(req.url);
     const siteId = searchParams.get("site_id");
     const cached = searchParams.get("cached");
-    const useAI = searchParams.get("ai") === "true";
 
     if (!siteId) {
       return NextResponse.json({ error: "site_id required" }, { status: 400 });
@@ -132,22 +127,18 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const keywords = keywordData.map((r) => r.query);
-
     const fallbackClusters = buildFallbackClusters(keywordData);
+    const enrichedClusters = enrichClusters(fallbackClusters, keywordData);
+    await replaceStoredClusters(sql, siteIdNum, enrichedClusters);
 
-    if (!useAI) {
-      const enrichedClusters = enrichClusters(fallbackClusters, keywordData);
-      await replaceStoredClusters(sql, siteIdNum, enrichedClusters);
+    return NextResponse.json({
+      clusters: enrichedClusters,
+      summary: buildSummary(enrichedClusters),
+      cached: false,
+      source: "local",
+    });
 
-      return NextResponse.json({
-        clusters: enrichedClusters,
-        summary: buildSummary(enrichedClusters),
-        cached: false,
-        source: "local",
-      });
-    }
-
+    /* Legacy AI clustering removed from execution; local GSC clustering is authoritative.
     // 2. Optional AI clustering. Disabled by default to avoid hidden API costs.
     const prompt = `Group these keywords into 5-15 semantic topic clusters. Each cluster should represent a coherent topic/theme.
 
@@ -197,6 +188,7 @@ Rules:
       cached: false,
       source: "ai",
     });
+    */
   } catch (err) {
     logError("keyword-clusters", err);
     const message =

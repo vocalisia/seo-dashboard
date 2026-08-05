@@ -3,7 +3,7 @@ import { requireApiSession } from "@/lib/api-auth";
 import { testRichResults } from "@/lib/rich-results";
 import { ensureSchema } from "@/lib/db";
 import { logError } from "@/lib/logger";
-import { assertPublicHttpUrl, assertSameSiteUrl, fetchPublicUrl } from "@/lib/safe-url";
+import { fetchResearchText, parseResearchPublicUrl, parseSameSiteResearchUrl } from "@/lib/web-research-fetch";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -156,12 +156,13 @@ function parseJsonLd(html: string): { types: string[]; errors: string[]; warning
 
 async function fetchWithTimeout(url: string, timeoutMs = 5000): Promise<string | null> {
   try {
-    const res = await fetchPublicUrl(url, {
+    const res = await fetchResearchText(url, {
       signal: AbortSignal.timeout(timeoutMs),
       headers: { "User-Agent": "SEO-Dashboard-Auditor/1.0" },
+      maxBytes: 1_000_000,
     });
-    if (!res.ok) return null;
-    return await res.text();
+    if (res.status < 200 || res.status >= 300) return null;
+    return res.text;
   } catch {
     return null;
   }
@@ -175,7 +176,7 @@ async function fetchSitemapUrls(siteUrl: URL, limit: number): Promise<string[]> 
   const urls: string[] = [];
   for (const m of matches) {
     try {
-      urls.push(assertSameSiteUrl(m[1].trim(), siteUrl).toString());
+      urls.push(parseSameSiteResearchUrl(m[1].trim(), siteUrl).toString());
     } catch {
       continue;
     }
@@ -217,7 +218,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "siteUrl required" }, { status: 400 });
     }
     try {
-      siteUrl = await assertPublicHttpUrl(body.siteUrl);
+      siteUrl = parseResearchPublicUrl(body.siteUrl);
     } catch (error) {
       return NextResponse.json(
         { error: error instanceof Error ? error.message : "Invalid URL" },

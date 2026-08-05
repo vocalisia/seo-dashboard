@@ -1,46 +1,32 @@
 import { fetchResearchText, parseResearchPublicUrl } from "@/lib/web-research-fetch";
+import type {
+  CrawledResearchSource,
+  ResearchEvidence,
+  ResearchSource,
+  WebResearchOptions,
+  WebResearchReport,
+  WebSearchProvider,
+  WebSearchResult,
+} from "@/lib/web-research-types";
 
-export type WebSearchProvider = "bing_rss" | "duckduckgo_html";
-
-export interface WebSearchResult {
-  url: string;
-  domain: string;
-  title: string;
-  snippet: string;
-  providers: WebSearchProvider[];
-  positions: Partial<Record<WebSearchProvider, number>>;
-}
-
-export interface ResearchSource extends WebSearchResult {
-  id: string;
-  fetch_status: "ok" | "search_only";
-  description: string;
-  headings: string[];
-  schema_types: string[];
-  word_count: number;
-  excerpt: string;
-}
-
-export interface ResearchEvidence {
-  source_id: string;
-  claim: string;
-  score: number;
-}
-
-export interface WebResearchReport {
-  query: string;
-  locale: string;
-  generated_at: string;
-  data_status: "complete" | "partial" | "unavailable";
-  search_providers: Record<WebSearchProvider, "ok" | "empty" | "failed">;
-  answer: string;
-  evidence: ResearchEvidence[];
-  sources: ResearchSource[];
-}
-
-interface InternalSource extends ResearchSource {
-  body_text: string;
-}
+export type {
+  CrawledResearchSource,
+  ResearchClaim,
+  ResearchClaimSupport,
+  ResearchCoverage,
+  ResearchDepth,
+  ResearchEvidence,
+  ResearchFocus,
+  ResearchIntent,
+  ResearchKeywordCluster,
+  ResearchKeywordOpportunity,
+  ResearchQueryStep,
+  ResearchSource,
+  WebResearchOptions,
+  WebResearchReport,
+  WebSearchProvider,
+  WebSearchResult,
+} from "@/lib/web-research-types";
 
 const TRACKING_PARAMS = /^(utm_.+|gclid|fbclid|msclkid|ref|ref_src)$/i;
 const SEARCH_USER_AGENT = "Mozilla/5.0 (compatible; SEO-Dashboard-Research/1.0)";
@@ -214,10 +200,13 @@ function localeParts(locale: string): { language: string; market: string } {
   };
 }
 
-async function fetchSearchText(url: URL): Promise<string> {
+async function fetchSearchText(url: URL, signal?: AbortSignal): Promise<string> {
+  const boundedSignal = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(8_000)])
+    : AbortSignal.timeout(8_000);
   const response = await fetch(url, {
     headers: { "User-Agent": SEARCH_USER_AGENT, "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7" },
-    signal: AbortSignal.timeout(8_000),
+    signal: boundedSignal,
     cache: "no-store",
   });
   if (!response.ok) throw new Error(`Search provider returned ${response.status}`);
@@ -232,6 +221,7 @@ export async function searchWebNoKey(
   query: string,
   locale = "fr-FR",
   limit = 10,
+  options: { signal?: AbortSignal } = {},
 ): Promise<{ results: WebSearchResult[]; providers: WebResearchReport["search_providers"] }> {
   const normalizedQuery = query.replace(/\s+/g, " ").trim().slice(0, 300);
   if (normalizedQuery.length < 2) throw new Error("Research query is too short");
@@ -248,8 +238,8 @@ export async function searchWebNoKey(
   duckUrl.searchParams.set("kl", `${market}-${language}`);
 
   const [bingSettled, duckSettled] = await Promise.allSettled([
-    fetchSearchText(bingUrl),
-    fetchSearchText(duckUrl),
+    fetchSearchText(bingUrl, options.signal),
+    fetchSearchText(duckUrl, options.signal),
   ]);
   const bing = bingSettled.status === "fulfilled" ? parseBingRss(bingSettled.value) : [];
   const duck = duckSettled.status === "fulfilled" ? parseDuckDuckGoHtml(duckSettled.value) : [];
@@ -320,8 +310,12 @@ function htmlToVisibleText(html: string): string {
   );
 }
 
-async function crawlResult(result: WebSearchResult, index: number): Promise<InternalSource> {
-  const fallback: InternalSource = {
+async function crawlResult(
+  result: WebSearchResult,
+  index: number,
+  signal?: AbortSignal,
+): Promise<CrawledResearchSource> {
+  const fallback: CrawledResearchSource = {
     ...result,
     id: `S${index + 1}`,
     fetch_status: "search_only",
@@ -338,6 +332,7 @@ async function crawlResult(result: WebSearchResult, index: number): Promise<Inte
       timeoutMs: 12_000,
       maxBytes: 500_000,
       maxRedirects: 3,
+      signal,
     });
     const contentType = response.headers["content-type"]?.toLowerCase() ?? "";
     if (response.status < 200 || response.status >= 300 ||
@@ -374,7 +369,7 @@ function researchTerms(query: string): string[] {
     .filter((term) => term.length >= 3 && !stop.has(term));
 }
 
-export function buildResearchEvidence(query: string, sources: InternalSource[]): ResearchEvidence[] {
+export function buildResearchEvidence(query: string, sources: CrawledResearchSource[]): ResearchEvidence[] {
   const terms = researchTerms(query);
   const candidates: ResearchEvidence[] = [];
   for (const source of sources) {
@@ -394,7 +389,8 @@ export function buildResearchEvidence(query: string, sources: InternalSource[]):
   return candidates.sort((a, b) => b.score - a.score).slice(0, 8);
 }
 
-function buildLocalAnswer(query: string, evidence: ResearchEvidence[], sources: InternalSource[]): string {
+/* Superseded by the corroborated synthesis in web-research-engine.ts.
+function buildLocalAnswer(query: string, evidence: ResearchEvidence[], sources: CrawledResearchSource[]): string {
   const sourceList = sources.slice(0, 8).map((source) =>
     `- [${source.id}] ${source.title} — ${source.url}`
   );
@@ -415,6 +411,7 @@ function buildLocalAnswer(query: string, evidence: ResearchEvidence[], sources: 
   }
   return `Aucune source publique exploitable n'a été trouvée pour « ${query} ».`;
 }
+*/
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -435,7 +432,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function toPublicResearchSource(source: InternalSource): ResearchSource {
+export function toPublicResearchSource(source: CrawledResearchSource): ResearchSource {
   return {
     id: source.id,
     url: source.url,
@@ -455,25 +452,22 @@ function toPublicResearchSource(source: InternalSource): ResearchSource {
 
 export async function runWebResearch(
   query: string,
-  options: { locale?: string; maxSources?: number } = {},
+  options: WebResearchOptions = {},
 ): Promise<WebResearchReport> {
-  const locale = options.locale ?? "fr-FR";
-  const maxSources = Math.max(1, Math.min(8, options.maxSources ?? 5));
-  const search = await searchWebNoKey(query, locale, Math.max(maxSources, 8));
-  const crawled = await mapWithConcurrency(search.results.slice(0, maxSources), 3, crawlResult);
-  const evidence = buildResearchEvidence(query, crawled);
-  const sources = crawled.map(toPublicResearchSource);
-  const fetchedCount = sources.filter((source) => source.fetch_status === "ok").length;
-  const dataStatus = sources.length === 0 ? "unavailable" : fetchedCount >= Math.min(3, maxSources) ? "complete" : "partial";
+  const { runWebResearchEngine } = await import("@/lib/web-research-engine");
+  return runWebResearchEngine(query, options);
+}
 
-  return {
-    query: query.replace(/\s+/g, " ").trim(),
-    locale,
-    generated_at: new Date().toISOString(),
-    data_status: dataStatus,
-    search_providers: search.providers,
-    answer: buildLocalAnswer(query, evidence, crawled),
-    evidence,
-    sources,
-  };
+export async function crawlResearchResults(
+  results: WebSearchResult[],
+  maxSources: number,
+  concurrency = 4,
+  signal?: AbortSignal,
+): Promise<CrawledResearchSource[]> {
+  const boundedSources = Math.max(1, Math.min(12, maxSources));
+  return mapWithConcurrency(
+    results.slice(0, boundedSources),
+    Math.max(1, Math.min(6, concurrency)),
+    (result, index) => crawlResult(result, index, signal),
+  );
 }

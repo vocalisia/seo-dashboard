@@ -3,8 +3,8 @@ export const maxDuration = 300;
 
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAICached } from "@/lib/ai-cache";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { requireApiSession } from "@/lib/api-auth";
 import { logError } from "@/lib/logger";
 import { searchWebNoKey, type WebSearchProvider, type WebSearchResult } from "@/lib/web-research";
 
@@ -72,14 +72,31 @@ export function selectResultSnapshot(
   return null;
 }
 
+export function buildLocalMovementAnalysis(input: {
+  query: string;
+  resultSource: WebSearchProvider;
+  ourPosition: number | null;
+  newCompetitors: string[];
+  topDomains: string[];
+}): string {
+  if (input.newCompetitors.length === 0) return "";
+  const ownVisibility = input.ourPosition == null
+    ? "notre domaine n'est pas observé dans le top 10 de ce snapshot"
+    : "notre domaine apparaît en position " + input.ourPosition + " dans ce snapshot";
+  return [
+    "Snapshot " + input.resultSource + " pour « " + input.query + " » : " + ownVisibility + ".",
+    "Nouveaux domaines observés depuis le précédent snapshot de même source : " + input.newCompetitors.join(", ") + ".",
+    "Top observé : " + input.topDomains.join(", ") + ".",
+    "Action : comparer leurs angles, leur fraîcheur et leurs sources avant de mettre à jour la page ciblée.",
+  ].join(" ");
+}
+
 export async function POST(request: Request) {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
   const sql = getSQL();
   await ensureSerpTable(sql);
-
-  const today = new Date().toISOString().slice(0, 10);
 
   // 1. Get top KW per site (max 5 KW per site, sites limit 5 to keep cost reasonable)
   const sites = (await sql`
@@ -158,22 +175,13 @@ export async function POST(request: Request) {
 
         const ourEntry = sourceResults.find((e) => isOurs(e.domain));
 
-        // Optional AI narrative runs only after a sourced provider snapshot exists.
-        let analysis = "";
-        if (newCompetitors.length > 0) {
-          try {
-            const { reply: analysisReply } = await askAICached({
-              cacheKey: `serp-track-analysis:web-source-v1:${resultSource}:${site.id}:${kw.query}:${today}:${newCompetitors.join(",")}`,
-              messages: [
-                { role: "system", content: "Tu es un Head of SEO. Analyse en max 80 mots français. Formule des hypothèses explicites, n'invente aucun fait, puis propose une action pour cette semaine." },
-                { role: "user", content: `Mot-clé : "${kw.query}"\nSource vérifiée du snapshot : ${resultSource}\nNotre site : ${site.name} (${ourEntry ? `position ${ourEntry.position} dans ce snapshot` : "absent du top 10 de ce snapshot"})\nNouveaux domaines depuis le précédent snapshot de même source : ${newCompetitors.join(", ")}\nTop 3 du snapshot : ${sourceResults.slice(0, 3).map((e) => `${e.position}. ${e.domain}`).join(" | ")}` },
-              ],
-              model: "smart",
-              maxTokens: 300,
-            });
-            analysis = analysisReply;
-          } catch { analysis = ""; }
-        }
+        const analysis = buildLocalMovementAnalysis({
+          query: kw.query,
+          resultSource,
+          ourPosition: ourEntry?.position ?? null,
+          newCompetitors,
+          topDomains: sourceResults.slice(0, 3).map((entry) => entry.domain),
+        });
 
         insights.push({
           query: kw.query,
@@ -197,11 +205,14 @@ export async function POST(request: Request) {
     sites_tracked: sites.length,
     insights_count: insights.length,
     new_competitor_alerts: insights.filter((i) => i.new_competitors_top10.length > 0).length,
+    analysis_engine: "local_rules_v2",
     insights,
   });
 }
 
 export async function GET() {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   try {
     const sql = getSQL();
     await ensureSerpTable(sql);

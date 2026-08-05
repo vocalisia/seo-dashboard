@@ -5,6 +5,10 @@ export interface OpportunityKeywordRow {
   clicks_30d: number;
   avg_position_30d: number;
   site_count: number;
+  measurement_kind?: "gsc" | "external_signal";
+  signal_source?: string;
+  search_volume?: number | null;
+  search_volume_source?: string | null;
 }
 
 export interface KeywordSignalScore {
@@ -21,6 +25,8 @@ export interface OpportunityCandidate {
   clusterLabel: string;
   keywords: string[];
   monthlyVolume: number;
+  searchVolume: number | null;
+  searchVolumeSources: string[];
   momentumPct: number;
   averagePosition: number;
   signalScore: number;
@@ -28,6 +34,8 @@ export interface OpportunityCandidate {
   portfolioDistance: number;
   intent: "informational" | "commercial" | "mixed";
   sampleQueries: string[];
+  measurementKind: "gsc" | "external_signal" | "mixed";
+  signalSources: string[];
   rationale: string[];
   serpEvidence?: {
     relatedQuestions: string[];
@@ -273,18 +281,51 @@ export function buildOpportunityCandidates(
   const candidates: OpportunityCandidate[] = [];
 
   for (const [clusterKey, bucket] of clusters) {
-    const monthlyVolume = bucket.reduce((sum, row) => sum + row.impressions_30d, 0);
-    if (monthlyVolume < options.minVolume) continue;
+    const measuredRows = bucket.filter((row) => row.measurement_kind !== "external_signal");
+    const externalRows = bucket.filter((row) => row.measurement_kind === "external_signal");
+    const monthlyVolume = measuredRows.reduce((sum, row) => sum + row.impressions_30d, 0);
+    const searchVolumeRows = measuredRows.filter((row) =>
+      row.search_volume != null
+      && Number.isFinite(row.search_volume)
+      && row.search_volume > 0
+      && typeof row.search_volume_source === "string"
+      && row.search_volume_source.startsWith("google_kp_real_")
+    );
+    const searchVolume = searchVolumeRows.length > 0
+      ? searchVolumeRows.reduce((sum, row) => sum + Number(row.search_volume), 0)
+      : null;
+    const searchVolumeSources = Array.from(new Set(searchVolumeRows
+      .map((row) => row.search_volume_source)
+      .filter((source): source is string => Boolean(source))));
+    if (measuredRows.length > 0 && monthlyVolume < options.minVolume) continue;
+    if (measuredRows.length === 0 && externalRows.length === 0) continue;
 
-    const weightedPrev = bucket.reduce((sum, row) => sum + row.impressions_prev_30d, 0);
-    const averagePosition = bucket.reduce((sum, row) => sum + row.avg_position_30d, 0) / bucket.length;
-    const momentumPct = weightedPrev > 0 ? ((monthlyVolume - weightedPrev) / weightedPrev) * 100 : 200;
-    const sampleQueries = bucket
-      .sort((a, b) => b.impressions_30d - a.impressions_30d)
+    const weightedPrev = measuredRows.reduce((sum, row) => sum + row.impressions_prev_30d, 0);
+    const averagePosition = measuredRows.length > 0
+      ? measuredRows.reduce((sum, row) => sum + row.avg_position_30d, 0) / measuredRows.length
+      : 0;
+    const momentumPct = measuredRows.length === 0
+      ? 0
+      : weightedPrev > 0
+        ? ((monthlyVolume - weightedPrev) / weightedPrev) * 100
+        : 200;
+    const sampleQueries = [...bucket]
+      .sort((a, b) => b.impressions_30d - a.impressions_30d || a.query.localeCompare(b.query))
       .slice(0, 5)
       .map((row) => row.query);
 
-    const perRowScores = bucket.map((row) => scoreKeywordSignal(row));
+    const perRowScores = bucket.map((row) => {
+      const score = scoreKeywordSignal(row);
+      if (row.measurement_kind !== "external_signal") return score;
+      const externalTotal = 0.35 + score.specificityScore * 0.3 + score.businessScore * 0.35;
+      return {
+        ...score,
+        totalScore: Number(Math.min(1, externalTotal).toFixed(4)),
+        growthScore: 0,
+        volumeScore: 0,
+        weaknessScore: 0,
+      };
+    });
     const rawSignal =
       perRowScores.reduce((sum, score) => sum + score.totalScore, 0) / perRowScores.length;
     const distance = portfolioDistance(sampleQueries[0] ?? clusterKey, hints);
@@ -310,9 +351,18 @@ export function buildOpportunityCandidates(
           ? 0.75 + distance * 0.35
           : 0.75 + distance * 0.25;
     const signalScore = Number((rawSignal * portfolioBoost).toFixed(4));
+    const measurementKind = measuredRows.length > 0 && externalRows.length > 0
+      ? "mixed"
+      : measuredRows.length > 0
+        ? "gsc"
+        : "external_signal";
     const rationale = [
-      momentumPct >= 40 ? "fast-rising demand" : "stable demand with content gap",
-      averagePosition >= 12 ? "SERP gap remains accessible" : "already somewhat competitive",
+      measurementKind === "external_signal"
+        ? "qualitative external signal; demand volume is not measured"
+        : momentumPct >= 40 ? "fast-rising GSC demand" : "stable GSC demand with content gap",
+      measurementKind === "external_signal"
+        ? "Google position is not measured"
+        : averagePosition >= 12 ? "observed GSC visibility gap" : "already somewhat competitive in GSC",
       distance >= 0.7 ? "far from existing portfolio" : "adjacent to current portfolio",
       intent === "commercial" ? "clear monetization intent" : "strong informational demand",
     ];
@@ -322,6 +372,8 @@ export function buildOpportunityCandidates(
       clusterLabel: buildClusterLabel(sampleQueries),
       keywords: sampleQueries,
       monthlyVolume,
+      searchVolume,
+      searchVolumeSources,
       momentumPct: Number(momentumPct.toFixed(1)),
       averagePosition: Number(averagePosition.toFixed(1)),
       signalScore,
@@ -329,6 +381,8 @@ export function buildOpportunityCandidates(
       portfolioDistance: Number(distance.toFixed(2)),
       intent,
       sampleQueries,
+      measurementKind,
+      signalSources: Array.from(new Set(bucket.map((row) => row.signal_source).filter((value): value is string => Boolean(value)))),
       rationale,
       scoreBreakdown: {
         growth: Number(

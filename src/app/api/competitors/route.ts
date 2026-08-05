@@ -2,12 +2,12 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAI, AIProviderError } from "@/lib/ai";
 import { requireApiSession } from "@/lib/api-auth";
 import { logError } from "@/lib/logger";
 import { hasSufficientCompetitorResearch, prepareCompetitorResearchRows } from "@/lib/competitor-research-guard";
 import { runWebResearch } from "@/lib/web-research";
 import { buildPublicCompetitorResearch } from "@/lib/competitor-public-research";
+import { ensureCompetitorResearchSchema } from "@/lib/competitor-research-schema";
 
 interface Site {
   id: number;
@@ -21,16 +21,22 @@ interface ResearchResult {
   competitors: { domain: string; description: string }[];
   gaps: {
     keyword: string;
-    volume: number;
+    volume: number | null;
     competitor: string;
-    competitor_position: number;
-    difficulty: string;
+    competitor_position: number | null;
+    difficulty: string | null;
     intent: string;
     source?: "ai_estimate" | "keyword_planner" | "cache" | "fallback_gsc_signal" | "public_web";
+    source_url?: string | null;
+    source_id?: string | null;
+    evidence_score?: number | null;
+    source_count?: number | null;
+    cluster?: string | null;
   }[];
   ourKeywordsCount: number;
 }
 
+/* Superseded helpers used only by the disabled provider-based implementation.
 function isQuestionLike(keyword: string): boolean {
   const lower = keyword.toLowerCase().trim();
   if (!lower) return false;
@@ -41,18 +47,16 @@ function isQuestionLike(keyword: string): boolean {
 function wordCount(keyword: string): number {
   return keyword.trim().split(/\s+/).filter(Boolean).length;
 }
+*/
 
-function formatAIError(err: unknown): string {
-  if (err instanceof AIProviderError) {
-    // Human-readable, provider-aware
-    return err.message;
-  }
+function formatResearchError(err: unknown): string {
   if (err instanceof Error) {
     return err.message.slice(0, 300);
   }
-  return "AI research failed — réessaie";
+  return "Public research failed";
 }
 
+/* Legacy provider-based competitor research. It is intentionally non-executable.
 export async function runLegacyAIResearchForSite(site: Site, sql: SQLClient): Promise<ResearchResult> {
   const ourKeywords = (await sql`
     SELECT query,
@@ -111,7 +115,7 @@ Rules:
 - Maximum 30 keyword gaps
 - Be accurate with volume estimates`;
 
-/* Legacy synthetic fallback removed: it fabricated competitor gaps from our own GSC data.
+  // Legacy synthetic fallback removed: it fabricated competitor gaps from our own GSC data.
 function inferCompetitors(site: Site): { domain: string; description: string }[] {
   const host = site.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "").toLowerCase();
   if (host.includes("meilleurartisan")) {
@@ -188,7 +192,7 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
     ourKeywordsCount: rows.length,
   };
 }
-*/
+  // End removed synthetic fallback.
 
   const aiResponse = await askAI(
     [{ role: "user", content: competitorPrompt }],
@@ -227,10 +231,10 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
     .filter((g) => {
       const isQuestionOrLongtail = isQuestionLike(g.keyword) || wordCount(g.keyword) >= 4 || /informational/i.test(g.intent ?? "");
       const minVolume = isQuestionOrLongtail ? 100 : 1000;
-      return g.volume >= minVolume && !ourKeywordSet.has(g.keyword.toLowerCase());
+      return (g.volume ?? 0) >= minVolume && !ourKeywordSet.has(g.keyword.toLowerCase());
     })
     .filter((g) => !isPortfolioDomain(g.competitor))
-    .sort((a, b) => b.volume - a.volume)
+    .sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0))
     .slice(0, 30);
 
   // Also filter competitors list (UI shows them)
@@ -242,6 +246,7 @@ async function runFallbackResearchForSite(site: Site, sql: SQLClient): Promise<R
     ourKeywordsCount: ourKeywords.length,
   };
 }
+*/
 
 function hostnameFromSiteUrl(raw: string): string {
   const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
@@ -270,7 +275,10 @@ export async function runResearchForSite(site: Site, sql: SQLClient): Promise<Re
     ?? ownDomain;
   const report = await runWebResearch(researchQuery, {
     locale: "fr-FR",
-    maxSources: 8,
+    maxSources: 12,
+    maxQueries: 8,
+    depth: "deep",
+    focus: "competitors",
   });
   if (report.data_status === "unavailable") {
     throw new Error("Public competitor research providers are unavailable");
@@ -285,7 +293,7 @@ export async function runResearchForSite(site: Site, sql: SQLClient): Promise<Re
     portfolioDomains,
     ownKeywords: ourKeywords.map((row) => row.query),
     maxCompetitors: 8,
-    maxGaps: 30,
+    maxGaps: 60,
   });
   return {
     competitors: extracted.competitors,
@@ -330,24 +338,37 @@ interface CachedResearch {
   competitor_domain: string;
   competitor_description: string | null;
   keyword: string;
-  estimated_volume: number;
-  competitor_position: number;
-  difficulty: string;
+  estimated_volume: number | null;
+  competitor_position: number | null;
+  difficulty: string | null;
   intent: string;
+  source_url: string | null;
+  source_id: string | null;
+  evidence_score: number | null;
+  source_count: number | null;
+  cluster_name: string | null;
+  engine_version: string | null;
+  source_kind: string | null;
   researched_at: string;
 }
 
 async function loadCachedResearch(sql: SQLClient, siteId: number, maxAgeDays = 60): Promise<ResearchResult | null> {
+  await ensureCompetitorResearchSchema(sql);
   // INTERVAL value must be embedded — Neon tagged template can't parametrize INTERVAL literals.
   // maxAgeDays is internally controlled (not user input) so embedding is safe.
   const safeDays = Math.max(1, Math.floor(maxAgeDays));
   const rows = (await sql`
     SELECT site_id, competitor_domain, competitor_description, keyword,
-           estimated_volume, competitor_position, difficulty, intent, researched_at
+           estimated_volume, competitor_position, difficulty, intent,
+           source_url, source_id, evidence_score, source_count, cluster_name,
+           engine_version, source_kind,
+           researched_at
     FROM competitor_research
     WHERE site_id = ${siteId}
+      AND engine_version = 'local-research-v2'
+      AND source_kind = 'public_web'
       AND researched_at >= NOW() - (${safeDays} || ' days')::interval
-    ORDER BY estimated_volume DESC
+    ORDER BY estimated_volume DESC NULLS LAST, evidence_score DESC NULLS LAST
   `) as CachedResearch[];
 
   if (rows.length === 0) return null;
@@ -366,18 +387,27 @@ async function loadCachedResearch(sql: SQLClient, siteId: number, maxAgeDays = 6
     competitors: Array.from(competitorMap.values()),
     gaps: rows.map((r) => ({
       keyword: r.keyword,
-      volume: Number(r.estimated_volume) || 0,
+      volume: r.estimated_volume != null && Number(r.estimated_volume) > 0
+        ? Number(r.estimated_volume)
+        : null,
       competitor: r.competitor_domain,
-      competitor_position: Number(r.competitor_position) || 0,
-      difficulty: r.difficulty ?? "",
+      competitor_position: r.competitor_position != null && Number(r.competitor_position) > 0
+        ? Number(r.competitor_position)
+        : null,
+      difficulty: r.difficulty ?? null,
       intent: r.intent ?? "",
       source: "cache" as const,
+      source_url: r.source_url,
+      source_id: r.source_id,
+      evidence_score: r.evidence_score != null ? Number(r.evidence_score) : null,
+      source_count: r.source_count != null ? Number(r.source_count) : null,
+      cluster: r.cluster_name,
     })),
     ourKeywordsCount: 0,
   };
 }
 
-async function persistResearchForSite(site: Site, sql: SQLClient, research: ResearchResult): Promise<boolean> {
+export async function persistResearchForSite(site: Site, sql: SQLClient, research: ResearchResult): Promise<boolean> {
   const rows = prepareCompetitorResearchRows(research.gaps ?? [], research.competitors ?? []);
   if (!hasSufficientCompetitorResearch(rows)) {
     console.warn(`Competitor research preserved for site ${site.id}: replacement was insufficient`);
@@ -385,32 +415,20 @@ async function persistResearchForSite(site: Site, sql: SQLClient, research: Rese
   }
 
   try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS competitor_research (
-        id SERIAL PRIMARY KEY,
-        site_id INTEGER REFERENCES sites(id),
-        competitor_domain VARCHAR(500),
-        competitor_description TEXT,
-        keyword VARCHAR(500),
-        estimated_volume INTEGER,
-        competitor_position DECIMAL(6,2),
-        difficulty VARCHAR(20),
-        intent VARCHAR(30),
-        researched_at TIMESTAMP DEFAULT NOW()
-      )
-    `;
-    await sql`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_competitor_research_natural_key
-        ON competitor_research(site_id, LOWER(competitor_domain), LOWER(keyword))
-    `;
+    await ensureCompetitorResearchSchema(sql);
 
     await sql.transaction([
       sql`DELETE FROM competitor_research WHERE site_id = ${site.id}`,
       ...rows.map((row) => sql`
         INSERT INTO competitor_research
-        (site_id, competitor_domain, competitor_description, keyword, estimated_volume, competitor_position, difficulty, intent)
+        (site_id, competitor_domain, competitor_description, keyword,
+         estimated_volume, competitor_position, difficulty, intent,
+         source_url, source_id, evidence_score, source_count, cluster_name,
+         engine_version, source_kind)
         VALUES (${site.id}, ${row.domain}, ${row.description}, ${row.keyword}, ${row.volume},
-                ${row.position}, ${row.difficulty}, ${row.intent})
+                ${row.position}, ${row.difficulty}, ${row.intent}, ${row.sourceUrl},
+                ${row.sourceId}, ${row.evidenceScore}, ${row.sourceCount}, ${row.cluster},
+                'local-research-v2', 'public_web')
       `),
     ]);
     return true;
@@ -447,10 +465,10 @@ export async function POST(req: NextRequest) {
 
       const perSite: { site: string; competitors: number; gaps: number; status: "cached" | "complete" | "preserved" | "unavailable"; error?: string }[] = [];
       const errors: string[] = [];
-      let aiFallbackOnly = false;
+      let providersUnavailable = false;
 
       for (const s of activeSites) {
-        // Cache-first: skip AI call if cache exists (and not force_refresh)
+        // Cache-first: skip public research if cache exists (and not force_refresh)
         if (!force_refresh) {
           const cached = await loadCachedResearch(sql, s.id);
           if (cached) {
@@ -458,9 +476,9 @@ export async function POST(req: NextRequest) {
             continue;
           }
         }
-        if (aiFallbackOnly) {
+        if (providersUnavailable) {
           const fallback = await runFallbackResearchForSite(s, sql);
-          const message = "AI provider unavailable; no competitor volume or position was generated.";
+          const message = "Public providers unavailable; no competitor volume or position was generated.";
           errors.push(`${s.name}: ${message}`);
           perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length, status: "unavailable", error: message });
           continue;
@@ -478,7 +496,7 @@ export async function POST(req: NextRequest) {
             perSite.push({ site: s.name, competitors: reported.competitors.length, gaps: reported.gaps.length, status: "complete" });
           }
         } catch (err) {
-          const msg = formatAIError(err);
+          const msg = formatResearchError(err);
           errors.push(`${s.name}: ${msg}`);
           // Try fallback to recent cache only. Older cache must not look fresh.
           const cached = await loadCachedResearch(sql, s.id, 60);
@@ -488,10 +506,8 @@ export async function POST(req: NextRequest) {
             const fallback = await runFallbackResearchForSite(s, sql);
             perSite.push({ site: s.name, competitors: fallback.competitors.length, gaps: fallback.gaps.length, status: "unavailable", error: msg });
           }
-          // Once the provider is clearly unavailable, finish remaining sites with dashboard-derived fallback.
-          if (err instanceof AIProviderError && (err.code === "credit_low" || err.code === "no_key" || err.code === "auth" || err.code === "rate_limit")) {
-            aiFallbackOnly = true;
-          }
+          // Avoid repeatedly hitting the same unavailable public providers in this batch.
+          providersUnavailable = true;
         }
       }
 
@@ -505,7 +521,7 @@ export async function POST(req: NextRequest) {
         errors: errors.length > 0 ? errors : undefined,
       });
     } catch (err) {
-      return NextResponse.json({ success: false, error: formatAIError(err) }, { status: 500 });
+      return NextResponse.json({ success: false, error: formatResearchError(err) }, { status: 500 });
     }
   }
 
@@ -516,7 +532,7 @@ export async function POST(req: NextRequest) {
     }
     const site = sites[0];
 
-    // Cache-first: serve cached analysis if recent (skip AI call to avoid credit issues)
+    // Cache-first: serve recent sourced analysis without a new public crawl.
     if (!force_refresh) {
       const cached = await loadCachedResearch(sql, site.id);
       if (cached) {
@@ -587,12 +603,12 @@ export async function POST(req: NextRequest) {
         success: false,
         site: site.name,
         data_status: "unavailable",
-        error: `${formatAIError(err)} Aucune donnée concurrentielle vérifiée n'est disponible.`,
+        error: `${formatResearchError(err)} Aucune donnée concurrentielle vérifiée n'est disponible.`,
       }, { status: 503 });
     }
   } catch (err) {
     logError("competitors.research", err);
-    return NextResponse.json({ success: false, error: formatAIError(err) }, { status: 500 });
+    return NextResponse.json({ success: false, error: formatResearchError(err) }, { status: 500 });
   }
 }
 
@@ -605,12 +621,14 @@ export async function GET(req: NextRequest) {
   if (authState.unauthorized) return authState.unauthorized;
 
   const siteId = req.nextUrl.searchParams.get("site_id");
-  if (!siteId) {
+  const parsedSiteId = Number(siteId);
+  if (!Number.isInteger(parsedSiteId) || parsedSiteId <= 0) {
     return NextResponse.json({ success: false, error: "site_id required" }, { status: 400 });
   }
 
   const sql = getSQL();
   try {
+    await ensureCompetitorResearchSchema(sql);
     const rows = await sql`
       SELECT
         id,
@@ -621,19 +639,35 @@ export async function GET(req: NextRequest) {
         competitor_position,
         difficulty,
         intent,
+        source_url,
+        source_id,
+        evidence_score,
+        source_count,
+        cluster_name,
+        engine_version,
+        source_kind,
         researched_at
       FROM competitor_research
-      WHERE site_id = ${parseInt(siteId, 10)}
-      ORDER BY estimated_volume DESC
+      WHERE site_id = ${parsedSiteId}
+        AND engine_version = 'local-research-v2'
+        AND source_kind = 'public_web'
+      ORDER BY estimated_volume DESC NULLS LAST, evidence_score DESC NULLS LAST
     ` as {
       id: number;
       site_id: number;
       competitor_domain: string;
       keyword: string;
-      estimated_volume: number;
-      competitor_position: number;
-      difficulty: string;
+      estimated_volume: number | null;
+      competitor_position: number | null;
+      difficulty: string | null;
       intent: string;
+      source_url: string | null;
+      source_id: string | null;
+      evidence_score: number | null;
+      source_count: number | null;
+      cluster_name: string | null;
+      engine_version: string | null;
+      source_kind: string | null;
       researched_at: string;
     }[];
 
@@ -655,19 +689,30 @@ export async function GET(req: NextRequest) {
     // Map rows to gaps format (normalize field names)
     const gaps = rows.map((r) => ({
       keyword: r.keyword,
-      volume: Number(r.estimated_volume) || 0,
+      volume: r.estimated_volume != null && Number(r.estimated_volume) > 0
+        ? Number(r.estimated_volume)
+        : null,
       competitor: r.competitor_domain,
       competitor_domain: r.competitor_domain,
-      competitor_position: Number(r.competitor_position) || 0,
-      difficulty: r.difficulty ?? "",
+      competitor_position: r.competitor_position != null && Number(r.competitor_position) > 0
+        ? Number(r.competitor_position)
+        : null,
+      difficulty: r.difficulty ?? null,
       intent: r.intent ?? "",
-      source: "cache" as const,
+      source: r.source_url ? "public_web" as const : "cache" as const,
+      source_url: r.source_url,
+      source_id: r.source_id,
+      evidence_score: r.evidence_score != null ? Number(r.evidence_score) : null,
+      source_count: r.source_count != null ? Number(r.source_count) : null,
+      cluster: r.cluster_name,
     }));
 
     return NextResponse.json({
       success: true,
       gaps,
-      competitors: Object.values(competitorMap).sort((a, b) => b.total_volume - a.total_volume),
+      competitors: Object.values(competitorMap).sort((a, b) =>
+        b.found_keywords_count - a.found_keywords_count || b.total_volume - a.total_volume
+      ),
       total: rows.length,
     });
   } catch (err) {

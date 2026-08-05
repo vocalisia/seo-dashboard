@@ -1,10 +1,15 @@
 export interface CompetitorGapCandidate {
   keyword: string;
-  volume: number;
+  volume: number | null;
   competitor: string;
-  competitor_position: number;
-  difficulty: string;
+  competitor_position: number | null;
+  difficulty: string | null;
   intent: string;
+  source_url?: string | null;
+  source_id?: string | null;
+  evidence_score?: number | null;
+  source_count?: number | null;
+  cluster?: string | null;
 }
 
 export interface CompetitorDescription {
@@ -16,10 +21,15 @@ export interface CompetitorResearchRow {
   domain: string;
   description: string | null;
   keyword: string;
-  volume: number;
-  position: number;
-  difficulty: string;
+  volume: number | null;
+  position: number | null;
+  difficulty: string | null;
   intent: string;
+  sourceUrl: string | null;
+  sourceId: string | null;
+  evidenceScore: number | null;
+  sourceCount: number | null;
+  cluster: string | null;
 }
 
 const MIN_ROWS = 3;
@@ -63,10 +73,17 @@ export function prepareCompetitorResearchRows(
       domain,
       description: descriptions.get(domain) ?? null,
       keyword,
-      volume: Math.max(0, Number(gap.volume) || 0),
-      position: Math.max(0, Number(gap.competitor_position) || 0),
-      difficulty: gap.difficulty || "unknown",
+      volume: gap.volume != null && Number(gap.volume) > 0 ? Number(gap.volume) : null,
+      position: gap.competitor_position != null && Number(gap.competitor_position) > 0
+        ? Number(gap.competitor_position)
+        : null,
+      difficulty: gap.difficulty && gap.difficulty !== "unknown" ? gap.difficulty : null,
       intent: gap.intent || "informational",
+      sourceUrl: gap.source_url ?? null,
+      sourceId: gap.source_id ?? null,
+      evidenceScore: gap.evidence_score != null ? Math.max(0, Math.min(100, Number(gap.evidence_score))) : null,
+      sourceCount: gap.source_count != null ? Math.max(1, Math.floor(Number(gap.source_count))) : null,
+      cluster: gap.cluster ?? null,
     });
   }
 

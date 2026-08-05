@@ -99,6 +99,16 @@ export function parseResearchPublicUrl(raw: string): URL {
   return url;
 }
 
+export function parseSameSiteResearchUrl(raw: string, expected: URL): URL {
+  const url = parseResearchPublicUrl(raw);
+  const expectedHost = expected.hostname.toLowerCase();
+  const actualHost = url.hostname.toLowerCase();
+  if (actualHost !== expectedHost && !actualHost.endsWith(`.${expectedHost}`)) {
+    throw new Error("Cross-site research URL is not allowed");
+  }
+  return url;
+}
+
 type Resolver = (
   hostname: string,
   options: { all: true; verbatim: true },

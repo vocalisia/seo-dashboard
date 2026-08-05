@@ -35,6 +35,8 @@ export async function GET(req: NextRequest) {
         SELECT cr.keyword, cr.competitor_domain, cr.competitor_position::float, cr.estimated_volume
         FROM competitor_research cr
         WHERE cr.site_id = ${parsedSiteId}
+          AND cr.competitor_position IS NOT NULL
+          AND cr.competitor_position > 0
           AND cr.competitor_position <= 10
         ORDER BY cr.estimated_volume DESC
         LIMIT 100
@@ -60,6 +62,8 @@ export async function GET(req: NextRequest) {
         // Group by keyword
         const keywordMap: Record<string, CompetitorGap> = {};
         for (const row of competitorRows) {
+          const competitorPosition = Number(row.competitor_position);
+          if (!Number.isFinite(competitorPosition) || competitorPosition <= 0) continue;
           const ourPos = ourPosMap[row.keyword] ?? null;
           // Only include if we're not in top 50
           if (ourPos !== null && ourPos <= 50) continue;
@@ -75,12 +79,14 @@ export async function GET(req: NextRequest) {
           }
           keywordMap[row.keyword].competitor_positions.push({
             domain: row.competitor_domain,
-            pos: Number(row.competitor_position),
+            pos: competitorPosition,
           });
         }
 
         const gaps = sortGapsByKnownVolume(Object.values(keywordMap));
-        return NextResponse.json({ success: true, gaps, data_status: "competitor_cache" });
+        if (gaps.length > 0) {
+          return NextResponse.json({ success: true, gaps, data_status: "competitor_cache" });
+        }
       }
     }
 

@@ -7,14 +7,19 @@ export interface PublicCompetitor {
 
 export interface PublicCompetitorGap {
   keyword: string;
-  volume: 0;
+  volume: null;
   competitor: string;
-  competitor_position: 0;
-  difficulty: "unknown";
+  competitor_position: null;
+  difficulty: null;
   intent: "informational" | "commercial" | "transactional";
   source: "public_web";
   source_url: string;
   source_id: string;
+  evidence_score: number;
+  source_count: number;
+  cluster: string;
+  volume_source: null;
+  position_source: null;
 }
 
 const GENERIC_PHRASES = new Set([
@@ -80,6 +85,52 @@ function phrasesFromSource(source: ResearchSource): string[] {
   return phrases;
 }
 
+interface ObservedPhrase {
+  keyword: string;
+  intent: PublicCompetitorGap["intent"];
+  evidenceScore: number;
+  sourceCount: number;
+  cluster: string;
+}
+
+function observedPhrases(report: WebResearchReport, source: ResearchSource): ObservedPhrase[] {
+  const phrases = new Map<string, ObservedPhrase>();
+  for (const keyword of phrasesFromSource(source)) {
+    const key = normalizeComparable(keyword);
+    phrases.set(key, {
+      keyword,
+      intent: inferIntent(keyword),
+      evidenceScore: source.source_score ?? 40,
+      sourceCount: 1,
+      cluster: keyword,
+    });
+  }
+  for (const cluster of report.keyword_clusters ?? []) {
+    for (const keyword of cluster.keywords) {
+      if (!keyword.source_ids.includes(source.id)) continue;
+      const cleaned = cleanCandidate(keyword.keyword);
+      if (!cleaned) continue;
+      const key = normalizeComparable(cleaned);
+      const intent = keyword.intent === "commercial" || keyword.intent === "transactional"
+        ? keyword.intent
+        : "informational";
+      const existing = phrases.get(key);
+      if (!existing || keyword.evidence_score > existing.evidenceScore) {
+        phrases.set(key, {
+          keyword: cleaned,
+          intent,
+          evidenceScore: keyword.evidence_score,
+          sourceCount: keyword.source_count,
+          cluster: cluster.label,
+        });
+      }
+    }
+  }
+  return [...phrases.values()]
+    .sort((a, b) => b.evidenceScore - a.evidenceScore)
+    .slice(0, 14);
+}
+
 function inferIntent(keyword: string): PublicCompetitorGap["intent"] {
   const normalized = normalizeComparable(keyword);
   if (/\b(acheter|prix|devis|commander|abonnement|buy|price|order|subscribe)\b/.test(normalized)) {
@@ -134,21 +185,26 @@ export function buildPublicCompetitorResearch(
         description: source.description || source.title,
       });
     }
-    for (const keyword of phrasesFromSource(source)) {
-      const normalized = normalizeComparable(keyword);
+    for (const observed of observedPhrases(report, source)) {
+      const normalized = normalizeComparable(observed.keyword);
       const key = `${domain}\u0000${normalized}`;
       if (!normalized || ownKeywords.has(normalized) || seenRows.has(key)) continue;
       seenRows.add(key);
       gaps.push({
-        keyword,
-        volume: 0,
+        keyword: observed.keyword,
+        volume: null,
         competitor: domain,
-        competitor_position: 0,
-        difficulty: "unknown",
-        intent: inferIntent(keyword),
+        competitor_position: null,
+        difficulty: null,
+        intent: observed.intent,
         source: "public_web",
         source_url: source.url,
         source_id: source.id,
+        evidence_score: observed.evidenceScore,
+        source_count: observed.sourceCount,
+        cluster: observed.cluster,
+        volume_source: null,
+        position_source: null,
       });
       if (gaps.length >= maxGaps) break;
     }

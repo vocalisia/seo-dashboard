@@ -104,10 +104,17 @@ export async function GET(req: NextRequest) {
       const rawVolume = Number(r.volume_market ?? r.volume_ch ?? r.volume_fr ?? 0);
       const source = r.volume_source ?? null;
       const volume = source?.includes("niche_skip") || rawVolume <= 1 ? 0 : rawVolume;
-      const difficulty =
-        volume === 0 ? "unknown" : volume > 10000 ? "hard" : volume > 3000 ? "medium" : "easy";
       const intent = classifyIntent(r.keyword);
-      return { ...r, volume, volume_source: source, difficulty, intent, site_name: r.site_name };
+      return {
+        ...r,
+        volume,
+        volume_source: source,
+        difficulty: "unknown" as const,
+        difficulty_source: null,
+        difficulty_notice: "Le volume publicitaire ne permet pas de calculer une difficulté SEO fiable.",
+        intent,
+        site_name: r.site_name,
+      };
     });
 
     return NextResponse.json({ success: true, keywords: enriched });

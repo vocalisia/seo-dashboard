@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
-import { computePageRank, extractInternalLinks, normalizeUrlForGraph, type PageNode } from "@/lib/pagerank-graph";
-import { assertPublicHttpUrl, assertSameSiteUrl, fetchPublicUrl } from "@/lib/safe-url";
+import { buildInternalLinkSuggestions, computePageRank, extractInternalLinks, normalizeUrlForGraph, type PageNode } from "@/lib/pagerank-graph";
+import { fetchResearchText, parseResearchPublicUrl, parseSameSiteResearchUrl } from "@/lib/web-research-fetch";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -31,12 +31,13 @@ interface ApiResponse {
 
 async function fetchWithTimeout(url: string): Promise<string | null> {
   try {
-    const res = await fetchPublicUrl(url, {
+    const res = await fetchResearchText(url, {
       signal: AbortSignal.timeout(5000),
       headers: { "User-Agent": "SEO-Dashboard-PRank/1.0" },
+      maxBytes: 1_000_000,
     });
-    if (!res.ok) return null;
-    return await res.text();
+    if (res.status < 200 || res.status >= 300) return null;
+    return res.text;
   } catch {
     return null;
   }
@@ -49,7 +50,7 @@ interface SitemapDiscovery {
 }
 
 async function fetchSitemapUrls(siteUrl: string, limit: number): Promise<SitemapDiscovery> {
-  const base = await assertPublicHttpUrl(siteUrl);
+  const base = parseResearchPublicUrl(siteUrl);
   const queue = [new URL("/sitemap.xml", base).toString()];
   const visitedSitemaps = new Set<string>();
   const pages = new Map<string, string>();
@@ -63,7 +64,7 @@ async function fetchSitemapUrls(siteUrl: string, limit: number): Promise<Sitemap
 
     for (const match of xml.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)) {
       try {
-        const candidate = assertSameSiteUrl(match[1].trim(), base);
+        const candidate = parseSameSiteResearchUrl(match[1].trim(), base);
         if (candidate.pathname.endsWith(".xml")) {
           queue.push(candidate.toString());
         } else {
@@ -110,7 +111,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    siteUrl = (await assertPublicHttpUrl(siteUrl)).toString();
+    siteUrl = parseResearchPublicUrl(siteUrl).toString();
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid site_url" }, { status: 400 });
   }
@@ -162,7 +163,7 @@ export async function POST(request: NextRequest) {
       const url = urlList[cursor++];
       if (!url) return;
       const html = await fetchWithTimeout(url);
-      if (html) capturedLinks.set(url, extractInternalLinks(html, baseHost));
+      if (html) capturedLinks.set(url, extractInternalLinks(html, url, baseHost));
     }
   }
   await Promise.all(Array.from({ length: Math.min(12, urlList.length) }, () => crawlWorker()));
@@ -200,14 +201,8 @@ export async function POST(request: NextRequest) {
     ? []
     : sorted.filter((n) => n.inLinks.length === 0 && n.url !== baseGraphUrl).map((n) => n.url);
 
-  // Suggestions: orphans with 0 links but best PR donors nearby
-  const suggestions: string[] = [];
-  for (const orphanUrl of orphans.slice(0, 10)) {
-    const best = top20[0];
-    if (best && best.url !== orphanUrl) {
-      suggestions.push(`Ajoute un lien vers ${orphanUrl} depuis ${best.url}`);
-    }
-  }
+  // Suggestions include observed orphans and under-linked pages, never uncrawled pages.
+  const suggestions = buildInternalLinkSuggestions(nodes, 10);
 
   const response: ApiResponse = {
     top20,

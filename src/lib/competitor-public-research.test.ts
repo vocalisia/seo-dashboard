@@ -53,10 +53,15 @@ describe("public competitor keyword extraction", () => {
     expect(result.gaps.some((item) => item.keyword === "Actions suisses à surveiller")).toBe(true);
     expect(result.gaps.some((item) => item.keyword === "Analyse du SMI")).toBe(false);
     expect(result.gaps.every((item) =>
-      item.volume === 0 &&
-      item.competitor_position === 0 &&
-      item.difficulty === "unknown" &&
+      item.volume === null &&
+      item.competitor_position === null &&
+      item.difficulty === null &&
       item.source === "public_web"
+    )).toBe(true);
+    expect(result.gaps.every((item) =>
+      item.source_url.startsWith("https://") &&
+      item.source_count >= 1 &&
+      item.evidence_score >= 0
     )).toBe(true);
   });
 });

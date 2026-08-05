@@ -13,7 +13,7 @@ function isBlockedIpv4(address: string): boolean {
     return true;
   }
 
-  const [a, b] = parts;
+  const [a, b, c] = parts;
   return (
     a === 0 ||
     a === 10 ||
@@ -22,14 +22,25 @@ function isBlockedIpv4(address: string): boolean {
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 0) ||
+    (a === 192 && b === 88 && c === 99) ||
     (a === 192 && b === 168) ||
     (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113) ||
     a >= 224
   );
 }
 
 function isBlockedIpv6(address: string): boolean {
   const normalized = address.toLowerCase().replace(/^\[|\]$/g, "");
+  const mappedDotted = normalized.match(/^(?:::ffff:)?(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedDotted) return isBlockedIpv4(mappedDotted[1]);
+  const mappedHex = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mappedHex) {
+    const high = Number.parseInt(mappedHex[1], 16);
+    const low = Number.parseInt(mappedHex[2], 16);
+    return isBlockedIpv4([high >> 8, high & 255, low >> 8, low & 255].join("."));
+  }
   return (
     normalized === "::" ||
     normalized === "::1" ||
@@ -64,6 +75,9 @@ export function parsePublicHttpUrl(raw: string): URL {
   if (url.username || url.password) {
     throw new Error("URL credentials are not allowed");
   }
+  if (url.port && !((url.protocol === "http:" && url.port === "80") || (url.protocol === "https:" && url.port === "443"))) {
+    throw new Error("Only standard HTTP(S) ports are allowed");
+  }
 
   const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
   if (
@@ -72,6 +86,11 @@ export function parsePublicHttpUrl(raw: string): URL {
     hostname.endsWith(".localhost") ||
     hostname.endsWith(".local") ||
     hostname.endsWith(".internal") ||
+    hostname.endsWith(".home") ||
+    hostname.endsWith(".lan") ||
+    hostname.endsWith(".test") ||
+    hostname.endsWith(".invalid") ||
+    hostname.endsWith(".example") ||
     isPrivateOrReservedAddress(hostname)
   ) {
     throw new Error("Private or reserved hosts are not allowed");
@@ -104,7 +123,11 @@ export async function fetchPublicUrl(
     if (!location || redirectCount === maxRedirects) {
       throw new Error("Too many or invalid redirects");
     }
-    current = await assertPublicHttpUrl(new URL(location, current).toString());
+    const next = await assertPublicHttpUrl(new URL(location, current).toString());
+    if (current.protocol === "https:" && next.protocol !== "https:") {
+      throw new Error("HTTPS redirects cannot downgrade to HTTP");
+    }
+    current = next;
   }
   throw new Error("Too many redirects");
 }

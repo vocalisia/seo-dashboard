@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
 import { getSQL, isDatabaseConfigured } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
-import { assertPublicHttpUrl, assertSameSiteUrl, fetchPublicUrl } from "@/lib/safe-url";
+import { fetchResearchText, parseResearchPublicUrl, parseSameSiteResearchUrl } from "@/lib/web-research-fetch";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -37,17 +37,18 @@ const ORPHAN_IMPRESSION_THRESHOLD = 2;
 
 async function fetchSitemapUrls(siteUrl: string, limit = 2000): Promise<string[]> {
   try {
-    const base = await assertPublicHttpUrl(siteUrl);
-    const res = await fetchPublicUrl(new URL("/sitemap.xml", base).toString(), {
+    const base = parseResearchPublicUrl(siteUrl);
+    const res = await fetchResearchText(new URL("/sitemap.xml", base).toString(), {
       signal: AbortSignal.timeout(8000),
       headers: { "User-Agent": "SEO-Dashboard/1.0" },
+      maxBytes: 2_000_000,
     });
-    if (!res.ok) return [];
-    const text = await res.text();
+    if (res.status < 200 || res.status >= 300) return [];
+    const text = res.text;
     const urls: string[] = [];
     for (const m of text.matchAll(/<loc>(https?:\/\/[^<]+)<\/loc>/gi)) {
       try {
-        urls.push(assertSameSiteUrl(m[1].trim(), base).toString());
+        urls.push(parseSameSiteResearchUrl(m[1].trim(), base).toString());
       } catch {
         // Ignore malformed or cross-site sitemap entries.
       }
@@ -89,7 +90,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    siteUrl = (await assertPublicHttpUrl(siteUrl)).toString();
+    siteUrl = parseResearchPublicUrl(siteUrl).toString();
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid site_url" }, { status: 400 });
   }

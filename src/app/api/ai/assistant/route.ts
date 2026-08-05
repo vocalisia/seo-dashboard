@@ -9,7 +9,7 @@ import { logError } from "@/lib/logger";
 import { runWebResearch, type WebResearchReport } from "@/lib/web-research";
 import { requireApiSession } from "@/lib/api-auth";
 
-const GROUNDED_RESEARCH_CACHE_VERSION = "web-research-v1";
+const GROUNDED_RESEARCH_CACHE_VERSION = "local-research-v2";
 
 const schema = z.object({
   action: z.enum(["write", "translate", "image", "analyze", "research", "competitor", "eeat"]),
@@ -73,6 +73,11 @@ function researchPayload(report: WebResearchReport, cached: boolean, cachedAt?: 
     ...(cachedAt ? { cached_at: cachedAt } : {}),
     sources: report.sources,
     evidence: report.evidence,
+    claims: report.claims ?? [],
+    keyword_clusters: report.keyword_clusters ?? [],
+    query_plan: report.query_plan ?? [],
+    coverage: report.coverage ?? null,
+    metric_boundaries: report.metric_boundaries ?? null,
     data_status: report.data_status,
   };
 }
@@ -167,7 +172,14 @@ export async function POST(req: NextRequest) {
       try {
         const researched = await runWebResearch(makeResearchQuery(body.prompt, body.context), {
           locale: "fr-FR",
-          maxSources: body.action === "research" ? 5 : 8,
+          maxSources: body.action === "competitor" ? 12 : 10,
+          maxQueries: body.action === "competitor" ? 8 : 6,
+          depth: "deep",
+          focus: body.action === "competitor"
+            ? "competitors"
+            : body.action === "eeat"
+              ? "content"
+              : "general",
         });
         const report = body.action === "eeat"
           ? { ...researched, answer: buildGroundedEeatBrief(body.prompt, body.tone, researched) }
@@ -259,12 +271,13 @@ export async function POST(req: NextRequest) {
           ? "**Credit AI epuise.** Cette analyse n'est pas encore en cache. Relance via cache local ou change de provider seulement si necessaire."
           : `**Erreur AI temporaire**: ${msg}. Reessaie dans quelques secondes ou utilise un autre provider.`;
       return NextResponse.json({
-        success: true,
+        success: false,
+        error: friendly,
         reply: friendly,
         cached: false,
         ai_unavailable: true,
         error_detail: msg,
-      });
+      }, { status: 503 });
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";

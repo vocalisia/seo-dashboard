@@ -2,8 +2,8 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAICached } from "@/lib/ai-cache";
 import { normalizeSeoTitle } from "@/lib/autopilot-utils";
+import { requireApiSession } from "@/lib/api-auth";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -43,9 +43,12 @@ async function ensureContentPlanTable(sql: ReturnType<typeof getSQL>) {
       created_at TIMESTAMP DEFAULT NOW()
     )
   `;
+  await sql`ALTER TABLE content_plan_items ALTER COLUMN difficulty SET DEFAULT 'unknown'`;
 }
 
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   let body: unknown;
   try {
     body = await req.json();
@@ -112,16 +115,12 @@ export async function POST(req: NextRequest) {
       ...strikingRows.map((r) => {
         const pos = Number(r.position);
         const imp = Number(r.impressions);
-        const share = pos <= 20 ? 0.08 : 0.04;
-        const volume = Math.round(imp / share);
-        return { keyword: r.keyword, clicks: r.clicks, impressions: r.impressions, position: pos, volume, type: "striking" as const };
+        return { keyword: r.keyword, clicks: r.clicks, impressions: imp, position: pos, volume: 0, type: "striking" as const };
       }),
       ...lowCtrRows.map((r) => {
         const pos = Number(r.position);
         const imp = Number(r.impressions);
-        const share = pos <= 3 ? 0.65 : pos <= 5 ? 0.48 : 0.25;
-        const volume = Math.round(imp / share);
-        return { keyword: r.keyword, clicks: r.clicks, impressions: r.impressions, position: pos, volume, type: "low_ctr" as const };
+        return { keyword: r.keyword, clicks: r.clicks, impressions: imp, position: pos, volume: 0, type: "low_ctr" as const };
       }),
     ];
 
@@ -133,45 +132,20 @@ export async function POST(req: NextRequest) {
       return true;
     });
 
-    const top30 = unique.sort((a, b) => b.volume - a.volume).slice(0, 30);
+    const top30 = unique.sort((a, b) => b.impressions - a.impressions).slice(0, 30);
 
     if (top30.length === 0) {
       return NextResponse.json({ success: false, error: "Pas assez de données GSC pour générer un plan" }, { status: 400 });
     }
 
-    // 2. Ask AI to generate titles + rationale for top 20
-    const keywordList = top30.map((o) => `- "${o.keyword}" (vol: ${o.volume}, pos: ${o.position.toFixed(0)}, type: ${o.type})`).join("\n");
-
-    const aiPrompt = `Tu es expert SEO. Pour chaque mot-clé ci-dessous, génère un titre d'article SEO public et une justification courte. Contraintes du titre: mot-clé principal au début, une seule intention de recherche, 45 à 60 caractères si possible, jamais plus de 60, lisible, naturel, sans bourrage, sans label interne (AIO, LLM SEO, SEO principal), sans prix/devise/pourcentage, sans URL et sans ponctuation parasite. Réponds UNIQUEMENT en JSON valide: [{"keyword":"...","title":"...","rationale":"..."}]\n\nMots-clés:\n${keywordList}`;
-
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("AI timeout")), 30000)
-    );
-
-    let aiItems: { keyword: string; title: string; rationale: string }[] = [];
-    try {
-      const month = new Date().toISOString().slice(0, 7);
-      const text = await Promise.race([
-        askAICached({
-          cacheKey: `content-plan:${siteId}:${month}`,
-          messages: [{ role: "user", content: aiPrompt }],
-          model: "smart",
-          maxTokens: 3000,
-        }).then((r) => r.reply),
-        timeoutPromise,
-      ]);
-      const cleaned = text
-        .replace(/^```(?:json)?\s*\n?/i, "")
-        .replace(/\n?```\s*$/i, "")
-        .trim();
-      aiItems = JSON.parse(cleaned) as typeof aiItems;
-    } catch {
-      aiItems = top30.map((o) => ({
-        keyword: o.keyword,
-        title: normalizeSeoTitle(o.keyword, o.keyword),
-        rationale: o.type === "striking" ? "Position 11-30: une amélioration = page 1" : "CTR faible: optimiser le titre peut doubler le trafic",
-      }));
-    }
+    // 2. Build deterministic, source-labelled titles from GSC observations.
+    const aiItems = top30.map((opportunity) => ({
+      keyword: opportunity.keyword,
+      title: normalizeSeoTitle(opportunity.keyword, opportunity.keyword),
+      rationale: opportunity.type === "striking"
+        ? "Requête GSC en position moyenne 11-30 avec " + opportunity.impressions + " impressions observées sur 30 jours."
+        : "Requête GSC dans le top 10 avec CTR observé faible et " + opportunity.impressions + " impressions sur 30 jours.",
+    }));
 
     // 3. Score + build top 20
     const aiMap: Record<string, { title: string; rationale: string }> = {};
@@ -180,10 +154,9 @@ export async function POST(req: NextRequest) {
     }
 
     const scored: ContentItem[] = top30.map((o) => {
-      const difficultyScore = o.volume > 10000 ? 0.3 : o.volume > 3000 ? 0.6 : 0.9;
       const typeBonus = o.type === "striking" ? 1.5 : 1.0;
-      const score = Math.round(o.volume * difficultyScore * typeBonus);
-      const difficulty = o.volume > 10000 ? "hard" : o.volume > 3000 ? "medium" : "easy";
+      const score = Math.round(o.impressions * typeBonus);
+      const difficulty = "unknown";
       const ai = aiMap[o.keyword];
       return {
         title: normalizeSeoTitle(ai?.title ?? o.keyword, o.keyword),

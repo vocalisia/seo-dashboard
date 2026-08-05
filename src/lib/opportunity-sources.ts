@@ -157,6 +157,13 @@ function dedupe(values: string[]): string[] {
   return result;
 }
 
+function dailyRotation<T>(values: T[], limit: number, salt = 0): T[] {
+  if (values.length <= limit) return [...values];
+  const utcDay = Math.floor(Date.now() / 86_400_000);
+  const start = Math.abs(utcDay + salt) % values.length;
+  return Array.from({ length: limit }, (_, index) => values[(start + index) % values.length]!);
+}
+
 function decodeHtml(text: string): string {
   return text
     .replace(/&amp;/g, "&")
@@ -234,9 +241,8 @@ export async function fetchGoogleSuggestions(seed: string, hl = "fr"): Promise<s
 export async function fetchRedditTrending(limit = 60, countryCode = "GLOBAL"): Promise<string[]> {
   const collected: string[] = [];
   const profile = COUNTRY_PROFILES[countryCode] ?? COUNTRY_PROFILES.GLOBAL;
-  const subs = [...profile.redditSubs]
-    .sort(() => Math.random() - 0.5)
-    .slice(0, 8);
+  const countrySalt = [...countryCode].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const subs = dailyRotation(profile.redditSubs, 8, countrySalt);
 
   await Promise.all(
     subs.map(async (sub) => {
@@ -319,7 +325,7 @@ export async function fetchAmazonRising(limit = 30): Promise<string[]> {
     "electronics", "home-garden", "kitchen", "beauty", "sports",
     "office-products", "pet-supplies", "tools", "toys-games", "health-personal-care",
   ];
-  const picked = [...categories].sort(() => Math.random() - 0.5).slice(0, 4);
+  const picked = dailyRotation(categories, 4, 17);
   const results: string[] = [];
 
   await Promise.all(
@@ -623,54 +629,22 @@ export async function buildExternalSignalRows(
     ...serpDerived,
   ]);
 
-  const shuffled = merged.sort(() => Math.random() - 0.5);
-
-  for (const query of shuffled) {
+  for (const query of merged.sort((a, b) => a.localeCompare(b))) {
     const normalized = normalizeQuery(query);
     if (!normalized || existingQueries.has(normalized)) continue;
     if (normalized.length < 4 || normalized.length > 120) continue;
 
-    const words = normalized.split(" ").length;
     const source = sourceMap.get(normalized) ?? "suggest";
-
-    const impressionsBase =
-      source === "amazon" ? 14000 :
-      source === "indie" ? 13000 :
-      source === "appsumo" ? 12500 :
-      source === "kickstarter" ? 12000 :
-      source === "exploding" ? 11000 :
-      source === "trend" ? 9000 :
-      source === "reddit" ? 7500 :
-      source === "ph" ? 7000 :
-      source === "hn" ? 6500 :
-      source === "serp" ? 6000 :
-      5000;
-
-    const prevRatio =
-      source === "amazon" ? 0.15 :
-      source === "indie" ? 0.20 :
-      source === "appsumo" ? 0.20 :
-      source === "kickstarter" ? 0.22 :
-      source === "exploding" ? 0.18 :
-      source === "trend" ? 0.25 :
-      source === "reddit" ? 0.35 :
-      source === "ph" ? 0.30 :
-      source === "hn" ? 0.40 :
-      source === "serp" ? 0.45 :
-      0.55;
-
-    const positionByLat: Record<string, number> = {
-      amazon: 30, indie: 29, appsumo: 28, kickstarter: 27,
-      exploding: 28, trend: 26, reddit: 25, ph: 24, hn: 23, serp: 22, suggest: 21,
-    };
 
     rows.push({
       query,
-      impressions_30d: impressionsBase + Math.max(0, words - 2) * 900,
-      impressions_prev_30d: Math.round(impressionsBase * prevRatio),
-      clicks_30d: Math.round(impressionsBase * 0.015),
-      avg_position_30d: positionByLat[source] ?? 22,
+      impressions_30d: 0,
+      impressions_prev_30d: 0,
+      clicks_30d: 0,
+      avg_position_30d: 0,
       site_count: 0,
+      measurement_kind: "external_signal",
+      signal_source: source,
     });
   }
 

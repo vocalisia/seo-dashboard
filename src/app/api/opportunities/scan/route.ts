@@ -3,17 +3,14 @@ export const maxDuration = 120;
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL, initDB } from "@/lib/db";
-import { createHash } from "crypto";
-import { askAICached } from "@/lib/ai-cache";
 import { buildOpportunityCandidates, type OpportunityCandidate, type OpportunityKeywordRow } from "@/lib/opportunity-engine";
-import { buildExternalSignalRows, COUNTRY_PROFILES, fetchGoogleSerpSnapshot } from "@/lib/opportunity-sources";
+import { buildExternalSignalRows, COUNTRY_PROFILES } from "@/lib/opportunity-sources";
+import { runWebResearch } from "@/lib/web-research";
 import { requireApiSession } from "@/lib/api-auth";
 import {
   buildLaunchPlan,
   checkDomainAvailability,
   deriveWhyNow,
-  estimateRevenueRange,
-  estimateTimeToRankMonths,
   type DomainCheckResult,
   type LaunchPlan,
   type RevenueRange,
@@ -27,6 +24,8 @@ interface AggregatedKeywordRow {
   clicks_30d: string;
   avg_position_30d: string;
   site_count: string;
+  search_volume: string | null;
+  search_volume_source: string | null;
 }
 
 type DiscoveryMode = "A" | "B" | "C";
@@ -38,6 +37,8 @@ interface StoredOpportunity {
   site_type: string;
   core_keywords: string[];
   monthly_volume: number;
+  volume_source?: string | null;
+  gsc_impressions_30d?: number;
   competition: string;
   monetization: string;
   projected_traffic_6m: number;
@@ -52,6 +53,8 @@ interface StoredOpportunity {
   business_model: Record<string, unknown>;
   confidence_score: number;
   signal_source?: string;
+  metric_status?: "keyword_planner_measured" | "gsc_signal_only" | "mixed_signal_only" | "external_signal_unmeasured";
+  signal_sources?: string[];
   momentum_pct?: number;
   average_position?: number;
   opportunity_type?: string;
@@ -77,8 +80,6 @@ interface StoredOpportunity {
   revenue_range?: RevenueRange;
   domain_available?: DomainCheckResult[];
 }
-
-type OpportunityInsertable = StoredOpportunity;
 
 const PORTFOLIO_HINTS = [
   "voice ai",
@@ -216,23 +217,15 @@ function inferMonetization(candidate: OpportunityCandidate): string {
   return "ads";
 }
 
-function inferCompetition(candidate: OpportunityCandidate): string {
-  if (candidate.averagePosition >= 18 && candidate.signalScore >= 0.7) return "low";
-  if (candidate.averagePosition >= 12) return "medium";
-  return "high";
-}
-
-function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity {
+export function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity {
+  const metricsMeasured = candidate.measurementKind !== "external_signal";
   const siteType = inferSiteType(candidate);
   const monetization = inferMonetization(candidate);
-  const competition = inferCompetition(candidate);
+  const competition = "unknown";
+  const verifiedSearchVolume = candidate.searchVolume ?? 0;
   const root = slugify(candidate.clusterLabel.split(" ").slice(0, 3).join(" "));
-  const projectedTraffic6m = Math.round(candidate.monthlyVolume * 0.1);
-  const projectedRevenue6m = monetization === "lead-gen"
-    ? Math.round(projectedTraffic6m * 1.5)
-    : monetization === "affiliate"
-      ? Math.round(projectedTraffic6m * 0.7)
-      : Math.round(projectedTraffic6m * 0.25);
+  const projectedTraffic6m = 0;
+  const projectedRevenue6m = 0;
   const confidence = Math.round(candidate.signalScore * 100);
 
   const competitors = (candidate.serpEvidence?.resultUrls ?? [])
@@ -250,13 +243,21 @@ function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity
   return {
     niche: candidate.clusterLabel,
     reason: [
-      `${candidate.monthlyVolume.toLocaleString("en-US")} monthly impressions detected in GSC-like demand.`,
-      `${candidate.momentumPct}% momentum over the previous 30-day window.`,
+      verifiedSearchVolume > 0
+        ? verifiedSearchVolume.toLocaleString("fr-FR") + " recherches mensuelles issues d'un import Keyword Planner vérifié."
+        : metricsMeasured
+          ? candidate.monthlyVolume.toLocaleString("fr-FR") + " impressions GSC observées sur 30 jours; volume de recherche non mesuré."
+        : "Signal externe qualitatif détecté; volume de recherche non mesuré.",
+      metricsMeasured
+        ? candidate.momentumPct + "% de variation GSC face aux 30 jours précédents."
+        : "Tendance, position Google et clics non mesurés.",
       candidate.rationale.join(". "),
     ].join(" "),
     site_type: siteType,
     core_keywords: candidate.keywords.slice(0, 5),
-    monthly_volume: candidate.monthlyVolume,
+    monthly_volume: verifiedSearchVolume,
+    volume_source: candidate.searchVolumeSources[0] ?? null,
+    gsc_impressions_30d: metricsMeasured ? candidate.monthlyVolume : 0,
     competition,
     monetization,
     projected_traffic_6m: projectedTraffic6m,
@@ -266,12 +267,12 @@ function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity
     target_countries: ["FRA", "CHE", "BEL"],
     target_languages: ["fr"],
     competitors,
-    success_rate: Math.max(25, Math.round(confidence * 0.8)),
+    success_rate: 0,
     revenue_timeline: {
       m1: 0,
-      m3: Math.round(projectedRevenue6m * 0.25),
-      m6: projectedRevenue6m,
-      m12: Math.round(projectedRevenue6m * 2.2),
+      m3: 0,
+      m6: 0,
+      m12: 0,
     },
     business_model: {
       type: `${siteType} focused on ${candidate.intent} demand`,
@@ -279,7 +280,15 @@ function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity
       launch_angle: candidate.rationale,
     },
     confidence_score: confidence,
-    signal_source: candidate.portfolioDistance >= 0.7 ? "gsc+external" : "gsc",
+    signal_source: candidate.signalSources.join("+") || candidate.measurementKind,
+    metric_status: verifiedSearchVolume > 0
+      ? "keyword_planner_measured"
+      : candidate.measurementKind === "external_signal"
+      ? "external_signal_unmeasured"
+      : candidate.measurementKind === "mixed"
+        ? "mixed_signal_only"
+        : "gsc_signal_only",
+    signal_sources: candidate.signalSources,
     momentum_pct: candidate.momentumPct,
     average_position: candidate.averagePosition,
     opportunity_type: candidate.opportunityType,
@@ -293,13 +302,6 @@ function fallbackOpportunity(candidate: OpportunityCandidate): StoredOpportunity
       resultUrls: [],
     },
   };
-}
-
-function cleanJsonBlock(input: string): string {
-  return input
-    .replace(/^```(?:json)?\s*\n?/i, "")
-    .replace(/\n?```\s*$/i, "")
-    .trim();
 }
 
 function looksLikeRedditFragment(text: string): boolean {
@@ -371,7 +373,8 @@ function opportunityQualityScore(opp: StoredOpportunity): number {
 
   let score = 0;
   score += Math.min(30, Math.max(0, Number(opp.confidence_score || 0) * 0.25));
-  score += Math.min(18, Math.log10(Math.max(10, Number(opp.monthly_volume || 0))) * 4);
+  const observedGscImpressions = Number(opp.gsc_impressions_30d || 0);
+  score += Math.min(18, Math.log10(Math.max(10, observedGscImpressions)) * 4);
   score += Math.min(16, Math.max(0, Number(opp.momentum_pct || 0)) / 4);
   score += (opp.why_now?.length ?? 0) >= 2 ? 14 : (opp.why_now?.length ?? 0) * 6;
   score += (opp.serp_evidence?.relatedQuestions?.length ?? 0) >= 3 ? 8 : 0;
@@ -419,6 +422,7 @@ function isHighQualityOpportunity(opp: StoredOpportunity): boolean {
   return true;
 }
 
+/* Legacy provider-based enrichment intentionally disabled.
 async function enrichCandidatesWithAI(
   candidates: OpportunityCandidate[],
   preferredCategories: string[] = [],
@@ -523,6 +527,7 @@ Tout le contenu texte doit Ãªtre en FRANÃ‡AIS si les signaux sont francopho
   const parsed = JSON.parse(cleaned) as { opportunities?: StoredOpportunity[] };
   return parsed.opportunities?.length ? parsed.opportunities : null;
 }
+*/
 
 function applyRequestedMarketAndCategory(
   opp: StoredOpportunity,
@@ -559,24 +564,31 @@ function applyRequestedMarketAndCategory(
 
 async function enrichCandidatesWithFreeSerpContext(candidates: OpportunityCandidate[]): Promise<OpportunityCandidate[]> {
   const snapshotResults = await Promise.allSettled(
-    candidates.slice(0, 4).map((candidate) => fetchGoogleSerpSnapshot(candidate.clusterLabel))
+    candidates.slice(0, 4).map((candidate) => runWebResearch(candidate.clusterLabel, {
+      locale: "fr-FR",
+      maxSources: 8,
+      maxQueries: 4,
+      depth: "quick",
+      focus: "content",
+    }))
   );
-  const snapshots = snapshotResults.map((result) => (result.status === "fulfilled" ? result.value : null));
+  const reports = snapshotResults.map((result) => (result.status === "fulfilled" ? result.value : null));
 
   return candidates.map((candidate, index) => {
-    const snapshot = snapshots[index];
-    if (!snapshot) return candidate;
-
-    const extraQueries = [...candidate.sampleQueries, ...snapshot.relatedQuestions, ...snapshot.relatedSearches]
+    const report = reports[index];
+    if (!report) return candidate;
+    const observedTerms = (report.keyword_clusters ?? [])
+      .flatMap((cluster) => cluster.keywords.map((item) => item.keyword));
+    const executedQueries = (report.query_plan ?? []).map((step) => step.query);
+    const extraQueries = [...candidate.sampleQueries, ...observedTerms, ...executedQueries]
       .filter(Boolean)
       .slice(0, 8);
     const extraRationale = [...candidate.rationale];
-
-    if (snapshot.relatedQuestions.length > 0) {
-      extraRationale.push(`${snapshot.relatedQuestions.length} PAA-style questions found`);
+    if (report.sources.length > 0) {
+      extraRationale.push(report.sources.length + " sources publiques observées");
     }
-    if (snapshot.relatedSearches.length > 0) {
-      extraRationale.push(`${snapshot.relatedSearches.length} related searches found`);
+    if ((report.claims ?? []).some((claim) => claim.confidence === "corroborated")) {
+      extraRationale.push("au moins une affirmation corroborée par plusieurs domaines");
     }
 
     return {
@@ -584,9 +596,12 @@ async function enrichCandidatesWithFreeSerpContext(candidates: OpportunityCandid
       sampleQueries: extraQueries,
       rationale: extraRationale.slice(0, 6),
       serpEvidence: {
-        relatedQuestions: snapshot.relatedQuestions.slice(0, 8),
-        relatedSearches: snapshot.relatedSearches.slice(0, 8),
-        resultTitles: snapshot.resultTitles.slice(0, 8),
+        relatedQuestions: observedTerms.filter((term) =>
+          /^(comment|pourquoi|quel|quelle|combien|how|why|what|which)\b/i.test(term)
+        ).slice(0, 8),
+        relatedSearches: executedQueries.slice(0, 8),
+        resultTitles: report.sources.map((source) => source.title).slice(0, 8),
+        resultUrls: report.sources.map((source) => source.url).slice(0, 8),
       },
     };
   });
@@ -623,6 +638,7 @@ function buildModeConfig(mode: DiscoveryMode) {
   };
 }
 
+/* Legacy response sanitizer retained only as migration reference.
 function sanitizeOpportunity(
   raw: Partial<StoredOpportunity>,
   fallback: StoredOpportunity
@@ -734,14 +750,15 @@ function sanitizeOpportunity(
         : fallback.serp_evidence,
   };
 }
+*/
 
 /**
  * POST /api/opportunities/scan
  *
- * Scans all GSC data + Perplexity market research to find untapped niches
- * where creating a NEW dedicated site/blog could capture significant traffic.
+ * Scans verified GSC observations, imported Keyword Planner volumes and
+ * qualitative public web signals to find evidence-backed niche candidates.
  *
- * Returns scored opportunities with traffic projections.
+ * Returns scored opportunities with explicit metric boundaries.
  */
 export async function POST(request: NextRequest) {
   const authState = await requireApiSession();
@@ -809,6 +826,22 @@ export async function POST(request: NextRequest) {
           AND query IS NOT NULL
           AND impressions >= 5
         GROUP BY query
+      ),
+      keyword_planner AS (
+        SELECT
+          LOWER(keyword) AS keyword_key,
+          MAX(volume_market) FILTER (
+            WHERE volume_source LIKE 'google_kp_real_%'
+              AND volume_market IS NOT NULL
+              AND volume_market > 0
+          ) AS search_volume,
+          MAX(volume_source) FILTER (
+            WHERE volume_source LIKE 'google_kp_real_%'
+              AND volume_market IS NOT NULL
+              AND volume_market > 0
+          ) AS search_volume_source
+        FROM tracked_keywords
+        GROUP BY LOWER(keyword)
       )
       SELECT
         c.query,
@@ -816,9 +849,12 @@ export async function POST(request: NextRequest) {
         COALESCE(p.impressions_prev_30d, 0) AS impressions_prev_30d,
         c.clicks_30d,
         c.avg_position_30d,
-        c.site_count
+        c.site_count,
+        kp.search_volume,
+        kp.search_volume_source
       FROM current_window c
       LEFT JOIN previous_window p ON p.query = c.query
+      LEFT JOIN keyword_planner kp ON kp.keyword_key = LOWER(c.query)
       WHERE c.impressions_30d >= 25
       ORDER BY c.impressions_30d DESC
       LIMIT 500
@@ -832,6 +868,10 @@ export async function POST(request: NextRequest) {
       clicks_30d: toNumber(row.clicks_30d),
       avg_position_30d: toNumber(row.avg_position_30d),
       site_count: toNumber(row.site_count),
+      measurement_kind: "gsc",
+      signal_source: "gsc",
+      search_volume: row.search_volume == null ? null : toNumber(row.search_volume),
+      search_volume_source: row.search_volume_source,
     }));
 
     const existingQueries = new Set(keywordRows.map((row) => row.query.toLowerCase().trim()));
@@ -911,30 +951,10 @@ export async function POST(request: NextRequest) {
         };
       });
 
-    try {
-      const enriched = await enrichCandidatesWithAI(candidates, requestedCategories, scanContextKey);
-      if (enriched?.length) {
-        const aiOpps = enriched
-          .slice(0, candidates.length)
-          .map((opp, index) => sanitizeOpportunity(opp, fallbackOpportunity(candidates[index]!)));
-
-        const acceptable = aiOpps.filter((opp) => !looksLikeRedditFragment(opp.niche));
-
-        if (acceptable.length === 0) {
-          throw new Error("AI returned only fragment-style niches, retrying not available; using fallback");
-        }
-        opportunities = acceptable;
-
-        if (requestedCategories.length > 0) {
-          const allowed = new Set(requestedCategories);
-          opportunities = opportunities.filter((opp) => allowed.has(opp.site_type));
-        }
-      } else {
-        throw new Error("AI returned empty");
-      }
-    } catch (err) {
-      console.error("Opportunity enrichment failed:", err);
-      opportunities = opportunities.filter((opp) => !looksLikeRedditFragment(opp.niche));
+    opportunities = opportunities.filter((opp) => !looksLikeRedditFragment(opp.niche));
+    if (requestedCategories.length > 0) {
+      const allowed = new Set(requestedCategories);
+      opportunities = opportunities.filter((opp) => allowed.has(opp.site_type));
     }
 
     opportunities = opportunities.map((opp) => {
@@ -963,11 +983,6 @@ export async function POST(request: NextRequest) {
         sample_queries: opp.sample_queries,
         related_questions: opp.serp_evidence?.relatedQuestions ?? [],
       });
-      const ttr = estimateTimeToRankMonths({
-        competition: opp.competition,
-        average_position: opp.average_position,
-        monthly_volume: opp.monthly_volume,
-      });
       const whyNow = deriveWhyNow({
         signal_source: opp.signal_source,
         momentum_pct: opp.momentum_pct,
@@ -975,19 +990,14 @@ export async function POST(request: NextRequest) {
         sample_queries: opp.sample_queries,
         serp_evidence: opp.serp_evidence,
       });
-      const revRange = estimateRevenueRange({
-        monthly_volume: opp.monthly_volume,
-        monetization: opp.monetization,
-        competition: opp.competition,
-      });
       const domainAvail = (opp.suggested_domains ?? []).map((d) => checkDomainAvailability(d));
 
       return {
         ...opp,
         launch_plan: launchPlan,
-        time_to_rank_months: ttr,
+        time_to_rank_months: undefined,
         why_now: whyNow,
-        revenue_range: revRange,
+        revenue_range: undefined,
         domain_available: domainAvail,
       };
     });
@@ -1011,6 +1021,7 @@ export async function POST(request: NextRequest) {
           },
         };
       })
+      .filter((opp) => opp.metric_status !== "external_signal_unmeasured")
       .filter(isHighQualityOpportunity)
       .sort((a, b) => (b.confidence_score ?? 0) - (a.confidence_score ?? 0))
       .slice(0, 8);
@@ -1037,7 +1048,8 @@ export async function POST(request: NextRequest) {
              projected_traffic_6m, projected_revenue_6m, suggested_domains, seed_articles,
              target_countries, target_languages, competitors, business_model, success_rate, revenue_timeline, confidence_score,
              signal_source, momentum_pct, average_position, opportunity_type, sample_queries, score_breakdown, serp_evidence,
-             launch_plan, time_to_rank_months, why_now, revenue_range, domain_available)
+             launch_plan, time_to_rank_months, why_now, revenue_range, domain_available,
+             metric_status, signal_sources, engine_version, volume_source, gsc_impressions_30d)
             VALUES (${opp.niche}, ${opp.reason}, ${opp.site_type}, ${JSON.stringify(opp.core_keywords)},
                     ${opp.monthly_volume}, ${opp.competition}, ${opp.monetization},
                     ${opp.projected_traffic_6m}, ${opp.projected_revenue_6m},
@@ -1051,7 +1063,10 @@ export async function POST(request: NextRequest) {
                     ${JSON.stringify(opp.score_breakdown ?? {})}, ${JSON.stringify(opp.serp_evidence ?? {})},
                     ${JSON.stringify(opp.launch_plan ?? {})}, ${opp.time_to_rank_months ?? null},
                     ${JSON.stringify(opp.why_now ?? [])}, ${JSON.stringify(opp.revenue_range ?? {})},
-                    ${JSON.stringify(opp.domain_available ?? [])})
+                    ${JSON.stringify(opp.domain_available ?? [])},
+                    ${opp.metric_status ?? "external_signal_unmeasured"},
+                    ${JSON.stringify(opp.signal_sources ?? [])},
+                    'local-opportunity-v2', ${opp.volume_source ?? null}, ${opp.gsc_impressions_30d ?? 0})
           `),
         ]
       );
@@ -1063,6 +1078,7 @@ export async function POST(request: NextRequest) {
       SELECT *
       FROM market_opportunities
       WHERE signal_source LIKE ${`%:scan-${scanContextKey}%`}
+        AND engine_version = 'local-opportunity-v2'
       ORDER BY confidence_score DESC, created_at DESC
       LIMIT 100
     `;
@@ -1076,6 +1092,13 @@ export async function POST(request: NextRequest) {
       external_signals_added: externalRows.length,
       discovery_mode: requestedMode,
       countries: requestedCountries,
+      metric_boundaries: {
+        monthly_volume: "verified_keyword_planner_import_only",
+        gsc_impressions_30d: "observed_search_console_visibility",
+        projected_traffic_6m: "not_calculated",
+        projected_revenue_6m: "not_calculated",
+        time_to_rank_months: "not_calculated",
+      },
     });
   } catch (err) {
     return NextResponse.json({ success: false, error: err instanceof Error ? err.message : "Unknown" }, { status: 500 });
@@ -1095,6 +1118,7 @@ export async function GET() {
   try {
     const rows = await sql`
       SELECT * FROM market_opportunities
+      WHERE engine_version = 'local-opportunity-v2'
       ORDER BY confidence_score DESC, created_at DESC
       LIMIT 100
     `;
@@ -1108,6 +1132,13 @@ export async function GET() {
       message: strictRows.length < rows.length
         ? `${rows.length - strictRows.length} opportunites faibles masquees par le filtre qualite.`
         : undefined,
+      metric_boundaries: {
+        monthly_volume: "verified_keyword_planner_import_only",
+        gsc_impressions_30d: "observed_search_console_visibility",
+        projected_traffic_6m: "not_calculated",
+        projected_revenue_6m: "not_calculated",
+        time_to_rank_months: "not_calculated",
+      },
     });
   } catch (err) {
     return NextResponse.json(

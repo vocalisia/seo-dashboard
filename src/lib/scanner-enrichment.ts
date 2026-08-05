@@ -7,7 +7,7 @@
  */
 
 import { normalizeSeoTitle } from "./autopilot-utils";
-import { fetchGoogleSerpSnapshot } from "./opportunity-sources";
+import { runWebResearch } from "./web-research";
 
 // ---------- Types ----------
 
@@ -50,6 +50,10 @@ export interface DeepResearchPayload {
   niche: string;
   keyword: string;
   fetched_at: string;
+  data_status: "complete" | "partial" | "unavailable";
+  ranking_scope: "multi_source_fused_discovery";
+  search_providers: string[];
+  evidence_count: number;
   competitors: Array<{
     rank: number;
     url: string;
@@ -57,6 +61,8 @@ export interface DeepResearchPayload {
     title: string;
     snippet_preview?: string;
     estimated_authority: "low" | "medium" | "high";
+    source_score: number;
+    source_providers: string[];
   }>;
   content_angles: string[];
   content_gaps: string[];
@@ -333,148 +339,77 @@ export function estimateAuthority(host: string): "low" | "medium" | "high" {
   return "medium";
 }
 
-// ---------- Deep research: scrape Google SERP + extract top 3 pages ----------
+// ---------- Deep research: bounded multi-source discovery + safe extraction ----------
 
-interface FetchedPage {
-  url: string;
-  html: string;
-  status: number;
-}
-
-async function fetchPageTextSafe(url: string, timeoutMs = 6000): Promise<FetchedPage | null> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml",
-        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7",
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
-    const ctype = res.headers.get("content-type") ?? "";
-    if (!ctype.includes("text/html") && !ctype.includes("application/xhtml")) return null;
-    const html = await res.text();
-    return { url, html, status: res.status };
-  } catch {
-    return null;
-  }
-}
-
-function extractTextSummary(html: string): { title?: string; headings: string[]; wordCount: number } {
-  const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
-  const title = titleMatch ? titleMatch[1].replace(/\s+/g, " ").trim() : undefined;
-
-  const headings: string[] = [];
-  for (const m of html.matchAll(/<h[12345][^>]*>([\s\S]*?)<\/h[12345]>/gi)) {
-    const text = (m[1] ?? "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (text && text.length >= 4 && text.length <= 160) headings.push(text);
-    if (headings.length >= 20) break;
-  }
-
-  // Cheap word-count estimate from <p> blocks
-  const paragraphs: string[] = [];
-  for (const m of html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
-    const text = (m[1] ?? "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (text) paragraphs.push(text);
-    if (paragraphs.length >= 80) break;
-  }
-  const wordCount = paragraphs.join(" ").split(/\s+/).filter(Boolean).length;
-
-  return { title, headings, wordCount };
-}
-
-/**
- * Run a deep research scan for a single keyword.
- * Strategy:
- *  1. Use existing fetchGoogleSerpSnapshot (free, no API key) → top URLs + PAA + related searches
- *  2. Fetch top 3 result pages directly → extract title + headings
- *  3. Derive content angles (most-frequent heading n-grams) and content gaps
- *
- * All operations are bounded by short timeouts. Never throws — returns degraded payload on failure.
- */
 export async function runDeepResearch(keyword: string, niche: string): Promise<DeepResearchPayload> {
   const fetchedAt = new Date().toISOString();
-  const snapshot = await fetchGoogleSerpSnapshot(keyword).catch(() => null);
-
-  const topUrls = (snapshot?.resultUrls ?? []).slice(0, 10);
-  const topTitles = snapshot?.resultTitles ?? [];
-
-  const competitors = topUrls.map((url, i) => {
-    let host = "";
-    try {
-      host = new URL(url).hostname.replace(/^www\./i, "");
-    } catch {
-      host = url;
-    }
-    return {
-      rank: i + 1,
-      url,
-      host,
-      title: topTitles[i] ?? host,
-      estimated_authority: estimateAuthority(host),
-    };
+  const report = await runWebResearch(keyword, {
+    locale: "fr-FR",
+    maxSources: 12,
+    maxQueries: 8,
+    depth: "deep",
+    focus: "content",
   });
-
-  // Fetch top 3 pages in parallel (short timeout each)
-  const top3Urls = topUrls.slice(0, 3);
-  const pages = await Promise.all(top3Urls.map((u) => fetchPageTextSafe(u, 6000)));
-  const extracted: DeepResearchPayload["top_pages_extracted"] = [];
-  for (const page of pages) {
-    if (!page) continue;
-    const { title, headings, wordCount } = extractTextSummary(page.html);
-    extracted.push({
-      url: page.url,
-      title,
-      headings: headings.slice(0, 12),
-      word_count_estimate: wordCount,
-    });
-  }
-
-  // Content angles = top headings normalized
-  const headingCorpus = extracted.flatMap((p) => p.headings);
-  const headingCounts = new Map<string, number>();
-  for (const h of headingCorpus) {
-    const norm = h.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
-    if (norm.length < 6 || norm.length > 90) continue;
-    headingCounts.set(norm, (headingCounts.get(norm) ?? 0) + 1);
-  }
-  const contentAngles = [...headingCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
+  const competitors = report.sources.slice(0, 10).map((source, index) => ({
+    rank: index + 1,
+    url: source.url,
+    host: source.domain,
+    title: source.title,
+    snippet_preview: source.description,
+    estimated_authority: estimateAuthority(source.domain),
+    source_score: source.source_score ?? 0,
+    source_providers: source.providers,
+  }));
+  const extracted: DeepResearchPayload["top_pages_extracted"] = report.sources
+    .filter((source) => source.fetch_status === "ok")
     .slice(0, 8)
-    .map(([h]) => h);
-
-  // Content gaps = PAA questions not covered by any heading
-  const paa = (snapshot?.relatedQuestions ?? []).slice(0, 8);
-  const lowerHeadings = headingCorpus.map((h) => h.toLowerCase());
-  const contentGaps = paa.filter((q) => {
-    const lq = q.toLowerCase();
-    return !lowerHeadings.some((h) => h.includes(lq.slice(0, 20)) || lq.includes(h.slice(0, 20)));
-  });
-
-  const summary = `Top ${competitors.length} concurrents analysés pour "${keyword}". ${extracted.length} pages extraites (médiane ${Math.round(
-    extracted.reduce((s, p) => s + p.word_count_estimate, 0) / Math.max(1, extracted.length)
-  )} mots). ${contentGaps.length} gaps PAA détectés.`;
+    .map((source) => ({
+      url: source.url,
+      title: source.title,
+      headings: source.headings.slice(0, 12),
+      word_count_estimate: source.word_count,
+    }));
+  const contentAngles = (report.keyword_clusters ?? [])
+    .flatMap((cluster) => cluster.keywords.map((item) => item.keyword))
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .slice(0, 8);
+  const relatedQuestions = (report.keyword_clusters ?? [])
+    .flatMap((cluster) => cluster.keywords)
+    .filter((item) =>
+      item.intent === "informational"
+      && /^(comment|pourquoi|quel|quelle|quels|quelles|combien|how|why|what|which)\b/i.test(item.keyword)
+    )
+    .map((item) => item.keyword)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .slice(0, 8);
+  const contentGaps = (report.claims ?? [])
+    .filter((claim) => claim.confidence === "corroborated")
+    .map((claim) => claim.statement)
+    .slice(0, 8);
+  const relatedSearches = (report.query_plan ?? [])
+    .map((step) => step.query)
+    .filter((query, index, values) => query !== keyword && values.indexOf(query) === index)
+    .slice(0, 10);
+  const activeProviders = Object.entries(report.search_providers)
+    .filter(([, status]) => status === "ok")
+    .map(([provider]) => provider);
+  const summary = report.data_status === "unavailable"
+    ? `Recherche publique indisponible pour "${keyword}". Aucune métrique n'a été inventée.`
+    : `${competitors.length} sources concurrentes observées pour "${keyword}" via ${activeProviders.join(", ")}. ${extracted.length} pages extraites et ${(report.claims ?? []).length} affirmations reliées à leurs preuves.`;
 
   return {
     niche,
     keyword,
     fetched_at: fetchedAt,
+    data_status: report.data_status,
+    ranking_scope: "multi_source_fused_discovery",
+    search_providers: activeProviders,
+    evidence_count: report.evidence.length,
     competitors,
     content_angles: contentAngles,
     content_gaps: contentGaps,
-    related_questions: paa,
-    related_searches: snapshot?.relatedSearches ?? [],
+    related_questions: relatedQuestions,
+    related_searches: relatedSearches,
     top_pages_extracted: extracted,
     summary,
   };

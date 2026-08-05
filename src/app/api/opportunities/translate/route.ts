@@ -3,7 +3,6 @@ export const maxDuration = 30;
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
-import { askAICached } from "@/lib/ai-cache";
 import { requireApiSession } from "@/lib/api-auth";
 
 interface TranslatableFields {
@@ -53,6 +52,11 @@ function fallbackTranslation(payload: TranslatableFields): TranslatableFields {
   };
 }
 
+async function disabledExternalTranslation(request: unknown): Promise<{ reply: string }> {
+  void request;
+  throw new Error("External translation providers are disabled");
+}
+
 export async function POST(req: NextRequest) {
   const authState = await requireApiSession();
   if (authState.unauthorized) return authState.unauthorized;
@@ -68,6 +72,13 @@ export async function POST(req: NextRequest) {
   const target = (body.target || "fr").toLowerCase();
   if (!oppId) {
     return NextResponse.json({ success: false, error: "opportunity_id required" }, { status: 400 });
+  }
+  if (target !== "fr") {
+    return NextResponse.json({
+      success: false,
+      error: "Only the local French translation is available without an external provider.",
+      api_key_required: false,
+    }, { status: 400 });
   }
 
   const sql = getSQL();
@@ -104,6 +115,22 @@ export async function POST(req: NextRequest) {
       business_model_how_to_monetize: businessModel.how_to_monetize ? String(businessModel.how_to_monetize) : undefined,
     };
 
+    if (target === "fr") {
+      return NextResponse.json({
+        success: true,
+        target,
+        fallback: true,
+        source: "local_translation_rules",
+        api_key_required: false,
+        original: {
+          niche: payload.niche,
+          reason: payload.reason,
+        },
+        translated: fallbackTranslation(payload),
+      });
+    }
+
+    // Legacy provider-based translations are intentionally disabled.
     const langName: Record<string, string> = {
       fr: "français",
       en: "anglais",
@@ -134,7 +161,7 @@ RÉPONSE en JSON strict avec EXACTEMENT les mêmes clés:
     let translated: Partial<TranslatableFields>;
     let fallback = false;
     try {
-      const { reply: raw } = await askAICached({
+      const { reply: raw } = await disabledExternalTranslation({
         cacheKey: `opp-translate:${oppId}:${target}`,
         messages: [{ role: "user", content: prompt }],
         model: "fast",
@@ -157,6 +184,7 @@ RÉPONSE en JSON strict avec EXACTEMENT les mêmes clés:
       },
       translated,
     });
+    // End disabled provider path.
   } catch (err) {
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : "Unknown" },
