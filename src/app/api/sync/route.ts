@@ -5,8 +5,14 @@ import { mapWithConcurrency, parseSyncDays } from "@/lib/data-sync";
 import { ensureSyncStatusTable, saveSyncStatus, type SyncSource } from "@/lib/sync-status";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { aggregateGa4Daily } from "@/lib/ga4-daily-aggregation";
+import {
+  PositionCrawlInProgressError,
+  runPositionCrawl,
+} from "@/lib/position-crawl";
 
 const GSC_PAGE_SIZE = 25000;
+
+export const maxDuration = 300;
 
 async function fetchAllSearchAnalyticsRows(
   searchConsole: ReturnType<typeof getSearchConsoleClient>,
@@ -240,6 +246,33 @@ export async function POST(request: NextRequest) {
   await ensureSchemaOnce();
 
   try {
+    if (request.nextUrl.searchParams.get("mode") === "positions") {
+      const days = parseSyncDays(request.nextUrl.searchParams.get("days"));
+      const siteIdRaw = request.nextUrl.searchParams.get("siteId");
+      const siteId = siteIdRaw ? Number(siteIdRaw) : null;
+      if (siteIdRaw && (!Number.isInteger(siteId) || Number(siteId) <= 0)) {
+        return NextResponse.json({ success: false, error: "Invalid siteId" }, { status: 400 });
+      }
+      try {
+        const result = await runPositionCrawl({ days: Math.min(days, 90), siteId, concurrency: 2 });
+        return NextResponse.json({
+          success: result.status !== "failed",
+          source: "google_search_console_query_level",
+          ...result,
+        }, { status: result.status === "failed" ? 502 : 200 });
+      } catch (error) {
+        if (error instanceof PositionCrawlInProgressError) {
+          return NextResponse.json({
+            success: false,
+            already_running: true,
+            run_id: error.runId,
+            error: "A position crawl is already running",
+          }, { status: 409 });
+        }
+        throw error;
+      }
+    }
+
     // Google data sync always uses the server-side service account. OAuth tokens
     // are never copied into browser-visible sessions.
     console.log("[sync] Using server-side service account");

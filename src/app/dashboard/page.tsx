@@ -618,9 +618,19 @@ export default function DashboardPage() {
       } else if (data.error) {
         setSyncMsg({ type: "err", text: data.error });
       } else {
-        const results = data.results || [];
-        const total = results.reduce((s: number, r: { gsc?: number }) => s + (r.gsc || 0), 0);
-        setSyncMsg({ type: "ok", text: `Sync OK — ${total} lignes GSC importées` });
+        const results = (data.results || []) as Array<{
+          gsc?: number | { rows?: number; status?: string };
+        }>;
+        const total = results.reduce((sum, result) => {
+          const rows = typeof result.gsc === "number" ? result.gsc : Number(result.gsc?.rows ?? 0);
+          return sum + rows;
+        }, 0);
+        const failed = results.filter((result) =>
+          typeof result.gsc === "object" && result.gsc?.status === "error"
+        ).length;
+        setSyncMsg(data.success === false || failed > 0
+          ? { type: "err", text: `Sync partielle — ${total} lignes GSC, ${failed || data.errors || 0} erreur(s)` }
+          : { type: "ok", text: `Sync OK — ${total} lignes GSC importées` });
         setKeywords({}); setGains({});
         await fetchSites(undefined, undefined, true);
         await fetchQuality();

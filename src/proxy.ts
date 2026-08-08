@@ -114,6 +114,7 @@ export const proxy = auth((req) => {
     pathname.startsWith("/api/cron") ||
     pathname.startsWith("/api/alerts/check") ||
     pathname.startsWith("/api/sync") ||
+    pathname.startsWith("/api/position-crawl") ||
     pathname.startsWith("/api/reports/generate") ||
     pathname.startsWith("/api/autopilot/weekly") ||
     pathname.startsWith("/api/autopilot/verify-urls") ||

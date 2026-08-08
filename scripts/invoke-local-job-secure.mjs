@@ -8,6 +8,7 @@ const envPath = join(projectRoot, ".env.local");
 const allowedEndpoints = new Set([
   "/api/alerts/check",
   "/api/sync",
+  "/api/position-crawl",
   "/api/autopilot/verify-urls",
   "/api/autopilot/weekly",
   "/api/competitors/weekly",
