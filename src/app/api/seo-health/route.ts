@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { getCrawlStatsSafe } from "@/lib/gsc-crawl-stats";
 
@@ -70,6 +71,9 @@ function generateRecommendations(breakdown: Breakdown): string[] {
 }
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const siteId = req.nextUrl.searchParams.get("site_id");
 
   if (!siteId || isNaN(Number(siteId))) {

@@ -3,122 +3,220 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, TrendingUp, TrendingDown, BarChart3 } from "lucide-react";
 import Link from "next/link";
+import { isRecord, readApiJson } from "@/lib/api-response";
 
 interface Site { id: number; name: string; }
 
-interface DayData {
-  date: string;
-  position: number | null;
-  clicks: number;
-  impressions: number;
-}
-
-interface KwHistory {
-  keyword: string;
-  history: { date: string; position: number; clicks: number }[];
-}
-
-interface TrackerData {
-  success: boolean;
-  site_history: DayData[];
-  keywords: KwHistory[];
-}
+interface DayData { date: string; position: number | null; clicks: number; impressions: number; }
+interface KwHistory { keyword: string; history: { date: string; position: number; clicks: number }[]; }
+interface TrackerData { success: boolean; site_history: DayData[]; keywords: KwHistory[]; }
 
 type FreshnessLevel = "fresh" | "partial" | "late" | "empty";
 
+interface StatusEntry {
+  total_keywords: number; checked_in_cycle: number; coverage_pct: number;
+  latest_checked_at: string | null; age_hours: number | null; level: FreshnessLevel;
+}
 interface TrackerStatus {
-  success: boolean;
-  engine: string;
-  cycle_days: number;
-  limit_per_site: number;
-  summary: {
-    total_sites: number;
-    total_keywords: number;
-    checked_in_cycle: number;
-    coverage_pct: number;
-    latest_checked_at: string | null;
-    age_hours: number | null;
-    level: FreshnessLevel;
-  };
-  sites: Array<{
-    site_id: number;
-    site_name: string;
-    total_keywords: number;
-    checked_in_cycle: number;
-    coverage_pct: number;
-    latest_checked_at: string | null;
-    age_hours: number | null;
-    level: FreshnessLevel;
-  }>;
+  success: boolean; engine: string; cycle_days: number; limit_per_site: number;
+  summary: StatusEntry & { total_sites: number };
+  sites: Array<StatusEntry & { site_id: number; site_name: string }>;
+}
+
+type TrackerScope = number | "all";
+
+const REQUEST_TIMEOUT_MS = 45_000;
+
+function requestError(error: unknown, action: string): string {
+  if (error instanceof DOMException && ["TimeoutError", "AbortError"].includes(error.name)) {
+    return `${action} a dépassé le délai autorisé. Réessayez; si cela recommence, vérifiez la base et l’API.`;
+  }
+  if (error instanceof TypeError) return `${action} est impossible : ${error.message}. Vérifiez la connexion puis réessayez.`;
+  return error instanceof Error
+    ? `${error.message}. Rechargez la page si votre session a expiré, puis réessayez.`
+    : `${action} a échoué. Réessayez.`;
+}
+
+function isSite(value: unknown): value is Site {
+  return isRecord(value) && Number.isInteger(value.id) && typeof value.name === "string";
+}
+
+const isSiteList = (value: unknown): value is Site[] => Array.isArray(value) && value.every(isSite);
+
+function isDayData(value: unknown): value is DayData {
+  return isRecord(value)
+    && typeof value.date === "string"
+    && (value.position === null || (typeof value.position === "number" && Number.isFinite(value.position)))
+    && typeof value.clicks === "number"
+    && Number.isFinite(value.clicks)
+    && typeof value.impressions === "number"
+    && Number.isFinite(value.impressions);
+}
+
+function isKwHistory(value: unknown): value is KwHistory {
+  return isRecord(value)
+    && typeof value.keyword === "string"
+    && Array.isArray(value.history)
+    && value.history.every((point) => isRecord(point)
+      && typeof point.date === "string"
+      && typeof point.position === "number"
+      && Number.isFinite(point.position)
+      && typeof point.clicks === "number"
+      && Number.isFinite(point.clicks));
+}
+
+function isTrackerData(value: unknown): value is TrackerData {
+  return isRecord(value)
+    && value.success === true
+    && Array.isArray(value.site_history)
+    && value.site_history.every(isDayData)
+    && Array.isArray(value.keywords)
+    && value.keywords.every(isKwHistory);
+}
+
+function isFreshnessLevel(value: unknown): value is FreshnessLevel {
+  return value === "fresh" || value === "partial" || value === "late" || value === "empty";
+}
+
+function isStatusEntry(value: unknown): boolean {
+  return isRecord(value)
+    && ["total_keywords", "checked_in_cycle", "coverage_pct"]
+      .every((key) => typeof value[key] === "number" && Number.isFinite(value[key]))
+    && (value.latest_checked_at === null || typeof value.latest_checked_at === "string")
+    && (value.age_hours === null || (typeof value.age_hours === "number" && Number.isFinite(value.age_hours)))
+    && isFreshnessLevel(value.level);
+}
+
+function isTrackerStatus(value: unknown): value is TrackerStatus {
+  return isRecord(value)
+    && value.success === true
+    && typeof value.engine === "string"
+    && typeof value.cycle_days === "number"
+    && Number.isFinite(value.cycle_days)
+    && typeof value.limit_per_site === "number"
+    && Number.isFinite(value.limit_per_site)
+    && isStatusEntry(value.summary)
+    && isRecord(value.summary)
+    && typeof value.summary.total_sites === "number"
+    && Number.isFinite(value.summary.total_sites)
+    && Array.isArray(value.sites)
+    && value.sites.every((site) => isStatusEntry(site)
+      && isRecord(site)
+      && Number.isInteger(site.site_id)
+      && typeof site.site_name === "string");
 }
 
 export default function TrackerPage() {
   const [sites, setSites] = useState<Site[]>([]);
+  const [sitesError, setSitesError] = useState<string | null>(null);
   const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [data, setData] = useState<TrackerData | null>(null);
+  const [dataSiteId, setDataSiteId] = useState<number | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
   const [status, setStatus] = useState<TrackerStatus | null>(null);
+  const [statusScope, setStatusScope] = useState<TrackerScope | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [statusLoading, setStatusLoading] = useState(false);
 
-  const fetchSites = async () => {
-    try {
-      const res = await fetch("/api/sites");
-      const d = await res.json() as Site[];
-      const list = Array.isArray(d) ? d : [];
-      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite("all"); }
-    } catch { /* ignore */ }
-  };
-
-  const fetchData = async () => {
-    if (!selectedSite || selectedSite === "all") {
-      setData(null);
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/position-history?site_id=${selectedSite}&days=90`);
-      if (!res.ok) {
-        setData({ success: false, site_history: [], keywords: [] });
-        return;
-      }
-      const d = await res.json() as TrackerData;
-      // Defensive normalization: API may return malformed shape on errors
-      setData({
-        success: d?.success ?? false,
-        site_history: Array.isArray(d?.site_history) ? d.site_history : [],
-        keywords: Array.isArray(d?.keywords) ? d.keywords : [],
-      });
-    } catch {
-      setData({ success: false, site_history: [], keywords: [] });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchStatus = async () => {
-    if (!selectedSite) return;
-    setStatusLoading(true);
-    try {
-      const siteParam = selectedSite === "all" ? "all" : String(selectedSite);
-      const res = await fetch(`/api/rank-tracker/status?site_id=${siteParam}&cycle_days=4&engine=brave`);
-      const d = await res.json() as TrackerStatus;
-      setStatus(d?.success ? d : null);
-    } catch {
-      setStatus(null);
-    } finally {
-      setStatusLoading(false);
-    }
-  };
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { void fetchSites(); }, []);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (selectedSite) {
-      void fetchStatus();
-      void fetchData();
+    let active = true;
+
+    async function fetchSites() {
+      try {
+        const response = await fetch("/api/sites", {
+          signal: AbortSignal.timeout(30_000),
+        });
+        const payload = await readApiJson(response, isSiteList, "Le chargement des sites a échoué");
+        if (!active) return;
+        setSites(payload);
+        setSitesError(payload.length === 0
+          ? "Aucun site actif n’a été renvoyé. Vérifiez la configuration des sites."
+          : null);
+        if (payload.length > 0) setSelectedSite((current) => current ?? "all");
+      } catch (fetchError) {
+        if (active) setSitesError(requestError(fetchError, "Le chargement des sites"));
+      }
     }
+
+    void fetchSites();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedSite) return;
+    let active = true;
+    const requestedScope = selectedSite;
+
+    async function fetchStatus() {
+      setStatusLoading(true);
+      setStatusError(null);
+      try {
+        const response = await fetch(
+          `/api/rank-tracker/status?site_id=${requestedScope}&cycle_days=4&engine=brave`,
+          { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+        );
+        const payload = await readApiJson(
+          response,
+          isTrackerStatus,
+          "Le chargement du statut tracker a échoué",
+        );
+        if (typeof requestedScope === "number" && !payload.sites.some((site) => site.site_id === requestedScope)) {
+          throw new Error("Le statut confirmé ne contient pas le site sélectionné");
+        }
+        if (!active) return;
+        setStatus(payload);
+        setStatusScope(requestedScope);
+      } catch (fetchError) {
+        if (active) {
+          setStatusError(
+            `${requestError(fetchError, "Le chargement du statut tracker")} Les dernières données confirmées restent conservées lorsqu’elles existent.`,
+          );
+        }
+      } finally {
+        if (active) setStatusLoading(false);
+      }
+    }
+
+    async function fetchData(siteId: number) {
+      setLoading(true);
+      setDataError(null);
+      try {
+        const response = await fetch(`/api/position-history?site_id=${siteId}&days=90`, {
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        const payload = await readApiJson(
+          response,
+          isTrackerData,
+          "Le chargement de l’historique de positions a échoué",
+        );
+        if (!active) return;
+        setData(payload);
+        setDataSiteId(siteId);
+      } catch (fetchError) {
+        if (active) {
+          setDataError(
+            `${requestError(fetchError, "Le chargement de l’historique de positions")} Les dernières données confirmées restent conservées lorsqu’elles existent.`,
+          );
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void fetchStatus();
+    if (requestedScope === "all") {
+      setLoading(false);
+      setDataError(null);
+    } else {
+      void fetchData(requestedScope);
+    }
+
+    return () => { active = false; };
   }, [selectedSite]);
+
+  const displayedData = typeof selectedSite === "number" && dataSiteId === selectedSite ? data : null;
+  const displayedStatus = statusScope === selectedSite ? status : null;
 
   const FRESHNESS_COPY: Record<FreshnessLevel, { label: string; hint: string; dot: string; ping: string; border: string }> = {
     fresh: {
@@ -156,13 +254,11 @@ export default function TrackerPage() {
     return new Date(value).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
   }
 
-  function currentStatus() {
-    if (!status) return null;
+  function currentStatus(trackerStatus: TrackerStatus) {
     if (selectedSite !== "all") {
-      const siteStatus = status.sites.find((s) => s.site_id === selectedSite);
-      if (siteStatus) return siteStatus;
+      return trackerStatus.sites.find((s) => s.site_id === selectedSite) ?? null;
     }
-    return status.summary;
+    return trackerStatus.summary;
   }
 
   // Mini sparkline chart (pure CSS). Static class names so Tailwind doesn't purge them.
@@ -238,7 +334,7 @@ export default function TrackerPage() {
             onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 w-64"
           >
-            <option value="all">🌐 Tous les sites</option>
+            <option value="all">Tous les sites</option>
             {sites.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
@@ -248,14 +344,32 @@ export default function TrackerPage() {
           )}
         </div>
 
-        {statusLoading && !status ? (
+        {sitesError && (
+          <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-300" role="alert">
+            {sitesError}
+          </div>
+        )}
+
+        {statusError && (
+          <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-300" role="alert">
+            {statusError}
+          </div>
+        )}
+
+        {statusLoading && displayedStatus && (
+          <div className="flex items-center gap-2 text-sm text-gray-400">
+            <Loader2 className="w-4 h-4 animate-spin" /> Actualisation du dernier statut confirmé...
+          </div>
+        )}
+
+        {statusLoading && !displayedStatus ? (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center gap-3 text-sm text-gray-400">
             <Loader2 className="w-4 h-4 animate-spin" />
             Statut tracker...
           </div>
-        ) : status && currentStatus() ? (
+        ) : displayedStatus && currentStatus(displayedStatus) ? (
           (() => {
-            const s = currentStatus();
+            const s = currentStatus(displayedStatus);
             if (!s) return null;
             const copy = FRESHNESS_COPY[s.level];
             return (
@@ -268,7 +382,7 @@ export default function TrackerPage() {
                   <div>
                     <div className="text-sm font-medium text-gray-100">{copy.label}</div>
                     <div className="text-xs text-gray-500">
-                      {copy.hint} Moteur {status.engine}, top {status.limit_per_site} mots-cles/site.
+                      {copy.hint} Moteur {displayedStatus.engine}, top {displayedStatus.limit_per_site} mots-cles/site.
                     </div>
                   </div>
                 </div>
@@ -280,7 +394,7 @@ export default function TrackerPage() {
                   </div>
                   <div>
                     <div className="text-gray-500">Cycle</div>
-                    <div className="text-gray-100 font-semibold">{status.cycle_days} jours</div>
+                    <div className="text-gray-100 font-semibold">{displayedStatus.cycle_days} jours</div>
                   </div>
                   <div>
                     <div className="text-gray-500">Dernier check</div>
@@ -290,32 +404,39 @@ export default function TrackerPage() {
               </section>
             );
           })()
-        ) : (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-sm">
-            <div className="text-gray-300 font-medium">Statut indisponible</div>
-            <div className="text-xs text-gray-500 mt-1">Impossible de lire la fraicheur du rank tracker pour le moment.</div>
+        ) : null}
+
+        {dataError && selectedSite !== "all" && (
+          <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-300" role="alert">
+            {dataError}
           </div>
         )}
 
-        {loading && (
+        {loading && displayedData && (
+          <div className="flex items-center gap-2 text-sm text-gray-400">
+            <Loader2 className="w-4 h-4 animate-spin" /> Actualisation du dernier historique confirmé...
+          </div>
+        )}
+
+        {loading && !displayedData && selectedSite !== "all" && (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
           </div>
         )}
 
-        {!loading && data && (
+        {displayedData && (
           <>
             {/* Site-level charts */}
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <BarChart
-                  data={data.site_history.map((d) => ({ date: d.date, value: d.clicks }))}
+                  data={displayedData.site_history.map((d) => ({ date: d.date, value: d.clicks }))}
                   label="Clics / jour (30 derniers jours)"
                 />
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <BarChart
-                  data={data.site_history.map((d) => ({ date: d.date, value: d.impressions }))}
+                  data={displayedData.site_history.map((d) => ({ date: d.date, value: d.impressions }))}
                   label="Impressions / jour (30 derniers jours)"
                 />
               </div>
@@ -329,11 +450,11 @@ export default function TrackerPage() {
                   Top 10 mots-clés — évolution position (90j)
                 </h2>
               </div>
-              {data.keywords.length === 0 ? (
+              {displayedData.keywords.length === 0 ? (
                 <div className="py-12 text-center text-sm text-gray-500">Pas assez de données</div>
               ) : (
                 <div className="divide-y divide-gray-800">
-                  {data.keywords.map((kw) => {
+                  {displayedData.keywords.map((kw) => {
                     const hist = kw.history;
                     const positions = hist.map((h) => h.position);
                     const first = positions[0];

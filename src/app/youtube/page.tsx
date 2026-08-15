@@ -49,16 +49,16 @@ function OpportunityBadge({ score }: { score: number }) {
   );
 }
 
-function monetizationSignal(min: number, max: number): { label: string; color: string } {
-  const avg = (min + max) / 2;
-  if (avg >= 18) return { label: "Fort", color: "text-emerald-400" };
-  if (avg >= 11) return { label: "Moyen", color: "text-yellow-400" };
-  return { label: "Bas", color: "text-gray-400" };
+function monetizationSignal(level: NicheScanResult["monetizationSignal"]): { label: string; color: string } {
+  if (level === "high") return { label: "Fort (heuristique)", color: "text-emerald-400" };
+  if (level === "medium") return { label: "Moyen (heuristique)", color: "text-yellow-400" };
+  return { label: "Faible (heuristique)", color: "text-gray-400" };
 }
 
 function NicheCard({ result }: { result: NicheScanResult }) {
   const [expanded, setExpanded] = useState(false);
-  const monetization = monetizationSignal(result.estimatedCPM.min, result.estimatedCPM.max);
+  const monetization = monetizationSignal(result.monetizationSignal);
+  const publicSource = result.measurementSource === "youtube_public_search";
 
   if (result.error) {
     return (
@@ -79,6 +79,10 @@ function NicheCard({ result }: { result: NicheScanResult }) {
           <div className="flex-1">
             <h3 className="text-lg font-bold text-white mb-1">&quot;{result.keyword}&quot;</h3>
             <p className="text-sm text-gray-400">{result.recommendation}</p>
+            <p className="mt-2 text-xs text-blue-300">
+              Source : {publicSource ? "résultats publics YouTube, sans clé API" : "YouTube Data API"}
+              {result.fallbackReason ? ` — ${result.fallbackReason}` : ""}
+            </p>
           </div>
           <OpportunityBadge score={result.opportunityScore} />
         </div>
@@ -94,7 +98,9 @@ function NicheCard({ result }: { result: NicheScanResult }) {
             <span className="font-semibold text-white">{result.demandScore}/100</span>
           </div>
           <ScoreBar value={result.demandScore} color="bg-blue-500" />
-          <p className="text-xs text-gray-500 mt-1">{formatNumber(result.avgRecentViews)} vues moy. (90j)</p>
+          <p className="text-xs text-gray-500 mt-1">
+            {formatNumber(result.avgRecentViews)} vues moy. ({result.measurementWindow === "last_90_days" ? "90 jours" : "résultats observés"})
+          </p>
         </div>
         <div>
           <div className="flex justify-between text-sm mb-1">
@@ -104,7 +110,11 @@ function NicheCard({ result }: { result: NicheScanResult }) {
             <span className="font-semibold text-white">{result.competitionScore}/100</span>
           </div>
           <ScoreBar value={result.competitionScore} color="bg-red-500" />
-          <p className="text-xs text-gray-500 mt-1">{formatNumber(result.avgSubscribers)} subs moy.</p>
+          <p className="text-xs text-gray-500 mt-1">
+            {result.subscriberDataStatus === "unavailable"
+              ? "Abonnés non exposés; score basé sur les chaînes observées"
+              : `${formatNumber(result.avgSubscribers)} abonnés moy.${result.subscriberDataStatus === "partial" ? " (échantillon partiel)" : ""}`}
+          </p>
         </div>
         <div>
           <div className="flex justify-between text-sm mb-1">
@@ -114,15 +124,17 @@ function NicheCard({ result }: { result: NicheScanResult }) {
             <span className={`font-semibold ${monetization.color}`}>{monetization.label}</span>
           </div>
           <div className="flex gap-2 text-xs text-gray-500 mt-2">
-            <span>{result.channelCount} chaînes trouvées</span>
+            <span>{result.channelCount} chaînes trouvées · catégorie du mot-clé, pas un revenu observé</span>
           </div>
         </div>
       </div>
 
       {/* Expand button */}
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-5 py-3 flex items-center justify-between text-sm text-gray-400 hover:text-white hover:bg-gray-800/50 transition"
+        aria-expanded={expanded}
+        className="flex min-h-11 w-full items-center justify-between px-5 py-3 text-sm text-gray-400 transition hover:bg-gray-800/50 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
       >
         <span>Voir les chaînes et vidéos ({result.topChannels.length} chaînes, {result.recentTopVideos.length} vidéos)</span>
         {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -145,7 +157,9 @@ function NicheCard({ result }: { result: NicheScanResult }) {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white truncate">{ch.name}</p>
                       <p className="text-xs text-gray-400">
-                        {formatNumber(ch.subscribers)} abonnés · {formatNumber(ch.totalViews)} vues · {ch.videoCount} vidéos
+                        {ch.statisticsAvailable
+                          ? `${formatNumber(ch.subscribers)} abonnés · ${formatNumber(ch.totalViews)} vues · ${ch.videoCount} vidéos`
+                          : "Statistiques non exposées sur la page publique"}
                       </p>
                     </div>
                     <a
@@ -177,7 +191,7 @@ function NicheCard({ result }: { result: NicheScanResult }) {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white line-clamp-1">{v.title}</p>
                       <p className="text-xs text-gray-400">
-                        {v.channelName} · {formatNumber(v.views)} vues · {formatNumber(v.likes)} likes
+                        {v.channelName} · {v.viewsAvailable ? `${formatNumber(v.views)} vues` : "vues non exposées"} · {v.likesAvailable ? `${formatNumber(v.likes)} likes` : "likes non exposés"}
                       </p>
                     </div>
                     <a
@@ -230,15 +244,16 @@ export default function YouTubeScannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ keywords: kwList }),
       });
-      const data = await res.json();
-      if (data.error) {
-        setError(data.error);
+      const data = await res.json() as { success?: boolean; partial?: boolean; error?: string; results?: NicheScanResult[]; quota_units_estimated?: number };
+      if (!res.ok || !data.success || !Array.isArray(data.results)) {
+        throw new Error(data.error || `Scan YouTube impossible (HTTP ${res.status})`);
       } else {
-        setResults(data.results ?? []);
+        setResults(data.results);
         setQuotaUsed(prev => prev + (Number(data.quota_units_estimated) || 0));
+        if (data.partial) setError("Scan partiel : certaines niches n'ont pas pu être mesurées. Les cartes en erreur sont exclues du classement.");
       }
-    } catch {
-      setError("Erreur de connexion au serveur");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Erreur de connexion au serveur");
     }
 
     setLoading(false);
@@ -260,7 +275,7 @@ export default function YouTubeScannerPage() {
           <div className="flex items-center gap-3">
             {quotaUsed > 0 && (
               <span className="text-xs text-gray-500 bg-gray-800 px-3 py-1 rounded-full">
-                Quota utilisé : ~{quotaUsed.toLocaleString()} / 10 000 unités/j
+                Quota API utilisé : ~{quotaUsed.toLocaleString()} unité(s)
               </span>
             )}
             {session?.user?.image && (
@@ -295,12 +310,13 @@ export default function YouTubeScannerPage() {
           />
           <div className="flex items-center justify-between mt-4">
             <p className="text-xs text-gray-500">
-              Chaque scan consomme ~202 unités de quota YouTube API · Quota journalier : 10 000 unités
+              API YouTube si disponible; sinon recherche publique sans clé. Résultats mis en cache pendant 24 heures.
             </p>
             <button
+              type="button"
               onClick={handleScan}
               disabled={loading}
-              className="bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-2.5 rounded-lg font-medium flex items-center gap-2 transition"
+              className="flex min-h-11 items-center gap-2 rounded-lg bg-red-600 px-6 py-2.5 font-medium transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
             >
               {loading
                 ? <><Loader2 className="w-4 h-4 animate-spin" /> Scan en cours...</>
@@ -312,14 +328,8 @@ export default function YouTubeScannerPage() {
 
         {/* Error */}
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-400 text-sm">
-            {error.includes("YOUTUBE_API_KEY") ? (
-              <div>
-                <p className="font-semibold mb-1">Clé API YouTube non configurée</p>
-                <p>Ajoute <code className="bg-red-500/20 px-1 rounded">YOUTUBE_API_KEY</code> dans tes variables d&apos;environnement Vercel.</p>
-                <p className="mt-1 text-xs text-red-300">Google Cloud Console → APIs → YouTube Data API v3 → Créer une clé API</p>
-              </div>
-            ) : error}
+          <div role="alert" className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-400 text-sm">
+            {error}
           </div>
         )}
 

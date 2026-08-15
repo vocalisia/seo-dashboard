@@ -73,6 +73,13 @@ export default function HealthPage() {
   const [allGrades, setAllGrades] = useState<{ name: string; grade: string; score: number; id: number }[]>([]);
   const [loadingAll, setLoadingAll] = useState(false);
   const [lastTiming, setLastTiming] = useState<{ label: string; ms: number } | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [brokenError, setBrokenError] = useState<string | null>(null);
+  const [gradesError, setGradesError] = useState<string | null>(null);
+
+  function errorMessage(value: unknown, fallback: string): string {
+    return value instanceof Error && value.message ? value.message : fallback;
+  }
 
   async function timedFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const started = performance.now();
@@ -84,18 +91,22 @@ export default function HealthPage() {
   async function fetchSites() {
     try {
       const res = await timedFetch("Sites", "/api/sites");
-      const d = await res.json() as Site[];
-      const list = Array.isArray(d) ? d : [];
-      if (list.length > 0) {
-        setSites(list);
-        if (!selectedSite && list.length > 0) setSelectedSite(list[0].id);
+      const d = await res.json().catch(() => null) as Site[] | { error?: string } | null;
+      if (!res.ok) {
+        throw new Error(!Array.isArray(d) && d?.error ? d.error : `Sites indisponibles (HTTP ${res.status})`);
       }
-    } catch { setLoadingAll(false); }
+      const list = Array.isArray(d) ? d : [];
+      setSites(list);
+      if (!selectedSite && list.length > 0) setSelectedSite(list[0].id);
+    } catch (fetchError) {
+      setHealthError(errorMessage(fetchError, "Impossible de charger les sites."));
+    }
   }
 
   async function loadAllGrades() {
     if (sites.length === 0) return;
     setLoadingAll(true);
+    setGradesError(null);
     const results: { name: string; grade: string; score: number; id: number }[] = [];
     try {
       for (let i = 0; i < sites.length; i += 4) {
@@ -106,8 +117,9 @@ export default function HealthPage() {
             const timeout = setTimeout(() => ctrl.abort(), 8000);
             try {
               const r = await timedFetch(`Health ${s.name}`, `/api/seo-health?site_id=${s.id}`, { signal: ctrl.signal });
-              const dd = await r.json() as HealthData;
-              return dd.success ? { name: s.name, grade: dd.grade, score: dd.overall_score, id: s.id } : null;
+              const dd = await r.json().catch(() => null) as (HealthData & { error?: string }) | null;
+              if (!r.ok || !dd?.success) return null;
+              return { name: s.name, grade: dd.grade, score: dd.overall_score, id: s.id };
             } catch { return null; }
             finally { clearTimeout(timeout); }
           })
@@ -115,6 +127,9 @@ export default function HealthPage() {
         for (const r of settled) { if (r) results.push(r); }
       }
       setAllGrades(results.sort((a, b) => b.score - a.score));
+      if (results.length < sites.length) {
+        setGradesError(`Classement partiel : ${results.length}/${sites.length} sites ont répondu.`);
+      }
     } finally {
       setLoadingAll(false);
     }
@@ -123,13 +138,21 @@ export default function HealthPage() {
   async function fetchHealth() {
     if (!selectedSite || selectedSite === "all") return;
     setLoadingH(true);
+    setHealth(null);
+    setHealthError(null);
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), 15000);
     try {
       const res = await timedFetch("Health site", `/api/seo-health?site_id=${selectedSite}`, { signal: ctrl.signal });
-      const d = await res.json() as HealthData;
-      if (d.success) setHealth(d);
-    } catch { setHealth(null); }
+      const d = await res.json().catch(() => null) as (HealthData & { error?: string }) | null;
+      if (!res.ok || !d?.success) {
+        throw new Error(d?.error || `Analyse indisponible (HTTP ${res.status})`);
+      }
+      setHealth(d);
+    } catch (fetchError) {
+      setHealth(null);
+      setHealthError(errorMessage(fetchError, "Impossible de charger la santé SEO."));
+    }
     finally { clearTimeout(timeout); }
     setLoadingH(false);
   }
@@ -137,26 +160,41 @@ export default function HealthPage() {
   async function checkBroken() {
     if (!selectedSite || selectedSite === "all") return;
     setLoadingB(true);
+    setBroken(null);
+    setBrokenError(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 30000);
     try {
       const res = await timedFetch("Broken links", "/api/broken-links", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite }),
+        signal: controller.signal,
       });
-      const d = await res.json() as BrokenLinksData;
-      if (d.success) setBroken(d);
-    } catch { setBroken(null); }
-    setLoadingB(false);
+      const d = await res.json().catch(() => null) as (BrokenLinksData & { error?: string }) | null;
+      if (!res.ok || !d?.success) {
+        throw new Error(d?.error || `Scan indisponible (HTTP ${res.status})`);
+      }
+      setBroken(d);
+    } catch (scanError) {
+      setBroken(null);
+      const timedOut = scanError instanceof DOMException && scanError.name === "AbortError";
+      setBrokenError(timedOut ? "Le scan a dépassé 30 secondes. Aucun résultat n’est supposé." : errorMessage(scanError, "Le scan des liens a échoué."));
+    } finally {
+      window.clearTimeout(timeout);
+      setLoadingB(false);
+    }
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchSites(); }, []);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (selectedSite && selectedSite !== "all") {
+      setBroken(null);
+      setBrokenError(null);
       void fetchHealth();
-      void checkBroken();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSite]);
 
   return (
@@ -177,7 +215,7 @@ export default function HealthPage() {
         <div className="flex items-center gap-4">
           <select aria-label="Site à analyser" value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64">
-            <option value="all">🌐 Tous les sites</option>
+            <option value="all">Tous les sites</option>
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
           {(() => {
@@ -205,6 +243,22 @@ export default function HealthPage() {
             {loadingB ? "Scan liens..." : "Vérifier liens cassés"}
           </button>
         </div>
+
+        {healthError && (
+          <div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+            <span className="font-medium">Santé SEO indisponible.</span> {healthError}
+          </div>
+        )}
+        {brokenError && (
+          <div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+            <span className="font-medium">Contrôle des liens indisponible.</span> {brokenError}
+          </div>
+        )}
+        {gradesError && (
+          <div role="status" className="rounded-xl border border-amber-800 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+            {gradesError}
+          </div>
+        )}
 
         {loadingH ? (
           <div className="flex items-center justify-center py-12">

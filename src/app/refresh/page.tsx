@@ -1,76 +1,123 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Loader2, RefreshCw, TrendingDown, Zap } from "lucide-react";
 import Link from "next/link";
-
-interface Site { id: number; name: string; }
-
-interface DecliningPage {
-  page: string;
-  clicks_now: number;
-  clicks_prev: number;
-  pos_now: number;
-  pos_prev: number;
-  clicks_decline: number;
-  position_decline: number;
-}
-
-interface RefreshSuggestion {
-  id: number;
-  page_url: string;
-  suggestions: Record<string, string>;
-  status: string;
-  created_at: string;
-}
+import { readApiJson } from "@/lib/api-response";
+import {
+  type DecliningPage,
+  type RefreshSuggestion,
+  type SiteOption,
+  isContentRefreshCreateSuccess,
+  isContentRefreshListSuccess,
+  isSiteOptionList,
+} from "@/lib/content-refresh-contract";
 
 export default function RefreshPage() {
-  const [sites, setSites] = useState<Site[]>([]);
+  const [sites, setSites] = useState<SiteOption[]>([]);
   const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [declining, setDeclining] = useState<DecliningPage[]>([]);
   const [loading, setLoading] = useState(false);
   const [optimizing, setOptimizing] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<RefreshSuggestion[]>([]);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
 
-  const fetchSites = async () => {
+  const fetchSites = useCallback(async () => {
+    setFeedback(null);
     try {
       const res = await fetch("/api/sites");
-      const d = await res.json() as Site[];
-      const list = Array.isArray(d) ? d : [];
-      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite("all"); }
-    } catch { /* ignore */ }
-  };
+      const list = await readApiJson(
+        res,
+        isSiteOptionList,
+        "Impossible de charger les sites",
+      );
+      setSites(list);
+      if (list.length === 0) {
+        setSelectedSite(null);
+        setDeclining([]);
+        setSuggestions([]);
+        setFeedback({ type: "info", text: "Aucun site actif disponible pour analyser les pages en déclin." });
+        return;
+      }
+      setSelectedSite((current) => current ?? "all");
+    } catch (error) {
+      setSites([]);
+      setSelectedSite(null);
+      setFeedback({
+        type: "error",
+        text: error instanceof Error ? error.message : "Impossible de charger les sites",
+      });
+    }
+  }, []);
 
-  const fetchDeclining = async () => {
-    if (!selectedSite) return;
+  const fetchDeclining = useCallback(async (siteId: number): Promise<boolean> => {
     setLoading(true);
+    setFeedback(null);
     try {
-      const res = await fetch(`/api/content-refresh?site_id=${selectedSite}`);
-      const d = await res.json() as { declining?: DecliningPage[]; suggestions?: RefreshSuggestion[] };
-      setDeclining(d.declining ?? []);
-      setSuggestions(d.suggestions ?? []);
-    } catch { setDeclining([]); }
-    setLoading(false);
-  };
+      const res = await fetch(`/api/content-refresh?site_id=${siteId}`);
+      const data = await readApiJson(
+        res,
+        isContentRefreshListSuccess,
+        "Impossible de charger les pages en déclin",
+      );
+      setDeclining(data.pages);
+      setSuggestions(data.suggestions);
+      return true;
+    } catch (error) {
+      setDeclining([]);
+      setSuggestions([]);
+      setFeedback({
+        type: "error",
+        text: error instanceof Error ? error.message : "Impossible de charger les pages en déclin",
+      });
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { void fetchSites(); }, []);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { if (selectedSite && selectedSite !== "all") void fetchDeclining(); }, [selectedSite]);
+  useEffect(() => { void fetchSites(); }, [fetchSites]);
+  useEffect(() => {
+    if (typeof selectedSite === "number") void fetchDeclining(selectedSite);
+  }, [fetchDeclining, selectedSite]);
 
   async function optimize(pageUrl: string) {
-    if (!selectedSite) return;
+    if (typeof selectedSite !== "number") return;
     setOptimizing(pageUrl);
+    setFeedback(null);
     try {
       const res = await fetch("/api/content-refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite, page_url: pageUrl }),
       });
-      const d = await res.json() as { success: boolean };
-      if (d.success) await fetchDeclining();
-    } catch { /* ignore */ }
-    setOptimizing(null);
+      await readApiJson(
+        res,
+        isContentRefreshCreateSuccess,
+        "Impossible de générer la suggestion",
+      );
+      const refreshed = await fetchDeclining(selectedSite);
+      if (refreshed) {
+        setFeedback({ type: "success", text: "Suggestion générée et chargée" });
+      }
+    } catch (error) {
+      setFeedback({
+        type: "error",
+        text: error instanceof Error ? error.message : "Impossible de générer la suggestion",
+      });
+    } finally {
+      setOptimizing(null);
+    }
+  }
+
+  function selectSite(value: string) {
+    const nextSite = value === "all" ? "all" : value ? Number.parseInt(value, 10) : null;
+    setSelectedSite(nextSite);
+    setFeedback(null);
+    if (nextSite === "all" || nextSite === null) {
+      setDeclining([]);
+      setSuggestions([]);
+    }
   }
 
   function truncateUrl(url: string) {
@@ -95,10 +142,11 @@ export default function RefreshPage() {
           <select
             aria-label="Site à analyser"
             value={selectedSite ?? ""}
-            onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
+            disabled={sites.length === 0}
+            onChange={(event) => selectSite(event.target.value)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
           >
-            <option value="all">🌐 Tous les sites</option>
+            <option value="all">Tous les sites</option>
             {sites.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
@@ -106,16 +154,25 @@ export default function RefreshPage() {
           <span className="text-xs text-gray-500">{selectedSite === "all" ? "Sélectionner un site pour voir les pages en déclin" : "Pages en déclin → suggestions d'optimisation IA"}</span>
         </div>
 
+        {feedback && (
+          <div
+            role={feedback.type === "error" ? "alert" : "status"}
+            className={feedback.type === "error" ? "text-sm text-red-300" : feedback.type === "success" ? "text-sm text-green-300" : "text-sm text-gray-400"}
+          >
+            {feedback.text}
+          </div>
+        )}
+
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
           </div>
-        ) : declining.length === 0 ? (
+        ) : typeof selectedSite === "number" && declining.length === 0 && feedback?.type !== "error" ? (
           <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center">
             <TrendingDown className="w-12 h-12 text-gray-700 mx-auto mb-4" />
             <div className="text-gray-500 text-sm">Aucune page en déclin détectée (ou pas assez de données)</div>
           </div>
-        ) : (
+        ) : declining.length > 0 ? (
           <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-800">
               <h2 className="font-medium text-gray-200 flex items-center gap-2">
@@ -136,8 +193,8 @@ export default function RefreshPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {declining.map((p, i) => (
-                    <tr key={i} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                  {declining.map((p) => (
+                    <tr key={p.page} className="border-b border-gray-800/50 hover:bg-gray-800/30">
                       <td className="px-5 py-3">
                         <a href={p.page} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 text-xs">
                           {truncateUrl(p.page)}
@@ -163,7 +220,7 @@ export default function RefreshPage() {
               </table>
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* Suggestions */}
         {suggestions.length > 0 && (

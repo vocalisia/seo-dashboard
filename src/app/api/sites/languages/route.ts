@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
+import { requireApiSession } from "@/lib/api-auth";
 
 interface SiteLangRow {
   id: number;
@@ -13,6 +14,8 @@ interface SiteLangRow {
  * GET /api/sites/languages → list all sites with their target_languages
  */
 export async function GET() {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   const sql = getSQL();
   try {
     // Ensure column exists (idempotent migration)
@@ -41,6 +44,8 @@ export async function GET() {
  *   body: { site_id: number, languages: string[] }
  */
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   let body: { site_id?: number; languages?: string[] };
   try {
     body = (await req.json()) as { site_id?: number; languages?: string[] };

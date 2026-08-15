@@ -30,6 +30,51 @@ interface DecayRow {
 
 type SiteFilter = number | "all";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isSite(value: unknown): value is Site {
+  return isRecord(value)
+    && isFiniteNumber(value.id)
+    && typeof value.name === "string"
+    && value.name.trim().length > 0;
+}
+
+function isDecayRow(value: unknown): value is DecayRow {
+  if (!isRecord(value)) return false;
+  const validSeverity = value.severity === "CRIT" || value.severity === "HIGH" || value.severity === "MED";
+  const validSiteId = value.site_id === undefined || value.site_id === null || isFiniteNumber(value.site_id);
+  const validSiteName = value.site_name === undefined || value.site_name === null || typeof value.site_name === "string";
+  return typeof value.page === "string"
+    && value.page.trim().length > 0
+    && typeof value.query === "string"
+    && isFiniteNumber(value.clicks_recent)
+    && isFiniteNumber(value.clicks_older)
+    && isFiniteNumber(value.clicks_lost)
+    && isFiniteNumber(value.clicks_drop_pct)
+    && isFiniteNumber(value.position_recent)
+    && isFiniteNumber(value.position_older)
+    && isFiniteNumber(value.position_drop)
+    && isFiniteNumber(value.ctr_drop_pct)
+    && validSeverity
+    && typeof value.reason === "string"
+    && (value.action === undefined || typeof value.action === "string")
+    && validSiteId
+    && validSiteName;
+}
+
+function apiError(value: unknown, fallback: string): string {
+  if (!isRecord(value)) return fallback;
+  if (typeof value.error === "string" && value.error.trim()) return value.error;
+  if (typeof value.message === "string" && value.message.trim()) return value.message;
+  return fallback;
+}
+
 function pageLabel(url: string) {
   try {
     const parsed = new URL(url);
@@ -45,49 +90,67 @@ export default function ContentDecayPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [siteId, setSiteId] = useState<SiteFilter | null>(null);
   const [rows, setRows] = useState<DecayRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [loadedSiteId, setLoadedSiteId] = useState<SiteFilter | null>(null);
 
   useEffect(() => {
-    fetch("/api/sites")
-      .then((r) => r.json())
-      .catch(() => null)
-      .then((data: unknown) => {
-        const list = Array.isArray(data) ? data as Site[] : [];
-        setSites(list);
-        if (list.length > 0) {
-          setLoading(true);
-          setSiteId("all");
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/api/sites", { signal: controller.signal });
+        const data = await response.json().catch(() => null) as unknown;
+        if (!response.ok) {
+          throw new Error(apiError(data, `Liste des sites indisponible (HTTP ${response.status})`));
         }
-      });
+        if (!Array.isArray(data) || !data.every(isSite)) {
+          throw new Error("La liste des sites reçue est invalide.");
+        }
+        setSites(data);
+        setSiteId("all");
+      } catch (reason) {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setError(reason instanceof Error ? reason.message : "Liste des sites indisponible");
+        setLoading(false);
+      }
+    })();
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
     if (siteId === null) return;
+    const controller = new AbortController();
     const limit = siteId === "all" ? 300 : 100;
-    fetch(`/api/content-decay?siteId=${siteId}&limit=${limit}`)
-      .then((r) => r.json())
-      .then((data: unknown) => {
-        if (Array.isArray(data)) {
-          setRows(data as DecayRow[]);
-          return;
+    setLoading(true);
+    setError(null);
+    void (async () => {
+      try {
+        const response = await fetch(`/api/content-decay?siteId=${siteId}&limit=${limit}`, { signal: controller.signal });
+        const data = await response.json().catch(() => null) as unknown;
+        if (!response.ok) {
+          throw new Error(apiError(data, `Analyse des contenus impossible (HTTP ${response.status})`));
         }
-        const message = data && typeof data === "object" && "error" in data
-          ? String((data as { error?: unknown }).error)
-          : "Erreur API";
-        setError(message);
-        setRows([]);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "Erreur reseau");
-        setRows([]);
-      })
-      .finally(() => setLoading(false));
+        if (!Array.isArray(data) || !data.every(isDecayRow)) {
+          throw new Error("La réponse reçue pour le Content Decay est invalide.");
+        }
+        setRows(data);
+        setHasLoaded(true);
+        setLoadedSiteId(siteId);
+      } catch (reason) {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setError(reason instanceof Error ? reason.message : "Erreur réseau pendant l'analyse des contenus.");
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    })();
+    return () => controller.abort();
   }, [siteId]);
 
+  const hasCurrentResult = hasLoaded && loadedSiteId === siteId;
   const crit = rows.filter((r) => r.severity === "CRIT").length;
   const totalLost = rows.reduce((sum, row) => sum + Number(row.clicks_lost || Math.max(0, row.clicks_older - row.clicks_recent)), 0);
-  const topLost = rows[0];
+  const topLost = hasCurrentResult ? rows[0] : undefined;
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -117,16 +180,16 @@ export default function ContentDecayPage() {
 
       <div className="px-6 py-4 grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400">Pages a sauver</div>
-          <div className="text-2xl font-bold text-red-400">{rows.length}</div>
+          <div className="text-xs text-gray-400">Pages à examiner</div>
+          <div className="text-2xl font-bold text-red-400">{hasCurrentResult ? rows.length : "—"}</div>
         </div>
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400">Priorite critique</div>
-          <div className="text-2xl font-bold text-red-500">{crit}</div>
+          <div className="text-xs text-gray-400">Priorité critique</div>
+          <div className="text-2xl font-bold text-red-500">{hasCurrentResult ? crit : "—"}</div>
         </div>
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400">Clics Google perdus</div>
-          <div className="text-2xl font-bold text-orange-400">-{totalLost}</div>
+          <div className="text-xs text-gray-400">Baisse de clics observée</div>
+          <div className="text-2xl font-bold text-orange-400">{hasCurrentResult ? `-${totalLost}` : "—"}</div>
         </div>
       </div>
 
@@ -134,8 +197,8 @@ export default function ContentDecayPage() {
         <div className="mb-4 rounded-xl border border-blue-500/20 bg-blue-500/10 p-4 text-sm text-blue-100">
           <div className="font-semibold mb-1">A quoi sert cette page ?</div>
           <div>
-            Elle repere les pages qui avaient du trafic Google avant et qui en perdent maintenant.
-            Utilite: savoir quelles pages rafraichir, renforcer en maillage interne, ou retravailler title/meta.
+            Elle repère les pages qui avaient des clics Google avant et qui en perdent maintenant.
+            Utilité : savoir quelles pages vérifier avant de rafraîchir le contenu, renforcer le maillage interne ou retravailler le snippet.
           </div>
           {topLost && (
             <div className="mt-2 text-blue-200">
@@ -146,17 +209,17 @@ export default function ContentDecayPage() {
         </div>
 
         {error && (
-          <div className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">{error}</div>
+          <div role="alert" className="mb-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">{error}{hasCurrentResult ? " Le dernier résultat valide reste affiché." : ""}</div>
         )}
 
         {loading ? (
-          <div className="flex justify-center py-12">
-            <Loader2 className="w-6 h-6 animate-spin text-red-500" />
+          <div role="status" className="flex items-center justify-center gap-2 py-12 text-sm text-gray-400">
+            <Loader2 className="w-6 h-6 animate-spin text-red-500" /> Analyse des contenus en cours...
           </div>
-        ) : rows.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">Aucune page en perte nette detectee sur cette periode.</div>
+        ) : !hasCurrentResult ? null : rows.length === 0 ? (
+          <div className="py-12 text-center text-gray-500">Analyse terminée : aucune page en perte nette détectée sur cette période.</div>
         ) : (
-          <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+          <div className="overflow-x-auto rounded-xl border border-gray-800 bg-gray-900">
             <table className="w-full text-sm">
               <thead className="bg-gray-800/50 text-gray-400 text-xs">
                 <tr>

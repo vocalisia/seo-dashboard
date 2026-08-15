@@ -1,3 +1,4 @@
+import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
@@ -7,6 +8,9 @@ export const dynamic = "force-dynamic";
 type Severity = "CRIT" | "HIGH" | "MED";
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const startedAt = Date.now();
   const siteId = request.nextUrl.searchParams.get("siteId");
   const limit = Math.max(10, Math.min(500, parseInt(request.nextUrl.searchParams.get("limit") || "100", 10) || 100));

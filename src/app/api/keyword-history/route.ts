@@ -1,3 +1,4 @@
+import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
@@ -5,6 +6,9 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const siteId = request.nextUrl.searchParams.get("siteId");
   const query = request.nextUrl.searchParams.get("query");
   const days = parseInt(request.nextUrl.searchParams.get("days") || "90", 10);

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Loader2, ChevronLeft, AlertTriangle, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { isRecord, readApiJson } from "@/lib/api-response";
 
 interface Site { id: number; name: string }
 interface CannibRow {
@@ -18,40 +19,89 @@ interface CannibRow {
 
 type SiteFilter = number | "all";
 type SeverityOrder = "default" | "HIGH" | "MED" | "LOW";
+type LoadState = "loading-sites" | "loading" | "ready" | "empty-sites" | "error";
 
 const SEV_RANK: Record<string, number> = { HIGH: 3, MED: 2, LOW: 1 };
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isSiteList(payload: unknown): payload is Site[] {
+  return Array.isArray(payload) && payload.every((site) =>
+    isRecord(site) && isFiniteNumber(site.id) && typeof site.name === "string"
+  );
+}
+
+function isCannibRowList(payload: unknown): payload is CannibRow[] {
+  return Array.isArray(payload) && payload.every((row) =>
+    isRecord(row)
+    && typeof row.query === "string"
+    && typeof row.suggested_action === "string"
+    && [row.url_count, row.total_impressions, row.total_clicks, row.hhi, row.estimated_loss].every(isFiniteNumber)
+    && (row.severity === "HIGH" || row.severity === "MED" || row.severity === "LOW")
+    && (row.site_id === undefined || row.site_id === null || isFiniteNumber(row.site_id))
+    && (row.site_name === undefined || row.site_name === null || typeof row.site_name === "string")
+    && Array.isArray(row.pages)
+    && row.pages.every((page) => isRecord(page)
+      && typeof page.page === "string"
+      && [page.impressions, page.clicks, page.position].every(isFiniteNumber))
+  );
+}
 
 export default function CannibalizationHHIPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [siteId, setSiteId] = useState<SiteFilter | null>(null);
   const [rows, setRows] = useState<CannibRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>("loading-sites");
+  const [error, setError] = useState<string | null>(null);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [severitySort, setSeveritySort] = useState<SeverityOrder>("default");
   const [severityFilter, setSeverityFilter] = useState<"ALL"|"HIGH"|"MED"|"LOW">("ALL");
   const [groupBySite, setGroupBySite] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/sites").then(r => r.json()).catch(() => null).then((data: unknown) => {
-      if (Array.isArray(data)) {
-        setSites(data as Site[]);
-        if (data.length > 0) setSiteId("all");
+  const loadSites = useCallback(async () => {
+    try {
+      const response = await fetch("/api/sites");
+      const data = await readApiJson(response, isSiteList, "Impossible de charger les sites");
+      setSites(data);
+      if (data.length === 0) {
+        setSiteId(null);
+        setLoadState("empty-sites");
+        return;
       }
-    });
+      setRows([]);
+      setError(null);
+      setLoadState("loading");
+      setSiteId("all");
+    } catch (caught) {
+      setSites([]);
+      setSiteId(null);
+      setRows([]);
+      setError(caught instanceof Error ? caught.message : "Impossible de charger les sites");
+      setLoadState("error");
+    }
   }, []);
 
-  useEffect(() => {
-    if (siteId === null) return;
-    setLoading(true);
-    const limit = siteId === "all" ? 150 : 50;
-    fetch(`/api/cannibalization-hhi?siteId=${siteId}&days=28&limit=${limit}`)
-      .then(r => r.json())
-      .then((data: unknown) => {
-        if (Array.isArray(data)) setRows(data as CannibRow[]);
-      })
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
-  }, [siteId]);
+  const loadRows = useCallback(async (selectedSiteId: SiteFilter) => {
+    const limit = selectedSiteId === "all" ? 150 : 50;
+    try {
+      const response = await fetch(`/api/cannibalization-hhi?siteId=${selectedSiteId}&days=28&limit=${limit}`);
+      const data = await readApiJson(response, isCannibRowList, "Impossible de charger la cannibalisation HHI");
+      setRows(data);
+      setLoadState("ready");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Impossible de charger la cannibalisation HHI");
+      setLoadState("error");
+    }
+  }, []);
+
+  useEffect(() => { void Promise.resolve().then(loadSites); }, [loadSites]);
+  useEffect(() => { if (siteId !== null) void Promise.resolve(siteId).then(loadRows); }, [loadRows, siteId]);
+
+  function selectSite(nextSiteId: SiteFilter) {
+    setRows([]); setError(null); setLoadState("loading"); setSiteId(nextSiteId);
+  }
 
   const totalLoss = rows.reduce((s, r) => s + r.estimated_loss, 0);
   const high = rows.filter(r => r.severity === "HIGH").length;
@@ -90,14 +140,14 @@ export default function CannibalizationHHIPage() {
           <AlertTriangle className="w-6 h-6 text-red-500" />
           <h1 className="text-xl font-bold">Cannibalisation (HHI score)</h1>
         </div>
-        <select aria-label="Site à analyser" value={siteId ?? ""} onChange={e => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value))}
+        <select aria-label="Site à analyser" value={siteId ?? ""} disabled={sites.length === 0} onChange={e => selectSite(e.target.value === "all" ? "all" : parseInt(e.target.value))}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
-          <option value="all">🌐 Tous les sites</option>
+          <option value="all">Tous les sites</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </header>
 
-      <div className="px-6 py-4 grid grid-cols-3 gap-4">
+      {loadState === "ready" && <div className="px-6 py-4 grid grid-cols-3 gap-4">
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400">Conflits détectés</div>
           <div className="text-2xl font-bold text-red-400">{rows.length}</div>
@@ -110,10 +160,10 @@ export default function CannibalizationHHIPage() {
           <div className="text-xs text-gray-400">Clics perdus estimés (28j)</div>
           <div className="text-2xl font-bold text-orange-400">{totalLoss.toLocaleString()}</div>
         </div>
-      </div>
+      </div>}
 
       <div className="px-6 pb-10 space-y-2">
-        {!loading && rows.length > 0 && (
+        {loadState === "ready" && rows.length > 0 && (
           <div className="flex items-center gap-2 pb-2 flex-wrap">
             {(["ALL","HIGH","MED","LOW"] as const).map(s => (
               <button type="button" key={s} onClick={() => setSeverityFilter(s)}
@@ -156,10 +206,17 @@ export default function CannibalizationHHIPage() {
             </div>
           </div>
         )}
-        {loading ? (
+        {loadState === "loading" || loadState === "loading-sites" ? (
           <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-red-500" /></div>
+        ) : loadState === "error" ? (
+          <div role="alert" className="rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+            <AlertTriangle className="mr-2 inline h-4 w-4" />
+            Erreur de chargement : {error ?? "réponse indisponible"}
+          </div>
+        ) : loadState === "empty-sites" ? (
+          <div className="py-12 text-center text-gray-500">Aucun site actif disponible pour cette analyse.</div>
         ) : rows.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">Pas de cannibalisation détectée 🎉</div>
+          <div className="py-12 text-center text-gray-500">Pas de cannibalisation détectée</div>
         ) : (
           groupedRows.map(({ site, items }) => (
             <div key={site}>
@@ -192,7 +249,7 @@ export default function CannibalizationHHIPage() {
                     </span>
                     <span className="font-medium truncate">{r.query}</span>
                     {siteId === "all" && r.site_name && (
-                      <button onClick={e => { e.stopPropagation(); setSiteId(r.site_id!); }}
+                      <button onClick={e => { e.stopPropagation(); selectSite(r.site_id!); }}
                         className="bg-blue-900/30 border border-blue-800 text-blue-300 px-2 py-0.5 rounded text-xs hover:bg-blue-900/50 flex-shrink-0">
                         {r.site_name}
                       </button>

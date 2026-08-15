@@ -13,6 +13,7 @@ export const maxDuration = 120;
 
 import { NextResponse } from "next/server";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { runOutcome } from "@/lib/run-outcome";
 import { getSQL, ensureSchema } from "@/lib/db";
 import { fetchKeywordTrend } from "@/lib/google-trends";
 
@@ -119,14 +120,21 @@ async function runTrendsCron(request: Request): Promise<NextResponse> {
     await new Promise((r) => setTimeout(r, 1200));
   }
 
+  const ok = results.filter((result) => result.status === "ok").length;
+  const cachedCount = results.filter((result) => result.status === "cached").length;
+  const failed = results.filter((result) => result.status === "failed").length;
+  const outcome = runOutcome(ok + cachedCount, failed, rows.length);
+
   return NextResponse.json({
-    success: true,
+    success: outcome.success,
+    partial: outcome.partial,
+    skipped: outcome.skipped,
     total: rows.length,
-    ok: results.filter((r) => r.status === "ok").length,
-    cached: results.filter((r) => r.status === "cached").length,
-    failed: results.filter((r) => r.status === "failed").length,
+    ok,
+    cached: cachedCount,
+    failed,
     results,
-  });
+  }, { status: outcome.statusCode });
 }
 
 // Vercel cron invokes configured paths with GET; POST remains available for an

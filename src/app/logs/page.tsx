@@ -1,11 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Activity, Download, Upload } from "lucide-react";
+import { Download, FileSearch, Upload } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
+import {
+  ToolAlert, ToolEmptyState, ToolLoadingState, ToolPage, ToolPanel,
+} from "@/components/dashboard/ToolPage";
 
 interface LogEntry {
   date: string;
@@ -41,6 +43,10 @@ const BOT_PATTERNS: { name: string; pattern: RegExp }[] = [
 ];
 
 const AI_BOTS = new Set(["GPTBot", "ClaudeBot", "PerplexityBot"]);
+const APACHE_MONTHS: Record<string, string> = {
+  Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+  Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12",
+};
 
 const BOT_COLORS: Record<string, string> = {
   Googlebot: "#4ade80",
@@ -68,7 +74,10 @@ function parseLine(line: string): LogEntry | null {
   );
   if (!m) return null;
   const [, ip, rawDate, url, status, ua = ""] = m;
-  const date = rawDate.slice(0, 11).replace("/", "-").replace("/", "-");
+  const [day = "", month = "", year = ""] = rawDate.split(":", 1)[0].split("/");
+  const date = APACHE_MONTHS[month] && /^\d{2}$/.test(day) && /^\d{4}$/.test(year)
+    ? `${year}-${APACHE_MONTHS[month]}-${day}`
+    : rawDate.slice(0, 11);
   const statusCode = parseInt(status, 10);
   const bot = detectBot(ua);
   return { date, ip, userAgent: ua, url, statusCode, bot };
@@ -105,12 +114,14 @@ function buildUrlStats(entries: LogEntry[]): UrlStat[] {
 
 function exportCsv(rows: UrlStat[]) {
   const header = "URL,Total,Googlebot,AI Bots\n";
-  const body = rows.map((r) => `"${r.url}",${r.total},${r.google},${r.ai}`).join("\n");
+  const body = rows.map((r) => `"${r.url.replaceAll('"', '""')}",${r.total},${r.google},${r.ai}`).join("\n");
   const blob = new Blob([header + body], { type: "text/csv" });
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  a.href = url;
   a.download = "log-crawl-stats.csv";
   a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function LogsPage() {
@@ -118,19 +129,31 @@ export default function LogsPage() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
+  const [parseReport, setParseReport] = useState<{ total: number; parsed: number; rejected: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   function handleFile(file: File) {
     setLoading(true);
     setFileName(file.name);
+    setEntries([]);
+    setParseReport(null);
+    setError(null);
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = (e.target?.result as string) ?? "";
-      const lines = text.split("\n").filter(Boolean);
+      const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
       const parsed = lines.flatMap((l) => {
         const r = parseLine(l);
         return r ? [r] : [];
       });
       setEntries(parsed);
+      setParseReport({ total: lines.length, parsed: parsed.length, rejected: lines.length - parsed.length });
+      if (lines.length === 0) setError("Le fichier est vide.");
+      else if (parsed.length === 0) setError("Aucune ligne reconnue. Formats acceptés : Common/Combined Log Format avec une requête HTTP entre guillemets.");
+      setLoading(false);
+    };
+    reader.onerror = () => {
+      setError("Le navigateur n'a pas pu lire ce fichier.");
       setLoading(false);
     };
     reader.readAsText(file);
@@ -144,20 +167,16 @@ export default function LogsPage() {
   const activeBots = [...new Set(entries.flatMap((e) => (e.bot ? [e.bot] : [])))];
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100">
-      <div className="border-b border-gray-800 px-6 py-4 flex items-center gap-4">
-        <Link href="/dashboard" className="flex items-center gap-2 text-gray-400 hover:text-gray-100">
-          <ArrowLeft className="w-4 h-4" /> Dashboard
-        </Link>
-        <Activity className="w-5 h-5 text-cyan-400" />
-        <h1 className="text-xl font-semibold">Log Analyzer</h1>
-      </div>
-
-      <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
-        {/* Upload */}
+    <ToolPage
+      title="Analyse des logs de crawl"
+      eyebrow="Analyse locale du serveur"
+      description="Importe un fichier Common ou Combined Log Format. Le fichier reste dans le navigateur : seules les lignes reconnues sont comptées et le taux de rejet est affiché."
+      icon={FileSearch}
+    >
+      <ToolPanel className="p-4 sm:p-6">
         <button
           type="button"
-          className="w-full border-2 border-dashed border-gray-700 rounded-xl p-8 text-center cursor-pointer hover:border-cyan-600 transition-colors"
+          className="min-h-32 w-full cursor-pointer rounded-xl border-2 border-dashed border-slate-700 p-6 text-center transition-colors hover:border-blue-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
           onClick={() => inputRef.current?.click()}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
@@ -166,10 +185,11 @@ export default function LogsPage() {
             if (f) handleFile(f);
           }}
         >
-          <Upload className="w-8 h-8 text-gray-500 mx-auto mb-2" />
-          <p className="text-gray-400 text-sm">
+          <Upload className="mx-auto mb-2 h-8 w-8 text-slate-500" aria-hidden="true" />
+          <p className="text-sm text-slate-300">
             {fileName ?? "Glisser un fichier access.log ou cliquer pour choisir"}
           </p>
+          <p className="mt-2 text-xs text-slate-500">Formats .log ou .txt · traitement local, aucun envoi réseau</p>
         </button>
         <input
           ref={inputRef}
@@ -182,12 +202,21 @@ export default function LogsPage() {
             if (f) handleFile(f);
           }}
         />
+      </ToolPanel>
 
-        {loading && (
-          <div className="text-center text-gray-400 text-sm py-4">Parsing en cours...</div>
-        )}
+      {loading && <ToolLoadingState title="Analyse du fichier" description="Lecture et classification des lignes de crawl." rows={3} />}
+      {error && <ToolAlert tone="error">{error}</ToolAlert>}
+      {parseReport && !loading && (
+        <ToolAlert tone={parseReport.rejected > 0 ? "warning" : "success"}>
+          <strong>{parseReport.parsed.toLocaleString("fr-FR")}</strong> ligne(s) reconnue(s) sur {parseReport.total.toLocaleString("fr-FR")}.
+          {parseReport.rejected > 0 && <> {parseReport.rejected.toLocaleString("fr-FR")} ligne(s) exclue(s) des statistiques car leur format n&apos;a pas été reconnu.</>}
+        </ToolAlert>
+      )}
+      {!loading && !fileName && (
+        <ToolEmptyState icon={FileSearch} title="Aucun fichier analysé" description="Importe un access.log pour mesurer les passages réels de Googlebot et des robots IA." />
+      )}
 
-        {entries.length > 0 && (
+      {entries.length > 0 && (
           <>
             {/* Stat cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -249,10 +278,11 @@ export default function LogsPage() {
               <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
                 <h2 className="font-medium text-gray-200">Top 20 URLs crawlées</h2>
                 <button
+                  type="button"
                   onClick={() => exportCsv(urlStats)}
-                  className="flex items-center gap-2 text-xs text-gray-400 hover:text-white bg-gray-800 px-3 py-1.5 rounded-lg"
+                  className="flex min-h-11 items-center gap-2 rounded-lg bg-gray-800 px-3 text-xs text-gray-300 hover:text-white"
                 >
-                  <Download className="w-3.5 h-3.5" /> CSV
+                  <Download className="h-4 w-4" aria-hidden="true" /> CSV
                 </button>
               </div>
               <div className="overflow-x-auto">
@@ -280,7 +310,6 @@ export default function LogsPage() {
             </div>
           </>
         )}
-      </div>
-    </div>
+    </ToolPage>
   );
 }

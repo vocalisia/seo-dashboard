@@ -40,6 +40,7 @@ const nextConfig: NextConfig = {
       // Gemini / Google image CDN
       { protocol: "https", hostname: "*.googleusercontent.com" },
       { protocol: "https", hostname: "*.google.com" },
+      { protocol: "https", hostname: "i.ytimg.com" },
       // Pollinations Flux
       { protocol: "https", hostname: "image.pollinations.ai" },
       // Vercel Blob

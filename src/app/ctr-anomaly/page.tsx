@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, ChevronLeft, MousePointerClick } from "lucide-react";
+import { AlertTriangle, ChevronLeft, Loader2, MousePointerClick } from "lucide-react";
 import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
+import { isRecord, readApiJson } from "@/lib/api-response";
 
 interface Site { id: number; name: string }
 interface Anomaly {
@@ -12,35 +13,72 @@ interface Anomaly {
   ctr_actual: number; ctr_expected: number;
   gap_pct: number; missed_clicks: number; diagnosis: string;
 }
+type LoadState = "loading-sites" | "loading" | "ready" | "empty-sites" | "error";
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isSiteList(payload: unknown): payload is Site[] {
+  return Array.isArray(payload) && payload.every((site) =>
+    isRecord(site) && isFiniteNumber(site.id) && typeof site.name === "string"
+  );
+}
+
+function isAnomalyList(payload: unknown): payload is Anomaly[] {
+  return Array.isArray(payload) && payload.every((row) =>
+    isRecord(row)
+    && typeof row.query === "string"
+    && typeof row.page === "string"
+    && typeof row.diagnosis === "string"
+    && [row.position, row.impressions, row.clicks, row.ctr_actual, row.ctr_expected, row.gap_pct, row.missed_clicks].every(isFiniteNumber)
+  );
+}
 
 export default function CTRAnomalyPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [siteId, setSiteId] = useState<number | null>(null);
   const [rows, setRows] = useState<Anomaly[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>("loading-sites");
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch("/api/sites").then(r => r.json()).catch(() => null).then((data: unknown) => {
-      if (Array.isArray(data)) {
-        setSites(data as Site[]);
-        if (data.length > 0) {
-          setLoading(true);
-          setSiteId((data[0] as Site).id);
-        }
+  const loadSites = useCallback(async () => {
+    try {
+      const response = await fetch("/api/sites");
+      const list = await readApiJson(response, isSiteList, "Impossible de charger les sites");
+      setSites(list);
+      if (list.length === 0) {
+        setSiteId(null);
+        setLoadState("empty-sites");
+        return;
       }
-    });
+      setRows([]);
+      setError(null);
+      setLoadState("loading");
+      setSiteId(list[0].id);
+    } catch (caught) {
+      setSites([]);
+      setSiteId(null);
+      setRows([]);
+      setError(caught instanceof Error ? caught.message : "Impossible de charger les sites");
+      setLoadState("error");
+    }
   }, []);
 
-  useEffect(() => {
-    if (!siteId) return;
-    fetch(`/api/ctr-anomaly?siteId=${siteId}&days=28&limit=100`)
-      .then(r => r.json())
-      .then((data: unknown) => {
-        if (Array.isArray(data)) setRows(data as Anomaly[]);
-      })
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
-  }, [siteId]);
+  const loadAnomalies = useCallback(async (selectedSiteId: number) => {
+    try {
+      const response = await fetch(`/api/ctr-anomaly?siteId=${selectedSiteId}&days=28&limit=100`);
+      const data = await readApiJson(response, isAnomalyList, "Impossible de charger les anomalies CTR");
+      setRows(data);
+      setLoadState("ready");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Impossible de charger les anomalies CTR");
+      setLoadState("error");
+    }
+  }, []);
+
+  useEffect(() => { void Promise.resolve().then(loadSites); }, [loadSites]);
+  useEffect(() => { if (siteId !== null) void Promise.resolve(siteId).then(loadAnomalies); }, [loadAnomalies, siteId]);
 
   const totalMissed = rows.reduce((s, r) => s + r.missed_clicks, 0);
 
@@ -53,16 +91,15 @@ export default function CTRAnomalyPage() {
           <h1 className="text-xl font-bold">CTR Anomaly Detector</h1>
           <span className="text-xs text-gray-500">vs benchmark AWR 2026</span>
         </div>
-        <select aria-label="Site à analyser" value={siteId || ""} onChange={e => {
-          setLoading(true);
-          setSiteId(parseInt(e.target.value));
+        <select aria-label="Site à analyser" value={siteId || ""} disabled={sites.length === 0} onChange={e => {
+          setRows([]); setError(null); setLoadState("loading"); setSiteId(parseInt(e.target.value, 10));
         }}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </header>
 
-      <div className="px-6 py-4 grid grid-cols-3 gap-4">
+      {loadState === "ready" && <div className="px-6 py-4 grid grid-cols-3 gap-4">
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400">Anomalies CTR</div>
           <div className="text-2xl font-bold text-purple-400">{rows.length}</div>
@@ -75,13 +112,20 @@ export default function CTRAnomalyPage() {
           <div className="text-xs text-gray-400">Gain potentiel mensuel</div>
           <div className="text-2xl font-bold text-green-400">+{Math.round(totalMissed * 30 / 28).toLocaleString()}</div>
         </div>
-      </div>
+      </div>}
 
       <div className="px-6 pb-10">
-        {loading ? (
+        {loadState === "loading" || loadState === "loading-sites" ? (
           <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-purple-500" /></div>
+        ) : loadState === "error" ? (
+          <div role="alert" className="rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+            <AlertTriangle className="mr-2 inline h-4 w-4" />
+            Erreur de chargement : {error ?? "réponse indisponible"}
+          </div>
+        ) : loadState === "empty-sites" ? (
+          <div className="py-12 text-center text-gray-500">Aucun site actif disponible pour lancer l’analyse CTR.</div>
         ) : rows.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">Aucune anomalie CTR — tout est dans la norme 🎯</div>
+          <div className="py-12 text-center text-gray-500">Aucune anomalie CTR — tout est dans la norme</div>
         ) : (
           <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
             <table className="w-full text-sm">

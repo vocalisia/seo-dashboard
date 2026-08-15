@@ -17,19 +17,13 @@ export const maxDuration = 300;
 import { NextResponse } from "next/server";
 import { getSQL, ensureSchema } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { runOutcome } from "@/lib/run-outcome";
+import { extractPageSpeedMetrics, type PageSpeedMetrics } from "@/lib/pagespeed";
 
 interface SiteRow {
   id: number;
   name: string;
   url: string;
-}
-
-interface PageSpeedMetrics {
-  score: number;
-  lcp: number;
-  cls: number;
-  fcp: number;
-  ttfb: number;
 }
 
 interface SiteResult {
@@ -43,25 +37,6 @@ interface SiteResult {
 }
 
 const RATE_DELAY_MS = process.env.PAGESPEED_API_KEY?.trim() ? 150 : 1_100;
-
-function extractMetrics(data: Record<string, unknown>): PageSpeedMetrics {
-  const lr = data.lighthouseResult as Record<string, unknown> | undefined;
-  const cats = lr?.categories as Record<string, Record<string, unknown>> | undefined;
-  const score = Math.round(Number(cats?.performance?.score ?? 0) * 100);
-  const audits = (lr?.audits ?? {}) as Record<string, Record<string, unknown>>;
-  const numVal = (key: string): number => {
-    const audit = audits[key];
-    if (!audit) return 0;
-    return Number(audit.numericValue ?? 0) / 1000;
-  };
-  return {
-    score,
-    lcp: Math.round(numVal("largest-contentful-paint") * 100) / 100,
-    cls: Math.round(Number(audits["cumulative-layout-shift"]?.numericValue ?? 0) * 1000) / 1000,
-    fcp: Math.round(numVal("first-contentful-paint") * 100) / 100,
-    ttfb: Math.round(numVal("server-response-time") * 100) / 100,
-  };
-}
 
 async function fetchPageSpeed(
   url: string,
@@ -77,7 +52,7 @@ async function fetchPageSpeed(
     throw new Error(`PageSpeed API ${strategy} returned ${res.status}`);
   }
   const data = (await res.json()) as Record<string, unknown>;
-  return extractMetrics(data);
+  return extractPageSpeedMetrics(data);
 }
 
 async function runPageSpeedCron(request: Request): Promise<NextResponse> {
@@ -100,7 +75,7 @@ async function runPageSpeedCron(request: Request): Promise<NextResponse> {
   }
 
   if (sites.length === 0) {
-    return NextResponse.json({ success: true, message: "No active sites", results: [] });
+    return NextResponse.json({ success: true, partial: false, skipped: true, message: "No active sites", results: [] });
   }
 
   const results: SiteResult[] = [];
@@ -148,13 +123,19 @@ async function runPageSpeedCron(request: Request): Promise<NextResponse> {
     }
   }
 
+  const ok = results.filter((result) => result.status === "ok").length;
+  const failed = results.filter((result) => result.status === "failed").length;
+  const outcome = runOutcome(ok, failed, sites.length);
+
   return NextResponse.json({
-    success: true,
+    success: outcome.success,
+    partial: outcome.partial,
+    skipped: outcome.skipped,
     total_sites: sites.length,
-    ok: results.filter((r) => r.status === "ok").length,
-    failed: results.filter((r) => r.status === "failed").length,
+    ok,
+    failed,
     results,
-  });
+  }, { status: outcome.statusCode });
 }
 
 // Vercel cron invokes configured paths with GET; POST remains available for an

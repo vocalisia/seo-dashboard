@@ -27,6 +27,9 @@ interface ApiResponse {
   failed: number;
   partial?: boolean;
   duration_ms?: number;
+  contextual_links: number;
+  sitewide_links_excluded: number;
+  graph_mode: "contextual" | "all_internal";
 }
 
 async function fetchWithTimeout(url: string): Promise<string | null> {
@@ -174,8 +177,25 @@ export async function POST(request: NextRequest) {
     const candidate = candidateNodes.get(url);
     if (candidate) nodes.set(url, candidate);
   }
+  const linkOccurrences = new Map<string, number>();
+  for (const links of capturedLinks.values()) {
+    for (const target of new Set(links.filter((link) => nodes.has(link)))) {
+      linkOccurrences.set(target, (linkOccurrences.get(target) ?? 0) + 1);
+    }
+  }
+  const sitewideThreshold = Math.max(3, Math.ceil(nodes.size * 0.7));
+  const homeUrl = normalizeUrlForGraph(new URL("/", baseUrl).toString());
+  const sitewideTargets = new Set(
+    [...linkOccurrences.entries()]
+      .filter(([target, occurrences]) => target !== homeUrl && occurrences >= sitewideThreshold)
+      .map(([target]) => target),
+  );
+  let sitewideLinksExcluded = 0;
   for (const [url, node] of nodes) {
-    node.outLinks = (capturedLinks.get(url) ?? []).filter((link) => nodes.has(link));
+    const observed = (capturedLinks.get(url) ?? []).filter((link) => nodes.has(link));
+    const contextual = observed.filter((link) => !sitewideTargets.has(link));
+    sitewideLinksExcluded += observed.length - contextual.length;
+    node.outLinks = contextual;
     for (const link of node.outLinks) {
       const target = nodes.get(link);
       if (target && !target.inLinks.includes(url)) target.inLinks.push(url);
@@ -203,6 +223,7 @@ export async function POST(request: NextRequest) {
 
   // Suggestions include observed orphans and under-linked pages, never uncrawled pages.
   const suggestions = buildInternalLinkSuggestions(nodes, 10);
+  const contextualLinks = [...nodes.values()].reduce((sum, node) => sum + node.outLinks.length, 0);
 
   const response: ApiResponse = {
     top20,
@@ -214,6 +235,9 @@ export async function POST(request: NextRequest) {
     failed: candidateNodes.size - nodes.size,
     partial,
     duration_ms: Date.now() - startedAt,
+    contextual_links: contextualLinks,
+    sitewide_links_excluded: sitewideLinksExcluded,
+    graph_mode: sitewideTargets.size > 0 ? "contextual" : "all_internal",
   };
 
   return NextResponse.json(response);

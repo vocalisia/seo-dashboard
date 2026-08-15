@@ -45,11 +45,11 @@ function parseJsonArrayField(value: unknown): string[] {
 /**
  * POST /api/scanner/launch
  *
- * Lightweight "Launch this niche" stub. Creates:
- *  1. A pending site row (no GitHub repo — that's the heavy `/api/opportunities/deploy`)
+ * Lightweight niche preparation. Creates:
+ *  1. An inactive site row (no GitHub repo — that's the separate `/api/opportunities/deploy` action)
  *  2. A content_plan with the 3-4 launch articles
  *  3. tracked_keywords seeds for the core keywords
- *  4. Marks opportunity as `planned`
+ *  4. Marks opportunity as `site_registered`
  *
  * Body: { opportunity_id: number; domain?: string }
  */
@@ -152,16 +152,16 @@ export async function POST(req: NextRequest) {
       seededKeywords += 1;
     }
 
-    // 4. Update opportunity status + persist plan
+    // 4. A registered inactive site is neither a repository nor a deployment.
     await sql`
       UPDATE market_opportunities
-      SET status = 'planned', launch_plan = ${JSON.stringify(plan)}
+      SET status = 'site_registered', launch_plan = ${JSON.stringify(plan)}
       WHERE id = ${opp.id}
     `;
 
     logger.info(
       { opp_id: opp.id, site_id: siteId, articles: plannedArticles, keywords: seededKeywords },
-      "scanner launch stub created"
+      "scanner inactive site registered"
     );
 
     return NextResponse.json({
@@ -172,7 +172,12 @@ export async function POST(req: NextRequest) {
       planned_articles: plannedArticles,
       seeded_keywords: seededKeywords,
       launch_plan: plan,
-      message: `Site stub créé: ${siteUrl}. ${plannedArticles} articles planifiés, ${seededKeywords} keywords trackés. Lance "Créer ce site" pour pousser sur GitHub.`,
+      provisioning_status: "site_registered",
+      site_registered: true,
+      repository_ready: false,
+      deployed: false,
+      site_active: false,
+      message: `Site enregistré dans le dashboard mais inactif : ${siteUrl}. ${plannedArticles} articles planifiés, ${seededKeywords} mots-clés suivis. Aucun dépôt GitHub ni déploiement n'a été créé.`,
     });
   } catch (err) {
     return NextResponse.json(

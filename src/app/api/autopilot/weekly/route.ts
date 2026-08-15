@@ -154,9 +154,23 @@ export async function POST(request: Request) {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
+  if (process.env.ALLOW_SCHEDULED_PUBLICATION?.trim().toLowerCase() !== "true") {
+    return NextResponse.json({
+      success: true,
+      skipped: true,
+      manual_review_required: true,
+      message: "Publication planifiée verrouillée : chaque article doit être validé manuellement.",
+      published: 0,
+      pending_live: 0,
+      failed: 0,
+      total_runs: 0,
+      results: [],
+    });
+  }
+
   const sql = getSQL();
 
-  // Kill switch — check global toggle (default ON if not set)
+  // Fail closed: a missing setting or database error must never trigger publication.
   try {
     await sql`
       CREATE TABLE IF NOT EXISTS app_config (
@@ -166,16 +180,28 @@ export async function POST(request: Request) {
       )
     `;
     const cfg = await sql`SELECT value FROM app_config WHERE key = 'autopilot_enabled'`;
-    if (cfg.length > 0 && cfg[0].value === false) {
+    if (cfg.length === 0 || cfg[0].value !== true) {
       return NextResponse.json({
         success: true,
         message: "Autopilot disabled by user — skipped",
         skipped: true,
+        published: 0,
+        pending_live: 0,
+        failed: 0,
+        total_runs: 0,
         results: [],
       });
     }
   } catch (e) {
     console.error("Toggle check failed:", e);
+    return NextResponse.json(
+      {
+        success: false,
+        skipped: true,
+        error: "Impossible de vérifier le verrou de publication. Aucune publication n'a été lancée.",
+      },
+      { status: 503 }
+    );
   }
 
   try {

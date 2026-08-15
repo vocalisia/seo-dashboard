@@ -9,16 +9,33 @@ export function normalizeOpportunityDomain(value: unknown): string | null {
 }
 
 export function canCreateOpportunityRepository(status: string | null | undefined): boolean {
+  return status == null || status === "pending" || status === "planned" || status === "site_registered";
+}
+
+export function canRegisterOpportunitySite(status: string | null | undefined): boolean {
   return status == null || status === "pending" || status === "planned";
+}
+
+export function opportunityProvisioningState(status: string | null | undefined): {
+  site_registered: boolean;
+  repository_ready: boolean;
+  deployed: boolean;
+} {
+  return {
+    site_registered: status === "site_registered" || status === "repository_ready" || status === "deployed",
+    repository_ready: status === "repository_ready" || status === "deployed",
+    deployed: status === "deployed",
+  };
 }
 
 export function opportunityDeploymentState(status: string | null | undefined): {
   label: string;
   tone: OpportunityDeploymentTone;
 } {
-  if (status === "planned") return { label: "Plan prêt · aucun dépôt", tone: "info" };
-  if (status === "repository_ready") return { label: "Dépôt privé prêt · non publié", tone: "info" };
-  if (status === "deployed") return { label: "Publication déclarée · live à vérifier", tone: "warning" };
+  if (status === "planned") return { label: "Plan prêt · site non enregistré", tone: "info" };
+  if (status === "site_registered") return { label: "Site enregistré · inactif · aucun dépôt", tone: "info" };
+  if (status === "repository_ready") return { label: "Dépôt privé prêt · site inactif · non publié", tone: "info" };
+  if (status === "deployed") return { label: "Statut deployed reçu · déploiement non vérifié", tone: "warning" };
   if (status === "pending" || !status) return { label: "À préparer", tone: "neutral" };
   return { label: `Statut : ${status}`, tone: "neutral" };
 }

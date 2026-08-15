@@ -1,3 +1,4 @@
+import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
@@ -18,6 +19,9 @@ function expectedCtr(position: number): number {
 }
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const siteId = request.nextUrl.searchParams.get("siteId");
   const days = parseInt(request.nextUrl.searchParams.get("days") || "28");
   const limit = parseInt(request.nextUrl.searchParams.get("limit") || "100");

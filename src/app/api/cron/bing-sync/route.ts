@@ -9,6 +9,7 @@ import { getSQL } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { getBingStats, isBingWmtConfigured } from "@/lib/bing-wmt";
 import { logError, logger } from "@/lib/logger";
+import { runOutcome } from "@/lib/run-outcome";
 
 interface SiteRow {
   id: number;
@@ -94,13 +95,18 @@ export async function GET(request: Request) {
     "bing sync finished"
   );
 
+  const failed = summary.filter((result) => Boolean(result.error)).length;
+  const outcome = runOutcome(sites.length - failed, failed, sites.length);
   return NextResponse.json({
-    success: true,
+    success: outcome.success,
+    partial: outcome.partial,
+    skipped: outcome.skipped,
     engine: "bing",
     sites: sites.length,
     total_rows: totalRows,
+    failed,
     summary,
-  });
+  }, { status: outcome.statusCode });
 }
 
 export const POST = GET;

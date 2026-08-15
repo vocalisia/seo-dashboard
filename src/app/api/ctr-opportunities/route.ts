@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,9 @@ function getExpectedCtr(position: number): number {
 }
 
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   try {
     const startedAt = Date.now();
     const { searchParams } = new URL(req.url);

@@ -1,7 +1,7 @@
+import { requireApiSession } from "@/lib/api-auth";
 import { ensureSchemaOnce, getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { GSC_LAG_DAYS } from "@/lib/gsc-window";
-import { siteCountryCode } from "@/lib/site-country";
 import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = 'force-dynamic';
@@ -49,6 +49,9 @@ function filterPollutedRows<T extends Record<string, unknown>>(rows: T[]): T[] {
 }
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const siteId = request.nextUrl.searchParams.get("siteId");
   const type = request.nextUrl.searchParams.get("type") || "queries";
   const days = parseInt(request.nextUrl.searchParams.get("days") || "30", 10);

@@ -1,9 +1,52 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { ArrowLeft, Loader2, Radar, Rocket, TrendingUp, DollarSign, Globe, Zap, ChevronDown, ChevronRight, Sparkles, Clock } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  Briefcase,
+  Calculator,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  CircleDashed,
+  CircleHelp,
+  Clock,
+  DollarSign,
+  ExternalLink,
+  FileText,
+  FolderOpen,
+  Globe,
+  GraduationCap,
+  Languages,
+  LayoutGrid,
+  Lightbulb,
+  Loader2,
+  Microscope,
+  Monitor,
+  Newspaper,
+  Radar,
+  Radio,
+  RefreshCw,
+  Rocket,
+  Search,
+  ShoppingCart,
+  Sparkles,
+  Store,
+  TrendingUp,
+  XCircle,
+  Zap,
+} from "lucide-react";
 import Link from "next/link";
-import { canCreateOpportunityRepository, opportunityDeploymentState } from "@/lib/opportunity-deployment";
+import {
+  canCreateOpportunityRepository,
+  canRegisterOpportunitySite,
+  opportunityDeploymentState,
+  opportunityProvisioningState,
+} from "@/lib/opportunity-deployment";
 
 interface Opportunity {
   id: number;
@@ -101,14 +144,49 @@ interface DeepResearchPayload {
   }>;
 }
 
+interface ApiEnvelope {
+  success?: boolean;
+  error?: string;
+  message?: string;
+}
+
+interface ValidationResult {
+  verdict: string;
+  verdict_reason: string;
+  attackability_score: number;
+  time_to_page1_months: number;
+  content_gaps: string[];
+  quick_wins: string[];
+  strategy_recommendation: string;
+}
+
+function requestErrorMessage(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
+async function parseJsonResponse<T>(response: Response, fallback: string): Promise<T> {
+  try {
+    return await response.json() as T;
+  } catch {
+    throw new Error(`${fallback} : réponse JSON invalide (HTTP ${response.status}).`);
+  }
+}
+
+async function readSuccessfulResponse<T extends ApiEnvelope>(
+  response: Response,
+  fallback: string,
+): Promise<T> {
+  const payload = await parseJsonResponse<T>(response, fallback);
+  if (!response.ok || payload.success !== true) {
+    throw new Error(payload.error?.trim() || payload.message?.trim() || `${fallback} (HTTP ${response.status}).`);
+  }
+  return payload;
+}
+
 const COUNTRY_FLAG: Record<string, string> = {
   FRA: "🇫🇷", DEU: "🇩🇪", CHE: "🇨🇭", GBR: "🇬🇧", USA: "🇺🇸", BEL: "🇧🇪", CAN: "🇨🇦",
   ESP: "🇪🇸", ITA: "🇮🇹", NLD: "🇳🇱", PRT: "🇵🇹", AUT: "🇦🇹", BRA: "🇧🇷", AUS: "🇦🇺",
   IRL: "🇮🇪", LUX: "🇱🇺", MEX: "🇲🇽", ARG: "🇦🇷", JPN: "🇯🇵", IND: "🇮🇳", SGP: "🇸🇬",
-};
-
-const LANG_FLAG: Record<string, string> = {
-  fr: "🇫🇷", en: "🇬🇧", de: "🇩🇪", es: "🇪🇸", it: "🇮🇹", nl: "🇳🇱", pt: "🇵🇹",
 };
 
 const COMP_COLOR: Record<string, string> = {
@@ -117,14 +195,25 @@ const COMP_COLOR: Record<string, string> = {
   high: "text-red-400 bg-red-900/30",
 };
 
-const TYPE_ICON: Record<string, string> = {
-  blog: "📝", magazine: "📰", "e-commerce": "🛒", saas: "💻", directory: "📁",
+const TYPE_ICON: Record<string, LucideIcon> = {
+  blog: FileText,
+  magazine: Newspaper,
+  "e-commerce": ShoppingCart,
+  saas: Monitor,
+  directory: FolderOpen,
+  course: GraduationCap,
+  marketplace: Store,
 };
+
+function OpportunityTypeIcon({ siteType }: { siteType: string }) {
+  const Icon = TYPE_ICON[siteType] ?? Globe;
+  return <Icon className="h-5 w-5 text-gray-300" aria-hidden="true" />;
+}
 
 type DiscoveryMode = "A" | "B" | "C";
 
-const COUNTRY_OPTIONS: { code: string; flag: string; label: string }[] = [
-  { code: "GLOBAL", flag: "🌍", label: "Global / Anglo" },
+const COUNTRY_OPTIONS: { code: string; flag?: string; icon?: LucideIcon; label: string }[] = [
+  { code: "GLOBAL", icon: Globe, label: "Global / Anglo" },
   { code: "FR", flag: "🇫🇷", label: "France" },
   { code: "GB", flag: "🇬🇧", label: "United Kingdom" },
   { code: "DE", flag: "🇩🇪", label: "Deutschland" },
@@ -136,15 +225,15 @@ const COUNTRY_OPTIONS: { code: string; flag: string; label: string }[] = [
   { code: "JP", flag: "🇯🇵", label: "日本" },
 ];
 
-const CATEGORY_OPTIONS: { code: string; emoji: string; label: string; hint: string }[] = [
-  { code: "ALL", emoji: "🎯", label: "Toutes catégories", hint: "Aucun filtre" },
-  { code: "e-commerce", emoji: "🛒", label: "E-commerce", hint: "Produits physiques, dropshipping, marques DTC" },
-  { code: "saas", emoji: "💻", label: "SaaS", hint: "Logiciels, outils, abonnements B2B/B2C" },
-  { code: "blog", emoji: "📝", label: "Blog", hint: "Contenu informationnel monétisé pubs/affiliation" },
-  { code: "magazine", emoji: "📰", label: "Magazine", hint: "Édito haut volume, multi-auteurs" },
-  { code: "directory", emoji: "📁", label: "Annuaire", hint: "Listings, lead-gen, comparateurs" },
-  { code: "course", emoji: "🎓", label: "Formation", hint: "Cours en ligne, coaching, infoproduits" },
-  { code: "marketplace", emoji: "🏪", label: "Marketplace", hint: "Plateformes multi-vendeurs" },
+const CATEGORY_OPTIONS: { code: string; icon: LucideIcon; label: string; hint: string }[] = [
+  { code: "ALL", icon: LayoutGrid, label: "Toutes catégories", hint: "Aucun filtre" },
+  { code: "e-commerce", icon: ShoppingCart, label: "E-commerce", hint: "Produits physiques, dropshipping, marques DTC" },
+  { code: "saas", icon: Monitor, label: "SaaS", hint: "Logiciels, outils, abonnements B2B/B2C" },
+  { code: "blog", icon: FileText, label: "Blog", hint: "Contenu informationnel monétisé pubs/affiliation" },
+  { code: "magazine", icon: Newspaper, label: "Magazine", hint: "Édito haut volume, multi-auteurs" },
+  { code: "directory", icon: FolderOpen, label: "Annuaire", hint: "Listings, lead-gen, comparateurs" },
+  { code: "course", icon: GraduationCap, label: "Formation", hint: "Cours en ligne, coaching, infoproduits" },
+  { code: "marketplace", icon: Store, label: "Marketplace", hint: "Plateformes multi-vendeurs" },
 ];
 
 const DISCOVERY_MODE_COPY: Record<DiscoveryMode, { title: string; description: string }> = {
@@ -164,14 +253,11 @@ const DISCOVERY_MODE_COPY: Record<DiscoveryMode, { title: string; description: s
 
 export default function ScannerPage() {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
+  const [hasLoadedOpportunities, setHasLoadedOpportunities] = useState(false);
   const [loading, setLoading] = useState(false);
   const [deploying, setDeploying] = useState<number | null>(null);
   const [validating, setValidating] = useState<number | null>(null);
-  const [validationResults, setValidationResults] = useState<Record<number, {
-    verdict: string; verdict_reason: string; attackability_score: number;
-    time_to_page1_months: number; content_gaps: string[]; quick_wins: string[];
-    strategy_recommendation: string;
-  }>>({});
+  const [validationResults, setValidationResults] = useState<Record<number, ValidationResult>>({});
   const [deployMsg, setDeployMsg] = useState<string | null>(null);
   const [scanMsg, setScanMsg] = useState<string | null>(null);
   const [loadCompetitorsMsg, setLoadCompetitorsMsg] = useState<string | null>(null);
@@ -218,10 +304,21 @@ export default function ScannerPage() {
   const [deepResearch, setDeepResearch] = useState<Record<number, DeepResearchPayload>>({});
   const [loadingDeepResearch, setLoadingDeepResearch] = useState<number | null>(null);
   const [launching, setLaunching] = useState<number | null>(null);
-  const [launchResults, setLaunchResults] = useState<Record<number, { site_url: string; planned_articles: number; seeded_keywords: number; message: string }>>({});
+  const [launchResults, setLaunchResults] = useState<Record<number, {
+    site_url: string;
+    planned_articles: number;
+    seeded_keywords: number;
+    message: string;
+    provisioning_status: "site_registered";
+    site_registered: true;
+    repository_ready: false;
+    deployed: false;
+    site_active: false;
+  }>>({});
 
   function clearScannerResults() {
     setOpportunities([]);
+    setHasLoadedOpportunities(false);
     setCompetitorsCache({});
     setTranslations({});
     setValidationResults({});
@@ -244,14 +341,32 @@ export default function ScannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ niche: opp.niche, keyword }),
       });
-      const d = await res.json() as { success: boolean; research?: DeepResearchPayload; error?: string };
-      if (d.success && d.research) {
-        setDeepResearch((prev) => ({ ...prev, [opp.id]: d.research! }));
-      } else {
-        setDeployMsg(d.error ?? "Deep research a échoué.");
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        research?: DeepResearchPayload;
+        error?: string;
+      }>(res, "Le deep research a échoué");
+      const research = d.research;
+      if (
+        !research
+        || typeof research.niche !== "string"
+        || research.niche.trim().length === 0
+        || typeof research.keyword !== "string"
+        || research.keyword.trim().length === 0
+        || typeof research.summary !== "string"
+        || research.summary.trim().length === 0
+        || !Array.isArray(research.competitors)
+        || !Array.isArray(research.content_angles)
+        || !Array.isArray(research.content_gaps)
+        || !Array.isArray(research.related_questions)
+        || !Array.isArray(research.related_searches)
+        || !Array.isArray(research.top_pages_extracted)
+      ) {
+        throw new Error("Le deep research n'a retourné aucune donnée; le résultat existant est conservé.");
       }
-    } catch {
-      setDeployMsg("Erreur réseau pendant le deep research.");
+      setDeepResearch((prev) => ({ ...prev, [opp.id]: research }));
+    } catch (reason) {
+      setDeployMsg(requestErrorMessage(reason, "Erreur réseau pendant le deep research."));
     } finally {
       setLoadingDeepResearch(null);
     }
@@ -266,26 +381,49 @@ export default function ScannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ opportunity_id: opp.id, domain: opp.suggested_domains?.[0] }),
       });
-      const d = await res.json() as {
-        success: boolean; site_url?: string; planned_articles?: number;
-        seeded_keywords?: number; message?: string; error?: string;
-      };
-      if (d.success && d.site_url) {
-        setLaunchResults((prev) => ({
-          ...prev,
-          [opp.id]: {
-            site_url: d.site_url!,
-            planned_articles: d.planned_articles ?? 0,
-            seeded_keywords: d.seeded_keywords ?? 0,
-            message: d.message ?? "Stub créé",
-          },
-        }));
-        await fetchCached();
-      } else {
-        setDeployMsg(d.error ?? "Le lancement a échoué.");
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        site_url?: string;
+        planned_articles?: number;
+        seeded_keywords?: number;
+        message?: string;
+        error?: string;
+        provisioning_status?: string;
+        site_registered?: boolean;
+        repository_ready?: boolean;
+        deployed?: boolean;
+        site_active?: boolean;
+      }>(res, "La préparation du site a échoué");
+      const siteUrl = d.site_url;
+      const siteRegistrationConfirmed = res.ok
+        && d.success === true
+        && typeof siteUrl === "string"
+        && siteUrl.length > 0
+        && d.provisioning_status === "site_registered"
+        && d.site_registered === true
+        && d.repository_ready === false
+        && d.deployed === false
+        && d.site_active === false;
+      if (!siteRegistrationConfirmed || !siteUrl) {
+        throw new Error("Le site n'a pas été confirmé comme enregistré et inactif; aucun déploiement n'est annoncé.");
       }
-    } catch {
-      setDeployMsg("Erreur réseau pendant le lancement.");
+      setLaunchResults((prev) => ({
+        ...prev,
+        [opp.id]: {
+          site_url: siteUrl,
+          planned_articles: d.planned_articles ?? 0,
+          seeded_keywords: d.seeded_keywords ?? 0,
+          message: d.message ?? "Site enregistré dans le dashboard et laissé inactif.",
+          provisioning_status: "site_registered",
+          site_registered: true,
+          repository_ready: false,
+          deployed: false,
+          site_active: false,
+        },
+      }));
+      await fetchCached();
+    } catch (reason) {
+      setDeployMsg(requestErrorMessage(reason, "Erreur réseau pendant la préparation du site."));
     } finally {
       setLaunching(null);
     }
@@ -300,17 +438,27 @@ export default function ScannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ opportunity_id: oppId }),
       });
-      const d = await res.json();
-      if (d.success && Array.isArray(d.competitors)) {
-        setCompetitorsCache((prev) => ({ ...prev, [oppId]: d.competitors }));
-        if (d.competitors.length === 0) {
-          setLoadCompetitorsMsg("Aucun concurrent trouvé via Google. Réessaie ou regarde manuellement.");
-        }
-      } else {
-        setLoadCompetitorsMsg(d.error ?? "Échec du chargement des concurrents.");
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        error?: string;
+        competitors?: { url: string; name: string }[];
+      }>(res, "Échec du chargement des concurrents");
+      const nextCompetitors = d.competitors;
+      if (!Array.isArray(nextCompetitors)) {
+        throw new Error("La réponse concurrents est incomplète; les données existantes sont conservées.");
       }
-    } catch {
-      setLoadCompetitorsMsg("Erreur réseau pendant le chargement des concurrents.");
+      if (nextCompetitors.length === 0) {
+        const existingCount = competitorsCache[oppId]?.length
+          ?? opportunities.find((item) => item.id === oppId)?.competitors?.length
+          ?? 0;
+        setLoadCompetitorsMsg(existingCount > 0
+          ? "L'actualisation n'a trouvé aucun concurrent; la liste existante est conservée."
+          : "Aucun concurrent vérifiable n'a été trouvé.");
+        return;
+      }
+      setCompetitorsCache((prev) => ({ ...prev, [oppId]: nextCompetitors }));
+    } catch (reason) {
+      setLoadCompetitorsMsg(requestErrorMessage(reason, "Erreur réseau pendant le chargement des concurrents."));
     } finally {
       setLoadingCompetitors(null);
     }
@@ -325,15 +473,38 @@ export default function ScannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ opportunity_id: oppId, target: "fr" }),
       });
-      const d = await res.json();
-      if (d.success && d.translated) {
-        setTranslations((prev) => ({ ...prev, [oppId]: d.translated }));
-        setTranslateMsg(d.fallback ? "Traduction locale appliquee: l'IA n'a pas repondu proprement." : null);
-      } else {
-        setTranslateMsg("La traduction a échoué.");
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        error?: string;
+        fallback?: boolean;
+        translated?: {
+          niche?: string;
+          reason?: string;
+          seed_articles?: string[];
+          sample_queries?: string[];
+          business_model_type?: string;
+          business_model_how_to_monetize?: string;
+        };
+      }>(res, "La traduction a échoué");
+      const translated = d.translated;
+      const hasTranslatedContent = Boolean(
+        translated
+        && (
+          translated.niche?.trim()
+          || translated.reason?.trim()
+          || translated.business_model_type?.trim()
+          || translated.business_model_how_to_monetize?.trim()
+          || (Array.isArray(translated.seed_articles) && translated.seed_articles.length > 0)
+          || (Array.isArray(translated.sample_queries) && translated.sample_queries.length > 0)
+        )
+      );
+      if (!translated || !hasTranslatedContent) {
+        throw new Error("La traduction reçue est vide; la traduction existante est conservée.");
       }
-    } catch {
-      setTranslateMsg("Erreur réseau pendant la traduction.");
+      setTranslations((prev) => ({ ...prev, [oppId]: translated }));
+      setTranslateMsg(d.fallback ? "Traduction locale appliquée : le fournisseur IA n'a pas répondu proprement." : null);
+    } catch (reason) {
+      setTranslateMsg(requestErrorMessage(reason, "Erreur réseau pendant la traduction."));
     } finally {
       setTranslating(null);
     }
@@ -373,11 +544,12 @@ export default function ScannerPage() {
   }
 
   function formatHost(value: string): string {
-    try {
-      return new URL(value.startsWith("http") ? value : `https://${value}`).hostname.replace(/^www\./, "");
-    } catch {
-      return value.replace(/^https?:\/\//, "").split("/")[0];
-    }
+    const normalized = value
+      .trim()
+      .replace(/^https?:\/\//i, "")
+      .replace(/^www\./i, "")
+      .split(/[/?#]/, 1)[0];
+    return normalized || value;
   }
 
   function exampleSites(opp: Opportunity, competitors: { url: string; name: string }[]): Array<{ label: string; url: string; kind: string }> {
@@ -431,12 +603,25 @@ export default function ScannerPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ opportunity_id: opp.id }),
           });
-          const d = await res.json();
-          if (!cancelled && d.success && Array.isArray(d.competitors) && d.competitors.length > 0) {
-            setCompetitorsCache((prev) => ({ ...prev, [opp.id]: d.competitors }));
+          const d = await readSuccessfulResponse<{
+            success?: boolean;
+            error?: string;
+            competitors?: { url: string; name: string }[];
+          }>(res, `Chargement automatique des concurrents pour ${opp.niche} échoué`);
+          const nextCompetitors = d.competitors;
+          if (!Array.isArray(nextCompetitors)) {
+            throw new Error(`Réponse concurrents incomplète pour ${opp.niche}.`);
           }
-        } catch {
-          // skip silently
+          if (!cancelled && nextCompetitors.length > 0) {
+            setCompetitorsCache((prev) => ({ ...prev, [opp.id]: nextCompetitors }));
+          }
+        } catch (reason) {
+          if (!cancelled) {
+            setLoadCompetitorsMsg(requestErrorMessage(
+              reason,
+              `Chargement automatique des concurrents impossible pour ${opp.niche}; les données existantes sont conservées.`,
+            ));
+          }
         }
         await new Promise((r) => setTimeout(r, 800));
       }
@@ -447,16 +632,28 @@ export default function ScannerPage() {
       cancelled = true;
       setAutoLoadProgress(null);
     };
-  }, [opportunities]);
+  }, [competitorsCache, loadingCompetitors, opportunities]);
 
-  async function fetchCached() {
+  async function fetchCached(): Promise<boolean> {
     try {
       const res = await fetch("/api/opportunities/scan");
-      if (!res.ok) return;
-      const d = await res.json() as { opportunities?: Opportunity[]; message?: string };
-      setOpportunities(d.opportunities ?? []);
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        error?: string;
+        opportunities?: Opportunity[];
+        message?: string;
+      }>(res, "Impossible de charger les opportunités enregistrées");
+      if (!Array.isArray(d.opportunities)) {
+        throw new Error("La réponse du scanner est incomplète; les données existantes sont conservées.");
+      }
+      setOpportunities(d.opportunities);
+      setHasLoadedOpportunities(true);
       setScanMsg(d.message ?? null);
-    } catch { /* ignore */ }
+      return true;
+    } catch (reason) {
+      setScanMsg(requestErrorMessage(reason, "Impossible de charger les opportunités; les données existantes sont conservées."));
+      return false;
+    }
   }
 
   async function runScan() {
@@ -465,24 +662,31 @@ export default function ScannerPage() {
     setScanMsg(null);
     setTranslateMsg(null);
     setLoadCompetitorsMsg(null);
-    setOpportunities([]);
-    setCompetitorsCache({});
-    setTranslations({});
     try {
       const res = await fetch("/api/opportunities/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ discovery_mode: discoveryMode, countries, categories }),
       });
-      if (!res.ok) {
-        setDeployMsg("Le scan a échoué.");
-        return;
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        error?: string;
+        opportunities?: Opportunity[];
+        message?: string;
+      }>(res, "Le scan a échoué");
+      if (!Array.isArray(d.opportunities)) {
+        throw new Error("Le scan n'a pas retourné de liste d'opportunités; les données existantes sont conservées.");
       }
-      const d = await res.json() as { opportunities?: Opportunity[]; message?: string };
-      setOpportunities(d.opportunities ?? []);
-      setScanMsg(d.message ?? null);
-    } catch {
-      setDeployMsg("Erreur réseau pendant le scan.");
+      setOpportunities(d.opportunities);
+      setHasLoadedOpportunities(true);
+      setCompetitorsCache({});
+      setTranslations({});
+      setValidationResults({});
+      setDeepResearch({});
+      setLaunchResults({});
+      setScanMsg(d.message ?? (d.opportunities.length === 0 ? "Le scan est terminé : aucune opportunité ne correspond aux filtres." : null));
+    } catch (reason) {
+      setDeployMsg(requestErrorMessage(reason, "Erreur réseau pendant le scan; les données existantes sont conservées."));
     } finally {
       setLoading(false);
     }
@@ -496,18 +700,35 @@ export default function ScannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ opportunity_id: oppId }),
       });
-      if (!res.ok) {
-        setDeployMsg(`Validation échouée (${res.status}).`);
-        return;
+      const d = await readSuccessfulResponse<ApiEnvelope & Partial<ValidationResult>>(
+        res,
+        "La validation a échoué",
+      );
+      if (
+        typeof d.verdict !== "string"
+        || typeof d.verdict_reason !== "string"
+        || typeof d.attackability_score !== "number"
+        || typeof d.time_to_page1_months !== "number"
+        || !Array.isArray(d.content_gaps)
+        || !Array.isArray(d.quick_wins)
+        || typeof d.strategy_recommendation !== "string"
+      ) {
+        throw new Error("La validation reçue est incomplète; le résultat existant est conservé.");
       }
-      const d = await res.json();
-      if (d.success) {
-        setValidationResults((prev) => ({ ...prev, [oppId]: d }));
-      } else {
-        setDeployMsg("La validation a échoué.");
-      }
-    } catch {
-      setDeployMsg("Erreur réseau pendant la validation.");
+      setValidationResults((prev) => ({
+        ...prev,
+        [oppId]: {
+          verdict: d.verdict as string,
+          verdict_reason: d.verdict_reason as string,
+          attackability_score: d.attackability_score as number,
+          time_to_page1_months: d.time_to_page1_months as number,
+          content_gaps: d.content_gaps as string[],
+          quick_wins: d.quick_wins as string[],
+          strategy_recommendation: d.strategy_recommendation as string,
+        },
+      }));
+    } catch (reason) {
+      setDeployMsg(requestErrorMessage(reason, "Erreur réseau pendant la validation."));
     } finally {
       setValidating(null);
     }
@@ -527,15 +748,37 @@ export default function ScannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ opportunity_id: opp.id, domain }),
       });
-      const d = await res.json() as { success: boolean; message?: string; error?: string };
-      setDeployMsg(d.success ? d.message ?? "Dépôt privé préparé." : d.error ?? "Erreur");
-    } catch { setDeployMsg("Erreur réseau"); }
-    try {
-      await fetchCached();
-    } catch {
-      // keep the deploy result message even if refresh fails
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        message?: string;
+        error?: string;
+        deployment_status?: string;
+        provisioning_status?: string;
+        site_registered?: boolean;
+        repository_ready?: boolean;
+        deployed?: boolean;
+        site_active?: boolean;
+        published?: boolean;
+      }>(res, "La création du dépôt privé a échoué");
+      if (
+        d.deployment_status === "repository_ready"
+        && d.provisioning_status === "repository_ready"
+        && d.site_registered === true
+        && d.repository_ready === true
+        && d.deployed === false
+        && d.site_active === false
+        && d.published === false
+      ) {
+        setDeployMsg(d.message ?? "Dépôt privé prêt; site inactif et non publié.");
+        await fetchCached();
+      } else {
+        throw new Error("Le dépôt n'a pas été confirmé comme prêt; aucun déploiement n'est annoncé.");
+      }
+    } catch (reason) {
+      setDeployMsg(requestErrorMessage(reason, "Erreur réseau pendant la création du dépôt privé."));
+    } finally {
+      setDeploying(null);
     }
-    setDeploying(null);
   }
 
   const totalRevenue = opportunities.reduce((s, o) => s + (o.projected_revenue_6m || 0), 0);
@@ -545,9 +788,9 @@ export default function ScannerPage() {
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <div className="border-b border-gray-800 px-6 py-4 flex items-center gap-4">
         <Link href="/dashboard" className="flex items-center gap-2 text-gray-400 hover:text-gray-100">
-          <ArrowLeft className="w-4 h-4" /> Dashboard
+          <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Dashboard
         </Link>
-        <Radar className="w-5 h-5 text-cyan-400" />
+        <Radar className="w-5 h-5 text-cyan-400" aria-hidden="true" />
         <h1 className="text-xl font-semibold">Scanner d&apos;Opportunités</h1>
       </div>
 
@@ -567,7 +810,7 @@ export default function ScannerPage() {
               disabled={loading}
               className="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
             >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Radar className="w-4 h-4" />}
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Radar className="w-4 h-4" aria-hidden="true" />}
               {loading ? "Scan en cours..." : "Scanner le marché"}
             </button>
           </div>
@@ -577,21 +820,23 @@ export default function ScannerPage() {
             <div className="flex flex-wrap gap-2 mb-4">
               {CATEGORY_OPTIONS.map((opt) => {
                 const active = categories.includes(opt.code);
+                const CategoryIcon = opt.icon;
                 return (
                   <button
                     key={opt.code}
                     type="button"
                     onClick={() => toggleCategory(opt.code)}
                     title={opt.hint}
+                    aria-pressed={active}
                     className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition ${
                       active
                         ? "border-fuchsia-500 bg-fuchsia-500/15 text-fuchsia-200"
                         : "border-gray-700 bg-gray-800/40 text-gray-300 hover:border-gray-500"
                     }`}
                   >
-                    <span className="text-base leading-none">{opt.emoji}</span>
+                    <CategoryIcon className="h-4 w-4" aria-hidden="true" />
                     <span>{opt.label}</span>
-                    {active && <span className="text-fuchsia-300 text-[10px]">✓</span>}
+                    {active && <Check className="h-3 w-3 text-fuchsia-300" aria-hidden="true" />}
                   </button>
                 );
               })}
@@ -603,20 +848,26 @@ export default function ScannerPage() {
             <div className="flex flex-wrap gap-2 mb-4">
               {COUNTRY_OPTIONS.map((opt) => {
                 const active = countries.includes(opt.code);
+                const CountryIcon = opt.icon;
                 return (
                   <button
                     key={opt.code}
                     type="button"
                     onClick={() => toggleCountry(opt.code)}
+                    aria-pressed={active}
                     className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs transition ${
                       active
                         ? "border-emerald-500 bg-emerald-500/15 text-emerald-200"
                         : "border-gray-700 bg-gray-800/40 text-gray-300 hover:border-gray-500"
                     }`}
                   >
-                    <span className="text-base leading-none">{opt.flag}</span>
+                    {CountryIcon ? (
+                      <CountryIcon className="h-4 w-4" aria-hidden="true" />
+                    ) : (
+                      <span className="text-base leading-none" aria-hidden="true">{opt.flag}</span>
+                    )}
                     <span>{opt.label}</span>
-                    {active && <span className="text-emerald-300 text-[10px]">✓</span>}
+                    {active && <Check className="h-3 w-3 text-emerald-300" aria-hidden="true" />}
                   </button>
                 );
               })}
@@ -677,7 +928,7 @@ export default function ScannerPage() {
         {/* Auto-load progress */}
         {autoLoadProgress && (
           <div className="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3 text-sm text-gray-300">
-            <Loader2 className="w-4 h-4 animate-spin text-cyan-400 flex-shrink-0" />
+            <Loader2 className="w-4 h-4 animate-spin text-cyan-400 flex-shrink-0" aria-hidden="true" />
             <span>Chargement concurrents {autoLoadProgress.current}/{autoLoadProgress.total}...</span>
             <button
               onClick={() => { pausedRef.current = true; setAutoLoadProgress(null); }}
@@ -719,14 +970,15 @@ export default function ScannerPage() {
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className="text-xl">{TYPE_ICON[opp.site_type] ?? "🌐"}</span>
+                      <OpportunityTypeIcon siteType={opp.site_type} />
                       <h3 className="text-lg font-bold text-white">{translations[opp.id]?.niche ?? opp.niche}</h3>
                       <span className={`text-xs px-2 py-0.5 rounded ${COMP_COLOR[opp.competition] ?? ""}`}>
                         {opp.competition}
                       </span>
                       {translations[opp.id] && (
-                        <span className="text-[10px] uppercase tracking-wider bg-cyan-900/40 text-cyan-300 rounded px-1.5 py-0.5">
-                          🇫🇷 traduit
+                        <span className="inline-flex items-center gap-1 rounded bg-cyan-900/40 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-cyan-300">
+                          <Languages className="h-3 w-3" aria-hidden="true" />
+                          FR traduit
                         </span>
                       )}
                     </div>
@@ -749,8 +1001,8 @@ export default function ScannerPage() {
                         title="Traduire en français"
                         className="px-2 py-1 text-xs bg-blue-600/20 hover:bg-blue-600/40 border border-blue-700 text-blue-300 rounded flex items-center gap-1 disabled:opacity-50"
                       >
-                        {translating === opp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <span>🇫🇷</span>}
-                        {translations[opp.id] ? "↻ FR" : "Traduire"}
+                        {translating === opp.id ? <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" /> : <Languages className="h-3 w-3" aria-hidden="true" />}
+                        {translations[opp.id] ? "Retraduire" : "Traduire"}
                       </button>
                       <a
                         href={googleSerpUrl(opp)}
@@ -759,7 +1011,8 @@ export default function ScannerPage() {
                         title="Voir la SERP Google sur ce mot-clé"
                         className="px-2 py-1 text-xs bg-violet-600/20 hover:bg-violet-600/40 border border-violet-700 text-violet-300 rounded flex items-center gap-1"
                       >
-                        🔎 Voir SERP
+                        <Search className="h-3 w-3" aria-hidden="true" />
+                        Voir SERP
                       </a>
                     </div>
                     <div className="text-center bg-gray-800 rounded-lg px-4 py-2">
@@ -773,7 +1026,7 @@ export default function ScannerPage() {
                 <div className="grid grid-cols-4 gap-3 mb-4">
                   <div className="bg-gray-800/50 rounded-lg px-3 py-2">
                     <div className="flex items-center gap-1 text-xs text-gray-400">
-                      <Globe className="w-3 h-3" /> Volume/mois
+                      <Globe className="w-3 h-3" aria-hidden="true" /> Volume/mois
                       {isVolumeEstimated(opp) && (
                         <span className="ml-1 text-[9px] uppercase tracking-wider bg-amber-900/40 text-amber-300 rounded px-1 py-0.5"
                           title="Volume estimé à partir de signaux externes (Reddit/HN/PH/Trends), pas de données GSC réelles">
@@ -784,15 +1037,15 @@ export default function ScannerPage() {
                     <div className="text-lg font-bold text-white">{(opp.monthly_volume || 0).toLocaleString()}</div>
                   </div>
                   <div className="bg-gray-800/50 rounded-lg px-3 py-2">
-                    <div className="flex items-center gap-1 text-xs text-gray-400"><TrendingUp className="w-3 h-3" /> Trafic 6m</div>
+                    <div className="flex items-center gap-1 text-xs text-gray-400"><TrendingUp className="w-3 h-3" aria-hidden="true" /> Trafic 6m</div>
                     <div className="text-lg font-bold text-blue-400">{(opp.projected_traffic_6m || 0).toLocaleString()}/mois</div>
                   </div>
                   <div className="bg-gray-800/50 rounded-lg px-3 py-2">
-                    <div className="flex items-center gap-1 text-xs text-gray-400"><DollarSign className="w-3 h-3" /> Revenus 6m</div>
+                    <div className="flex items-center gap-1 text-xs text-gray-400"><DollarSign className="w-3 h-3" aria-hidden="true" /> Revenus 6m</div>
                     <div className="text-lg font-bold text-green-400">{(opp.projected_revenue_6m || 0).toLocaleString()}€/mois</div>
                   </div>
                   <div className="bg-gray-800/50 rounded-lg px-3 py-2">
-                    <div className="flex items-center gap-1 text-xs text-gray-400"><Zap className="w-3 h-3" /> Monétisation</div>
+                    <div className="flex items-center gap-1 text-xs text-gray-400"><Zap className="w-3 h-3" aria-hidden="true" /> Monétisation</div>
                     <div className="text-sm font-bold text-yellow-400 mt-1">{opp.monetization}</div>
                   </div>
                 </div>
@@ -868,7 +1121,10 @@ export default function ScannerPage() {
                 {opp.sample_queries && opp.sample_queries.length > 0 && (
                   <details className="mb-4">
                     <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">
-                      📡 Requêtes sources ({opp.sample_queries.length})
+                      <span className="inline-flex items-center gap-1.5">
+                        <Radio className="h-3.5 w-3.5" aria-hidden="true" />
+                        Requêtes sources ({opp.sample_queries.length})
+                      </span>
                     </summary>
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {(translations[opp.id]?.sample_queries ?? opp.sample_queries).map((query, i) => (
@@ -883,7 +1139,10 @@ export default function ScannerPage() {
                 {opp.score_breakdown && (
                   <details className="mb-4">
                     <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">
-                      🧮 Décomposition du score
+                      <span className="inline-flex items-center gap-1.5">
+                        <Calculator className="h-3.5 w-3.5" aria-hidden="true" />
+                        Décomposition du score
+                      </span>
                     </summary>
                     <div className="mt-3 grid grid-cols-3 gap-2">
                       {[
@@ -913,7 +1172,10 @@ export default function ScannerPage() {
                   ) && (
                   <details className="mb-4">
                     <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">
-                      🔎 Preuves SERP
+                      <span className="inline-flex items-center gap-1.5">
+                        <Search className="h-3.5 w-3.5" aria-hidden="true" />
+                        Preuves SERP
+                      </span>
                     </summary>
                     <div className="mt-3 grid grid-cols-3 gap-3">
                       <div className="bg-gray-800/30 rounded-lg p-3">
@@ -948,7 +1210,7 @@ export default function ScannerPage() {
                 {opp.business_model && (
                   <div className="bg-gradient-to-r from-gray-800/80 to-gray-800/40 border border-gray-700 rounded-xl p-4 mb-4">
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="text-base">💼</span>
+                      <Briefcase className="h-4 w-4 text-gray-300" aria-hidden="true" />
                       <span className="text-sm font-semibold text-white">
                         {translations[opp.id]?.business_model_type ?? opp.business_model.type}
                       </span>
@@ -1012,17 +1274,25 @@ export default function ScannerPage() {
                   {opp.target_countries && opp.target_countries.length > 0 && (
                     <div className="flex items-center gap-1.5 text-xs">
                       <span className="text-gray-500">Pays:</span>
-                      {opp.target_countries.map((c, i) => (
-                        <span key={i} className="text-base" title={c}>{COUNTRY_FLAG[c] ?? c}</span>
-                      ))}
+                      {opp.target_countries.map((c, i) => {
+                        const flag = COUNTRY_FLAG[c];
+                        return flag ? (
+                          <span key={i} className="text-base" role="img" aria-label={`Pays ${c}`} title={c}>{flag}</span>
+                        ) : (
+                          <span key={i} className="rounded bg-gray-800 px-1.5 py-0.5">{c}</span>
+                        );
+                      })}
                     </div>
                   )}
                   {opp.target_languages && opp.target_languages.length > 0 && (
                     <div className="flex items-center gap-1.5 text-xs">
-                      <span className="text-gray-500">Langues:</span>
+                      <span className="inline-flex items-center gap-1 text-gray-500">
+                        <Languages className="h-3.5 w-3.5" aria-hidden="true" />
+                        Langues:
+                      </span>
                       {opp.target_languages.map((l, i) => (
                         <span key={i} className="bg-gray-800 rounded px-1.5 py-0.5">
-                          {LANG_FLAG[l] ?? ""} {l.toUpperCase()}
+                          {l.toUpperCase()}
                         </span>
                       ))}
                     </div>
@@ -1051,8 +1321,14 @@ export default function ScannerPage() {
                         className="ml-1 px-2 py-0.5 bg-orange-600/20 hover:bg-orange-600/40 border border-orange-700 text-orange-300 rounded text-xs flex items-center gap-1 disabled:opacity-50"
                         title="Scrape Google pour récupérer les vrais concurrents"
                       >
-                        {loadingCompetitors === opp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <span>🌐</span>}
-                        {competitors.length > 0 ? "↻ Actualiser" : "Charger"}
+                        {loadingCompetitors === opp.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                        ) : competitors.length > 0 ? (
+                          <RefreshCw className="h-3 w-3" aria-hidden="true" />
+                        ) : (
+                          <Search className="h-3 w-3" aria-hidden="true" />
+                        )}
+                        {competitors.length > 0 ? "Actualiser" : "Charger"}
                       </button>
                     </div>
                   );
@@ -1090,7 +1366,8 @@ export default function ScannerPage() {
                     <a key={i} href={`https://www.namecheap.com/domains/registration/results/?domain=${encodeURIComponent(d)}`} target="_blank" rel="noopener noreferrer"
                       className="text-cyan-400 bg-cyan-900/20 hover:bg-cyan-900/40 rounded px-2 py-0.5 underline decoration-cyan-800 hover:decoration-cyan-400 transition-colors"
                       title="Vérifier disponibilité + acheter">
-                      {d} ↗
+                      {d}
+                      <ExternalLink className="ml-1 inline h-3 w-3" aria-hidden="true" />
                     </a>
                   ))}
                 </div>
@@ -1098,7 +1375,10 @@ export default function ScannerPage() {
                 {/* Seed articles */}
                 <details className="mb-4">
                   <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300">
-                    📝 {(opp.seed_articles || []).length} articles de démarrage
+                    <span className="inline-flex items-center gap-1.5">
+                      <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+                      {(opp.seed_articles || []).length} articles de démarrage
+                    </span>
                   </summary>
                   <div className="mt-2 space-y-1">
                     {(translations[opp.id]?.seed_articles ?? opp.seed_articles ?? []).map((title, i) => (
@@ -1115,12 +1395,19 @@ export default function ScannerPage() {
                     "bg-red-900/20 border-red-700"
                   }`}>
                     <div className="flex items-center gap-3 mb-2">
-                      <span className={`text-2xl font-black ${
+                      <span className={`inline-flex items-center gap-2 text-2xl font-black ${
                         validationResults[opp.id].verdict === "GO" ? "text-green-400" :
                         validationResults[opp.id].verdict === "RISKY" ? "text-yellow-400" : "text-red-400"
                       }`}>
-                        {validationResults[opp.id].verdict === "GO" ? "✅ GO" :
-                         validationResults[opp.id].verdict === "RISKY" ? "⚠️ RISKY" : "🛑 NO-GO"}
+                        {validationResults[opp.id].verdict === "GO" ? (
+                          <CheckCircle2 className="h-6 w-6" aria-hidden="true" />
+                        ) : validationResults[opp.id].verdict === "RISKY" ? (
+                          <AlertTriangle className="h-6 w-6" aria-hidden="true" />
+                        ) : (
+                          <XCircle className="h-6 w-6" aria-hidden="true" />
+                        )}
+                        {validationResults[opp.id].verdict === "GO" ? "GO" :
+                         validationResults[opp.id].verdict === "RISKY" ? "RISKY" : "NO-GO"}
                       </span>
                       <div className="bg-gray-800 rounded-lg px-3 py-1 text-center">
                         <div className="text-lg font-bold text-white">{validationResults[opp.id].attackability_score}/100</div>
@@ -1128,7 +1415,7 @@ export default function ScannerPage() {
                       </div>
                       <div className="bg-gray-800 rounded-lg px-3 py-1 text-center">
                         <div className="text-lg font-bold text-white">{validationResults[opp.id].time_to_page1_months} mois</div>
-                        <div className="text-[10px] text-gray-500">→ Page 1</div>
+                        <div className="text-[10px] text-gray-500">Délai Page 1</div>
                       </div>
                     </div>
                     <p className="text-sm text-gray-300 mb-2">{validationResults[opp.id].verdict_reason}</p>
@@ -1136,7 +1423,10 @@ export default function ScannerPage() {
                       <div className="mb-2">
                         <div className="text-xs text-green-400 font-medium mb-1">Quick wins:</div>
                         {validationResults[opp.id].quick_wins.map((w, i) => (
-                          <div key={i} className="text-xs text-gray-400 pl-2">→ {w}</div>
+                          <div key={i} className="flex items-start gap-1.5 pl-2 text-xs text-gray-400">
+                            <Check className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                            <span>{w}</span>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -1144,12 +1434,16 @@ export default function ScannerPage() {
                       <div className="mb-2">
                         <div className="text-xs text-blue-400 font-medium mb-1">Content gaps:</div>
                         {validationResults[opp.id].content_gaps.map((g, i) => (
-                          <div key={i} className="text-xs text-gray-400 pl-2">→ {g}</div>
+                          <div key={i} className="flex items-start gap-1.5 pl-2 text-xs text-gray-400">
+                            <ArrowRight className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                            <span>{g}</span>
+                          </div>
                         ))}
                       </div>
                     )}
-                    <div className="text-xs text-yellow-300 bg-yellow-900/20 rounded px-2 py-1 mt-1">
-                      💡 {validationResults[opp.id].strategy_recommendation}
+                    <div className="mt-1 flex items-start gap-1.5 rounded bg-yellow-900/20 px-2 py-1 text-xs text-yellow-300">
+                      <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <span>{validationResults[opp.id].strategy_recommendation}</span>
                     </div>
                   </div>
                 )}
@@ -1159,7 +1453,7 @@ export default function ScannerPage() {
                   <div className="grid grid-cols-3 gap-3 mb-4">
                     {typeof opp.time_to_rank_months === "number" && (
                       <div className="bg-gray-800/40 rounded-lg px-3 py-2 flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-cyan-400" />
+                        <Clock className="w-4 h-4 text-cyan-400" aria-hidden="true" />
                         <div>
                           <div className="text-[10px] text-gray-500">Time to rank</div>
                           <div className="text-sm font-semibold text-cyan-300">{opp.time_to_rank_months} mois</div>
@@ -1192,7 +1486,7 @@ export default function ScannerPage() {
                     onClick={() => toggleExpand(opp.id)}
                     className="flex items-center gap-2 text-xs text-gray-400 hover:text-cyan-300 transition"
                   >
-                    {expanded[opp.id] ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    {expanded[opp.id] ? <ChevronDown className="w-4 h-4" aria-hidden="true" /> : <ChevronRight className="w-4 h-4" aria-hidden="true" />}
                     <span>{expanded[opp.id] ? "Replier" : "Voir détail SERP + plan de lancement"}</span>
                   </button>
 
@@ -1202,7 +1496,7 @@ export default function ScannerPage() {
                       {opp.why_now && opp.why_now.length > 0 && (
                         <div>
                           <div className="text-xs font-semibold text-amber-300 mb-2 flex items-center gap-1">
-                            <Sparkles className="w-3 h-3" /> Pourquoi maintenant
+                            <Sparkles className="w-3 h-3" aria-hidden="true" /> Pourquoi maintenant
                           </div>
                           <div className="space-y-1">
                             {opp.why_now.map((s, i) => (
@@ -1222,11 +1516,15 @@ export default function ScannerPage() {
                           <div className="space-y-1">
                             {opp.domain_available.map((d, i) => {
                               const color = d.available === "likely" ? "text-green-400" : d.available === "likely_taken" ? "text-red-400" : "text-gray-400";
-                              const label = d.available === "likely" ? "✓ probablement libre" : d.available === "likely_taken" ? "✗ probablement pris" : "? à vérifier";
+                              const label = d.available === "likely" ? "Probablement libre" : d.available === "likely_taken" ? "Probablement pris" : "À vérifier";
+                              const AvailabilityIcon = d.available === "likely" ? CheckCircle2 : d.available === "likely_taken" ? XCircle : CircleHelp;
                               return (
                                 <div key={i} className="text-xs flex items-center gap-2">
                                   <code className="bg-gray-800 rounded px-1.5 py-0.5">{d.domain}</code>
-                                  <span className={color}>{label}</span>
+                                  <span className={`inline-flex items-center gap-1 ${color}`}>
+                                    <AvailabilityIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                                    {label}
+                                  </span>
                                   <span className="text-gray-500">— {d.reason}</span>
                                 </div>
                               );
@@ -1295,8 +1593,8 @@ export default function ScannerPage() {
                             disabled={loadingDeepResearch === opp.id}
                             className="px-2 py-1 text-xs bg-fuchsia-600/20 hover:bg-fuchsia-600/40 border border-fuchsia-700 text-fuchsia-300 rounded flex items-center gap-1 disabled:opacity-50"
                           >
-                            {loadingDeepResearch === opp.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <span>🔬</span>}
-                            {deepResearch[opp.id] ? "↻ Re-scanner" : "Lancer deep research"}
+                            {loadingDeepResearch === opp.id ? <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" /> : <Microscope className="h-3 w-3" aria-hidden="true" />}
+                            {deepResearch[opp.id] ? "Relancer la recherche" : "Lancer deep research"}
                           </button>
                         </div>
 
@@ -1343,7 +1641,10 @@ export default function ScannerPage() {
                                 <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Gaps détectés (questions PAA non couvertes)</div>
                                 <div className="space-y-0.5">
                                   {deepResearch[opp.id].content_gaps.map((g, i) => (
-                                    <div key={i} className="text-xs text-amber-200">→ {g}</div>
+                                    <div key={i} className="flex items-start gap-1.5 text-xs text-amber-200">
+                                      <ArrowRight className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+                                      <span>{g}</span>
+                                    </div>
                                   ))}
                                 </div>
                               </div>
@@ -1354,10 +1655,27 @@ export default function ScannerPage() {
 
                       {/* Launch result */}
                       {launchResults[opp.id] && (
-                        <div className="bg-green-900/20 border border-green-700 rounded-lg p-3 text-xs text-green-200">
-                          <div className="font-semibold mb-1">✓ Lancement stub créé</div>
+                        <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3 text-xs text-blue-200">
+                          <div className="mb-1 flex items-center gap-1.5 font-semibold">
+                            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                            Préparation enregistrée · site inactif
+                          </div>
                           <div>Site: <code className="bg-gray-800 rounded px-1">{launchResults[opp.id].site_url}</code></div>
-                          <div>{launchResults[opp.id].planned_articles} articles planifiés · {launchResults[opp.id].seeded_keywords} keywords trackés</div>
+                          <div>{launchResults[opp.id].planned_articles} articles planifiés · {launchResults[opp.id].seeded_keywords} mots-clés suivis</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <span className="inline-flex items-center gap-1 rounded border border-blue-700 px-2 py-0.5">
+                              <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                              site_registered: oui
+                            </span>
+                            <span className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-0.5 text-gray-400">
+                              <CircleDashed className="h-3 w-3" aria-hidden="true" />
+                              repository_ready: non
+                            </span>
+                            <span className="inline-flex items-center gap-1 rounded border border-gray-700 px-2 py-0.5 text-gray-400">
+                              <CircleDashed className="h-3 w-3" aria-hidden="true" />
+                              deployed: non
+                            </span>
+                          </div>
                           <div className="text-gray-400 mt-1">{launchResults[opp.id].message}</div>
                         </div>
                       )}
@@ -1365,17 +1683,23 @@ export default function ScannerPage() {
                   )}
                 </div>
 
+                <OpportunityProvisioningBadges status={opp.status} />
+
                 {/* Action buttons */}
                 <div className="flex gap-3 flex-wrap">
                   <button
                     type="button"
                     onClick={() => launchNiche(opp)}
-                    disabled={launching === opp.id || opp.status === "deployed" || opp.status === "repository_ready"}
+                    disabled={launching === opp.id || !canRegisterOpportunitySite(opp.status)}
                     className="px-4 py-2 bg-violet-600/20 hover:bg-violet-600/40 border border-violet-700 text-violet-300 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
-                    title="Crée un stub site + content_plan + tracked_keywords (pas de GitHub repo)"
+                    title="Enregistre un site inactif, un plan et des mots-clés; ne crée ni dépôt ni déploiement"
                   >
-                    {launching === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                    {launching === opp.id ? "Preparation..." : "Preparer le plan"}
+                    {launching === opp.id ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Sparkles className="w-4 h-4" aria-hidden="true" />}
+                    {launching === opp.id
+                      ? "Préparation..."
+                      : canRegisterOpportunitySite(opp.status)
+                        ? "Préparer le plan"
+                        : "Site déjà enregistré"}
                   </button>
                 </div>
 
@@ -1388,7 +1712,7 @@ export default function ScannerPage() {
                       disabled={validating === opp.id}
                       className="px-4 py-2 bg-yellow-600/20 hover:bg-yellow-600/40 border border-yellow-700 text-yellow-400 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
                     >
-                      {validating === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>🔍</span>}
+                      {validating === opp.id ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Search className="h-4 w-4" aria-hidden="true" />}
                       {validating === opp.id ? "Analyse SERP..." : "Valider SERP"}
                     </button>
                   )}
@@ -1401,7 +1725,7 @@ export default function ScannerPage() {
                       disabled={deploying === opp.id}
                       className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
                     >
-                      {deploying === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                      {deploying === opp.id ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Rocket className="w-4 h-4" aria-hidden="true" />}
                       {deploying === opp.id ? "Création en cours..." : "Créer le dépôt privé"}
                     </button>
                   ) : (
@@ -1415,11 +1739,49 @@ export default function ScannerPage() {
 
         {!loading && opportunities.length === 0 && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center">
-            <Radar className="w-16 h-16 text-gray-700 mx-auto mb-4" />
-            <div className="text-gray-500">Clique &quot;Scanner le marché&quot; pour détecter les opportunités</div>
+            <Radar className="w-16 h-16 text-gray-700 mx-auto mb-4" aria-hidden="true" />
+            <div className="text-gray-500">
+              {hasLoadedOpportunities
+                ? "Aucune opportunité enregistrée ne correspond aux critères actuels."
+                : "Clique \"Scanner le marché\" pour détecter les opportunités."}
+            </div>
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function OpportunityProvisioningBadges({ status }: { status: string | null | undefined }) {
+  const state = opportunityProvisioningState(status);
+  const rows = [
+    { key: "site_registered", active: state.site_registered, activeLabel: "oui" },
+    { key: "repository_ready", active: state.repository_ready, activeLabel: "oui" },
+    { key: "deployed", active: state.deployed, activeLabel: "déclaré · non vérifié" },
+  ];
+
+  return (
+    <div className="mb-3 flex flex-wrap gap-2 text-[11px]" aria-label="États de préparation du site">
+      {rows.map((row) => {
+        const StatusIcon = row.active
+          ? row.key === "deployed" ? AlertTriangle : CheckCircle2
+          : CircleDashed;
+        return (
+          <span
+            key={row.key}
+            className={`inline-flex items-center gap-1 rounded border px-2 py-1 ${
+              row.active
+                ? row.key === "deployed"
+                  ? "border-amber-700 bg-amber-900/20 text-amber-300"
+                  : "border-blue-700 bg-blue-900/20 text-blue-300"
+                : "border-gray-700 bg-gray-800/50 text-gray-500"
+            }`}
+          >
+            <StatusIcon className="h-3 w-3" aria-hidden="true" />
+            {row.key}: {row.active ? row.activeLabel : "non"}
+          </span>
+        );
+      })}
     </div>
   );
 }

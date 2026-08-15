@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Layers, Zap, TrendingUp, ExternalLink, Activity } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, Loader2, Layers, Zap, ExternalLink, Activity } from "lucide-react";
 import Link from "next/link";
 import { formatFixed, toFiniteNumber } from "@/lib/safe-number";
 
@@ -18,6 +18,80 @@ interface Cluster {
   priority: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getApiError(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  for (const key of ["error", "message"] as const) {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`réponse JSON illisible (HTTP ${response.status})`);
+  }
+}
+
+function parseSites(payload: unknown): Site[] {
+  if (isRecord(payload) && "success" in payload && payload.success !== true) {
+    throw new Error(getApiError(payload) ?? "le contrat success de l’API a échoué");
+  }
+  const candidate = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.sites)
+      ? payload.sites
+      : null;
+  if (!candidate || !candidate.every((site) => (
+    isRecord(site)
+    && typeof site.id === "number"
+    && typeof site.name === "string"
+    && typeof site.url === "string"
+  ))) {
+    throw new Error("contrat API invalide : liste de sites absente ou mal formée");
+  }
+  return candidate as Site[];
+}
+
+function parseClusters(payload: unknown): Cluster[] {
+  if (!isRecord(payload)) {
+    throw new Error("contrat API invalide : objet de réponse absent");
+  }
+  if ("success" in payload && payload.success !== true) {
+    throw new Error(getApiError(payload) ?? "le contrat success de l’API a échoué");
+  }
+  if (!Array.isArray(payload.clusters) || !payload.clusters.every((cluster) => (
+    isRecord(cluster)
+    && typeof cluster.cluster_name === "string"
+    && Array.isArray(cluster.keywords)
+  ))) {
+    throw new Error("contrat API invalide : clusters absents ou mal formés");
+  }
+  return payload.clusters as Cluster[];
+}
+
+function actionableError(action: string, reason: unknown, retained: boolean): string {
+  const detail = reason instanceof Error && reason.message.trim()
+    ? ` Détail : ${reason.message.trim()}.`
+    : "";
+  const preservation = retained
+    ? " Les clusters précédemment chargés restent affichés."
+    : "";
+  return `${action} impossible. Réessaie ; si le problème persiste, vérifie ta session et l’API.${preservation}${detail}`;
+}
+
+async function timedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<{ response: Response; ms: number }> {
+  const started = performance.now();
+  const response = await fetch(input, init);
+  return { response, ms: performance.now() - started };
+}
+
 const PRIORITY_STYLE: Record<string, string> = {
   high: "bg-green-900/30 text-green-400 border-green-700",
   medium: "bg-yellow-900/30 text-yellow-400 border-yellow-700",
@@ -32,67 +106,90 @@ export default function ClustersPage() {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastTiming, setLastTiming] = useState<{ label: string; ms: number } | null>(null);
+  const [hasLoadedClusters, setHasLoadedClusters] = useState(false);
+  const clusterRequestId = useRef(0);
+  const siteRequestId = useRef(0);
+  const hasLoadedClustersRef = useRef(false);
 
-  async function timedFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const started = performance.now();
-    const res = await fetch(input, init);
-    setLastTiming({ label, ms: performance.now() - started });
-    return res;
-  }
-
-  async function fetchSites() {
+  const fetchSites = useCallback(async () => {
+    const requestId = ++siteRequestId.current;
     try {
-      const res = await timedFetch("Sites", "/api/sites");
-      const d = await res.json() as Site[];
-      const list = Array.isArray(d) ? d : [];
-      if (list.length > 0) { setSites(list); if (!selectedSite) setSelectedSite(list[0].id); }
-    } catch { /* ignore */ }
-  }
+      const { response, ms } = await timedFetch("/api/sites");
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(getApiError(payload) ?? `HTTP ${response.status}`);
+      }
+      const list = parseSites(payload);
+      if (requestId !== siteRequestId.current) return;
+      setSites(list);
+      setSelectedSite((current) => current ?? list[0]?.id ?? null);
+      setLastTiming({ label: "Sites", ms });
+      setError(null);
+    } catch (reason) {
+      if (requestId === siteRequestId.current) {
+        setError(actionableError("Chargement des sites", reason, false));
+      }
+    }
+  }, []);
 
-  async function fetchCached() {
+  const fetchCached = useCallback(async () => {
     if (!selectedSite) return;
+    const requestSite = selectedSite;
+    const requestId = ++clusterRequestId.current;
     setLoading(true);
+    setGenerating(false);
     setError(null);
     try {
-      const res = await timedFetch("Clusters cache", `/api/keyword-clusters?site_id=${selectedSite}&cached=true`);
-      const d = await res.json() as { clusters?: Cluster[] };
-      if (!res.ok) {
-        const err = d as { error?: string };
-        setError(err.error ?? "Impossible de charger les clusters en cache.");
-        setClusters([]);
-        setLoading(false);
-        return;
+      const { response, ms } = await timedFetch(`/api/keyword-clusters?site_id=${requestSite}&cached=true`);
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(getApiError(payload) ?? `HTTP ${response.status}`);
       }
-      setClusters(d.clusters ?? []);
-    } catch {
-      setError("Erreur réseau pendant le chargement des clusters.");
-      setClusters([]);
+      const nextClusters = parseClusters(payload);
+      if (requestId !== clusterRequestId.current) return;
+      setClusters(nextClusters);
+      setHasLoadedClusters(true);
+      hasLoadedClustersRef.current = true;
+      setLastTiming({ label: "Clusters cache", ms });
+    } catch (reason) {
+      if (requestId === clusterRequestId.current) {
+        setError(actionableError("Chargement des clusters en cache", reason, hasLoadedClustersRef.current));
+      }
+    } finally {
+      if (requestId === clusterRequestId.current) setLoading(false);
     }
-    setLoading(false);
-  }
+  }, [selectedSite]);
 
   async function generateClusters() {
     if (!selectedSite) return;
+    const requestSite = selectedSite;
+    const requestId = ++clusterRequestId.current;
     setGenerating(true);
+    setLoading(false);
     setError(null);
     try {
-      const res = await timedFetch("Clusters generation", `/api/keyword-clusters?site_id=${selectedSite}`);
-      const d = await res.json() as { clusters?: Cluster[]; error?: string };
-      if (!res.ok) {
-        setError(d.error ?? "La génération des clusters a échoué.");
-        setClusters([]);
-        setGenerating(false);
-        return;
+      const { response, ms } = await timedFetch(`/api/keyword-clusters?site_id=${requestSite}`);
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(getApiError(payload) ?? `HTTP ${response.status}`);
       }
-      setClusters(d.clusters ?? []);
-    } catch {
-      setError("Erreur réseau pendant la génération des clusters.");
+      const nextClusters = parseClusters(payload);
+      if (requestId !== clusterRequestId.current) return;
+      setClusters(nextClusters);
+      setHasLoadedClusters(true);
+      hasLoadedClustersRef.current = true;
+      setLastTiming({ label: "Clusters generation", ms });
+    } catch (reason) {
+      if (requestId === clusterRequestId.current) {
+        setError(actionableError("Génération des clusters", reason, hasLoadedClustersRef.current));
+      }
+    } finally {
+      if (requestId === clusterRequestId.current) setGenerating(false);
     }
-    setGenerating(false);
   }
 
-  useEffect(() => { void fetchSites(); }, []); // eslint-disable-line react-hooks/set-state-in-effect
-  useEffect(() => { if (selectedSite) void fetchCached(); }, [selectedSite]); // eslint-disable-line react-hooks/set-state-in-effect
+  useEffect(() => { void fetchSites(); }, [fetchSites]);
+  useEffect(() => { void fetchCached(); }, [fetchCached]);
 
   const totalKw = clusters.reduce((s, c) => s + (c.keywords?.length ?? 0), 0);
   const totalImpr = clusters.reduce((s, c) => s + toFiniteNumber(c.total_impressions), 0);
@@ -119,7 +216,7 @@ export default function ClustersPage() {
             onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
           >
-            <option value="all">🌐 Tous les sites</option>
+            <option value="all">Tous les sites</option>
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
           {(() => {
@@ -133,7 +230,7 @@ export default function ClustersPage() {
           })()}
           <button
             onClick={generateClusters}
-            disabled={generating}
+            disabled={generating || loading || !selectedSite}
             className="px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Layers className="w-4 h-4" />}
@@ -209,7 +306,7 @@ export default function ClustersPage() {
           </div>
         )}
 
-        {!loading && clusters.length === 0 && (
+        {!loading && hasLoadedClusters && clusters.length === 0 && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center">
             <Layers className="w-12 h-12 text-gray-700 mx-auto mb-4" />
             <div className="text-gray-500 text-sm">Clique &quot;Générer clusters&quot; pour regrouper tes mots-clés par thématique</div>

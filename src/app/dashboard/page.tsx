@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import {
-  BarChart3, Loader2, ChevronDown, ChevronRight,
-  TrendingUp, TrendingDown, X, Smartphone, ChevronsDownUp, ChevronsUpDown,
-  ExternalLink, AlertTriangle, CheckCircle2, Copy
+  BarChart3, Loader2, ChevronDown, ChevronRight, ChevronUp,
+  TrendingUp, TrendingDown, X, Smartphone,
+  ExternalLink, AlertTriangle, CheckCircle2, Copy, Zap
 } from "lucide-react";
 import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
@@ -51,6 +51,7 @@ const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec
 
 type Period = DashboardPeriod;
 type TabType = "keywords" | "gains" | "analytics" | "device";
+const SITE_TAB_ORDER: TabType[] = ["keywords", "gains", "analytics", "device"];
 type KwTypeFilter = "all" | "important" | "highvolume" | "longtail" | "questions";
 const KEYWORD_LOAD_LIMIT = 500;
 const KEYWORD_RENDER_LIMIT = 300;
@@ -129,7 +130,7 @@ function resolveVolumeSignal(
 function volumeSignalLabel(signal: VolumeSignal): { label: string; color: string; title: string } {
   const base = volLabel(signal.value);
   if (signal.kind === "source") {
-    return { ...base, title: "Volume mensuel importe depuis une source externe." };
+    return { ...base, title: "Estimation mensuelle importée depuis une source tierce." };
   }
   if (signal.kind === "source_empty") {
     return { label: "0", color: "text-gray-500", title: "Keyword Planner importe, mais Google ne donne pas de volume exploitable pour ce mot-cle." };
@@ -139,7 +140,7 @@ function volumeSignalLabel(signal: VolumeSignal): { label: string; color: string
 
 function volumeSignalBadge(signal: VolumeSignal): { label: string; className: string } {
   if (signal.kind === "source") {
-    return { label: "volume importe", className: "bg-green-500/15 text-green-300 border-green-500/30" };
+    return { label: "estimation importée", className: "bg-green-500/15 text-green-300 border-green-500/30" };
   }
   if (signal.kind === "source_empty") {
     return { label: "0 KP", className: "bg-slate-700/40 text-slate-300 border-slate-600/40" };
@@ -210,19 +211,84 @@ function formatMs(ms: number): string {
   return `${Math.round(ms)}ms`;
 }
 
-async function runLimited<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<void>,
-): Promise<void> {
-  const queue = [...items];
-  const runners = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
-    while (queue.length > 0) {
-      const item = queue.shift();
-      if (item !== undefined) await worker(item);
-    }
-  });
-  await Promise.all(runners);
+class ApiResponseError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null = null,
+  ) {
+    super(message);
+    this.name = "ApiResponseError";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function apiErrorDetail(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  if (typeof payload.message === "string" && payload.message.trim()) return payload.message.trim();
+  if (typeof payload.error === "string" && payload.error.trim()) return payload.error.trim();
+  return null;
+}
+
+async function readApiJson(response: Response): Promise<unknown> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new ApiResponseError(
+      `Réponse API illisible (HTTP ${response.status || "inconnu"})`,
+      response.status,
+    );
+  }
+
+  if (!response.ok) {
+    const detail = apiErrorDetail(payload) ?? (response.statusText || "Erreur API");
+    const code = isRecord(payload) && typeof payload.error === "string" ? payload.error : null;
+    throw new ApiResponseError(`${detail} (HTTP ${response.status})`, response.status, code);
+  }
+
+  return payload;
+}
+
+function requireRecord(payload: unknown, contract: string): Record<string, unknown> {
+  if (!isRecord(payload)) throw new Error(`${contract} : réponse API inattendue`);
+  return payload;
+}
+
+function requireSuccess(payload: unknown, contract: string): Record<string, unknown> {
+  const record = requireRecord(payload, contract);
+  if (record.success !== true) {
+    throw new Error(`${contract} : ${apiErrorDetail(record) ?? "succès non confirmé par l'API"}`);
+  }
+  return record;
+}
+
+function actionableRequestError(error: unknown, action: string, preserved = true): string {
+  const detail = (error instanceof Error ? error.message : "Erreur inconnue").replace(/[.\s]+$/, "");
+  return `${action} : ${detail}. ${preserved ? "Les données précédentes sont conservées. " : ""}Réessaie ; si le problème persiste, vérifie la session et la route API.`;
+}
+
+function hasOwn(record: object, key: string | number): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function DetailLoadingSkeleton({ label }: { label: string }) {
+  return (
+    <div role="status" aria-label={label} className="px-5 py-4">
+      <div className="flex items-center gap-2 text-xs text-blue-200">
+        <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        <span>{label}</span>
+      </div>
+      <div className="mt-3 space-y-2" aria-hidden="true">
+        <div className="h-3 w-full animate-pulse rounded bg-gray-800 motion-reduce:animate-none" />
+        <div className="h-3 w-5/6 animate-pulse rounded bg-gray-800/80 motion-reduce:animate-none" />
+        <div className="h-3 w-2/3 animate-pulse rounded bg-gray-800/60 motion-reduce:animate-none" />
+      </div>
+    </div>
+  );
 }
 
 async function fetchWithTiming(
@@ -232,22 +298,26 @@ async function fetchWithTiming(
   init?: RequestInit,
 ): Promise<Response> {
   const started = performance.now();
-  const res = await fetch(input, init);
-  record({
-    label,
-    ms: performance.now() - started,
-    ok: res.ok,
-    at: Date.now(),
-    cache: res.headers.get("X-Cache"),
-  });
-  return res;
+  try {
+    const res = await fetch(input, init);
+    record({
+      label,
+      ms: performance.now() - started,
+      ok: res.ok,
+      at: Date.now(),
+      cache: res.headers.get("X-Cache"),
+    });
+    return res;
+  } catch (error) {
+    record({ label, ms: performance.now() - started, ok: false, at: Date.now() });
+    throw error;
+  }
 }
 
 export default function DashboardPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [bulkLoading, setBulkLoading] = useState(false);
   const [statsRefreshing, setStatsRefreshing] = useState(false);
   const [pageLoadMs, setPageLoadMs] = useState<number | null>(null);
   const [serviceTimings, setServiceTimings] = useState<ServiceTiming[]>([]);
@@ -257,6 +327,7 @@ export default function DashboardPage() {
   const [keywords, setKeywords] = useState<Record<string, QueryData[]>>({});
   const [gains, setGains] = useState<Record<number, GainData[]>>({});
   const [qualitySites, setQualitySites] = useState<DashboardQualitySite[]>([]);
+  const [qualityLoaded, setQualityLoaded] = useState(false);
   const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
   const [kwLoadingIds, setKwLoadingIds] = useState<Set<number>>(new Set());
   const [highVolLoading, setHighVolLoading] = useState<Set<number>>(new Set());
@@ -264,6 +335,7 @@ export default function DashboardPage() {
   const [highVolPanel, setHighVolPanel] = useState<number | null>(null); // siteId with open panel
   const [highVolKws, setHighVolKws] = useState<{keyword: string; impressions: number; avg_position: number; clicks: number; source: string; already_tracked: boolean}[]>([]);
   const [highVolPanelLoading, setHighVolPanelLoading] = useState(false);
+  const highVolRequestIdRef = useRef(0);
   const [highVolSelected, setHighVolSelected] = useState<Set<string>>(new Set());
   type HVSort = "impressions" | "avg_position" | "clicks";
   type HVDir = "asc" | "desc";
@@ -285,6 +357,7 @@ export default function DashboardPage() {
   const [kwTypeFilter, setKwTypeFilter] = useState<KwTypeFilter>("all");
   const [siteSortCol, setSiteSortCol] = useState<"clicks"|"impressions"|"position">("clicks");
   const [siteSortDir, setSiteSortDir] = useState<"asc"|"desc">("desc");
+  const [sitePage, setSitePage] = useState(1);
   const [sortCol, setSortCol] = useState<"priority"|"clicks"|"impressions"|"ctr"|"position"|"volume">("priority");
   const [sortDir, setSortDir] = useState<"asc"|"desc">("desc");
   const [gainSortCol, setGainSortCol] = useState<"gain"|"position_now"|"clicks_gain"|"volume"|"opportunity">("gain");
@@ -296,6 +369,8 @@ export default function DashboardPage() {
   const [deviceData, setDeviceData] = useState<Record<number, DeviceRow[]>>({});
   const [langFilter, setLangFilter] = useState<string>(""); // "" | "fr" | "en" | "de" | ...
   const [configError, setConfigError] = useState<string | null>(null);
+  const [requestErrors, setRequestErrors] = useState<Record<string, string>>({});
+  const [detailLoadingKeys, setDetailLoadingKeys] = useState<Set<string>>(new Set());
   const [aiModal, setAiModal] = useState<{
     siteId: number; query: string; actionType: string; loading: boolean; response?: string; error?: string;
   } | null>(null);
@@ -313,6 +388,27 @@ export default function DashboardPage() {
 
   function recordTiming(timing: ServiceTiming) {
     setServiceTimings((prev) => [timing, ...prev].slice(0, 12));
+  }
+
+  function updateRequestError(key: string, message: string | null) {
+    setRequestErrors((prev) => {
+      if (message === null) {
+        if (!hasOwn(prev, key)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return { ...prev, [key]: message };
+    });
+  }
+
+  function updateDetailLoading(key: string, active: boolean) {
+    setDetailLoadingKeys((prev) => {
+      const next = new Set(prev);
+      if (active) next.add(key);
+      else next.delete(key);
+      return next;
+    });
   }
 
   async function timedFetch(label: string, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -335,21 +431,25 @@ export default function DashboardPage() {
           siteUrl: site?.url,
         }),
       });
-      const data = await res.json();
-      if (data.success) {
-        setAiModal({ siteId, query, actionType, loading: false, response: data.response });
-      } else {
-        setAiModal({ siteId, query, actionType, loading: false, error: data.error || "Erreur IA" });
+      const data = requireSuccess(await readApiJson(res), "Action IA");
+      if (typeof data.response !== "string" || !data.response.trim()) {
+        throw new Error("Action IA : réponse absente malgré le succès annoncé");
       }
+      setAiModal({ siteId, query, actionType, loading: false, response: data.response });
     } catch (e) {
-      setAiModal({ siteId, query, actionType, loading: false, error: e instanceof Error ? e.message : "Erreur réseau" });
+      setAiModal({
+        siteId,
+        query,
+        actionType,
+        loading: false,
+        error: actionableRequestError(e, "Impossible de générer le plan IA", false),
+      });
     }
   }
 
-  async function fetchSites(lang?: string, p?: Period, silent = false) {
+  async function fetchSites(lang?: string, p?: Period, silent = false): Promise<boolean> {
     if (silent) setStatsRefreshing(true);
     else setLoading(true);
-    setConfigError(null);
     try {
       const langKey = lang ?? langFilter;
       const periodKey = p ?? period;
@@ -357,55 +457,56 @@ export default function DashboardPage() {
       if (langKey) params.set("language", langKey);
       params.set("days", periodKey);
       const res = await timedFetch("Sites + stats", `/api/sites?${params.toString()}`);
-      const data = await res.json() as unknown;
-      if (data && typeof data === "object" && data !== null && "error" in data) {
-        const err = data as { error?: string; message?: string };
-        if (err.error === "missing_env") {
-          setConfigError(
-            typeof err.message === "string"
-              ? err.message
-              : "DATABASE_URL manquant dans .env.local."
-          );
-          setSites([]);
-          if (silent) setStatsRefreshing(false);
-          else setLoading(false);
-          return;
-        }
+      const data = await readApiJson(res);
+      if (!Array.isArray(data)) throw new Error("Sites : la réponse n'est pas une liste");
+      setSites(data as Site[]);
+      setConfigError(null);
+      updateRequestError("sites", null);
+      return true;
+    } catch (error) {
+      if (error instanceof ApiResponseError && error.code === "missing_env") {
+        setConfigError(error.message || "DATABASE_URL manquant dans .env.local.");
+      } else {
+        updateRequestError(
+          "sites",
+          actionableRequestError(error, "Impossible d'actualiser les domaines", sites.length > 0),
+        );
       }
-      if (Array.isArray(data)) setSites(data);
-    } catch { /* ignore */ }
-    if (silent) setStatsRefreshing(false);
-    else setLoading(false);
+      return false;
+    } finally {
+      if (silent) setStatsRefreshing(false);
+      else setLoading(false);
+    }
   }
 
-  async function fetchQuality() {
+  async function fetchQuality(): Promise<boolean> {
     try {
       const res = await timedFetch(
         "Qualite dashboard",
         `/api/dashboard-quality?refresh=${Date.now()}`,
         { cache: "no-store" }
       );
-      const data = await res.json() as { sites?: DashboardQualitySite[] };
-      if (Array.isArray(data.sites)) setQualitySites(data.sites);
-    } catch {
-      setQualitySites([]);
+      const data = requireSuccess(await readApiJson(res), "Qualité dashboard");
+      if (!Array.isArray(data.sites)) throw new Error("Qualité dashboard : liste de sites absente");
+      setQualitySites(data.sites as DashboardQualitySite[]);
+      setQualityLoaded(true);
+      updateRequestError("quality", null);
+      return true;
+    } catch (error) {
+      updateRequestError(
+        "quality",
+        actionableRequestError(error, "Impossible d'actualiser la qualité du dashboard", qualityLoaded),
+      );
+      return false;
     }
   }
 
   async function loadInitialDashboard() {
-    setLoading(true);
-    setConfigError(null);
-    try {
-      const res = await timedFetch("Sites liste rapide", "/api/sites");
-      const data = await res.json() as unknown;
-      if (Array.isArray(data)) setSites(data);
-    } catch { /* ignore */ }
-    setLoading(false);
-    void fetchSites(undefined, period, true);
     void fetchQuality();
+    await fetchSites(undefined, period, false);
   }
 
-  useEffect(() => { void loadInitialDashboard(); }, []); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+  useEffect(() => { void loadInitialDashboard(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -415,61 +516,79 @@ export default function DashboardPage() {
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  async function loadKeywords(siteId: number, p: Period) {
-    const key = `${siteId}-${p}-${langFilter || "all"}`;
-    if (keywords[key]) return;
+  async function loadKeywords(siteId: number, p: Period, force = false, language = langFilter): Promise<boolean> {
+    const key = `${siteId}-${p}-${language || "all"}`;
+    const errorKey = `keywords:${siteId}`;
+    if (hasOwn(keywords, key) && !force) return true;
     setKwLoadingIds(prev => new Set(prev).add(siteId));
     try {
-      const langQs = langFilter ? `&language=${langFilter}` : "";
+      const langQs = language ? `&language=${language}` : "";
       const res = await timedFetch("Mots-cles site", `/api/search-console?siteId=${siteId}&type=queries&days=${p}&limit=${KEYWORD_LOAD_LIMIT}${langQs}`);
-      const data = await res.json();
-      if (Array.isArray(data)) setKeywords(prev => ({ ...prev, [key]: data }));
-    } catch { /* ignore */ }
-    setKwLoadingIds(prev => { const n = new Set(prev); n.delete(siteId); return n; });
+      const data = await readApiJson(res);
+      if (!Array.isArray(data)) throw new Error("Mots-clés : la réponse n'est pas une liste");
+      setKeywords(prev => ({ ...prev, [key]: data as QueryData[] }));
+      updateRequestError(errorKey, null);
+      return true;
+    } catch (error) {
+      updateRequestError(
+        errorKey,
+        actionableRequestError(error, "Impossible de charger les mots-clés GSC", hasOwn(keywords, key)),
+      );
+      return false;
+    } finally {
+      setKwLoadingIds(prev => { const n = new Set(prev); n.delete(siteId); return n; });
+    }
   }
 
-  async function loadGains(siteId: number, force = false) {
-    if (gains[siteId] && !force) return;
+  async function loadGains(siteId: number, force = false, language = langFilter): Promise<boolean> {
+    const errorKey = `gains:${siteId}`;
+    if (hasOwn(gains, siteId) && !force) return true;
+    updateDetailLoading(errorKey, true);
     try {
-      const langQs = langFilter ? `&language=${langFilter}` : "";
+      const langQs = language ? `&language=${language}` : "";
       const res = await timedFetch("Gains site", `/api/search-console?siteId=${siteId}&type=gains&limit=200${langQs}`);
-      const data = await res.json() as { rows?: GainData[]; labels?: GainLabels } | GainData[];
+      const data = await readApiJson(res);
+      let nextRows: GainData[];
+      let nextLabels: GainLabels | null = null;
       if (Array.isArray(data)) {
-        setGains(prev => ({ ...prev, [siteId]: data }));
-      } else if (data && Array.isArray(data.rows)) {
-        setGains(prev => ({ ...prev, [siteId]: data.rows as GainData[] }));
-        if (data.labels) setGainLabels(data.labels);
+        nextRows = data as GainData[];
+      } else {
+        const record = requireRecord(data, "Gains GSC");
+        if (!Array.isArray(record.rows)) throw new Error("Gains GSC : liste de lignes absente");
+        const labels = record.labels;
+        if (!isRecord(labels) || !["w0", "w1", "w2", "w3", "w4"].every((key) => typeof labels[key] === "string")) {
+          throw new Error("Gains GSC : libellés de périodes absents");
+        }
+        nextRows = record.rows as GainData[];
+        nextLabels = labels as unknown as GainLabels;
       }
-    } catch { /* ignore */ }
+      setGains(prev => ({ ...prev, [siteId]: nextRows }));
+      if (nextLabels) setGainLabels(nextLabels);
+      updateRequestError(errorKey, null);
+      return true;
+    } catch (error) {
+      updateRequestError(
+        errorKey,
+        actionableRequestError(error, "Impossible de charger les gains GSC", hasOwn(gains, siteId)),
+      );
+      return false;
+    } finally {
+      updateDetailLoading(errorKey, false);
+    }
   }
 
   async function changeLangFilter(lang: string) {
+    // Keep the current filter and its data visible until the replacement is confirmed.
+    const sitesLoaded = await fetchSites(lang, undefined, true);
+    if (!sitesLoaded) return;
     setLangFilter(lang);
-    // Invalidate ALL cache — sites stats + keywords + gains
-    setKeywords({});
-    setGains({});
-    setAnalytics({});
-    setDeviceData({});
-
-    // Re-fetch sites with new country filter → updates clics/impr/position per site
-    await fetchSites(lang, undefined, true);
 
     // Re-fetch keywords for all expanded sites
     const p = period;
-    const langQs = lang ? `&language=${lang}` : "";
-    for (const expandedId of expandedIds) {
-      setKwLoadingIds(prev => new Set(prev).add(expandedId));
-      try {
-        const res = await timedFetch("Mots-cles filtre", `/api/search-console?siteId=${expandedId}&type=queries&days=${p}&limit=${KEYWORD_LOAD_LIMIT}${langQs}`);
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          const key = `${expandedId}-${p}-${lang || "all"}`;
-          setKeywords(prev => ({ ...prev, [key]: data }));
-        }
-      } catch { /* ignore */ }
-      setKwLoadingIds(prev => { const n = new Set(prev); n.delete(expandedId); return n; });
-      void loadGains(expandedId, true);
-    }
+    await Promise.all(Array.from(expandedIds).flatMap((expandedId) => [
+      loadKeywords(expandedId, p, true, lang),
+      loadGains(expandedId, true, lang),
+    ]));
   }
 
   async function toggleSite(siteId: number) {
@@ -485,86 +604,132 @@ export default function DashboardPage() {
     });
     if (!wasOpen) {
       const tab = activeTab[siteId] || "keywords";
-      if (tab === "keywords") {
-        await loadKeywords(siteId, period);
-      } else await loadGains(siteId);
+      if (tab === "keywords") await loadKeywords(siteId, period);
+      else if (tab === "gains") await loadGains(siteId);
+      else if (tab === "analytics") await loadAnalytics(siteId, period);
+      else await loadDeviceSplit(siteId, period);
     }
   }
 
-  async function toggleAll() {
-    if (expandedIds.size === sites.length) {
-      setExpandedIds(new Set());
-    } else {
-      const allIds = sites.map(s => s.id);
-      setExpandedIds(new Set(allIds));
-      setBulkLoading(true);
-      await runLimited(allIds, 4, async (id) => {
-        const tab = activeTab[id] || "keywords";
-        if (tab === "keywords") await loadKeywords(id, period);
-        else if (tab === "gains") await loadGains(id);
-        else if (tab === "analytics") await loadAnalytics(id, period);
-        else await loadDeviceSplit(id, period);
-      });
-      setBulkLoading(false);
-    }
-  }
-
-  async function loadAnalytics(siteId: number, p: Period) {
-    if (analytics[siteId]) return;
+  async function loadAnalytics(siteId: number, p: Period, force = false): Promise<boolean> {
+    const errorKey = `analytics:${siteId}`;
+    if (hasOwn(analytics, siteId) && !force) return true;
+    updateDetailLoading(errorKey, true);
     try {
       const res = await timedFetch("Analytics site", `/api/analytics?siteId=${siteId}&days=${p}`);
-      const data = await res.json();
-      if (Array.isArray(data)) setAnalytics(prev => ({ ...prev, [siteId]: data.map((r: AnalyticsDay) => ({ ...r, date: r.date.toString().slice(5, 10) })) }));
-    } catch { /* ignore */ }
+      const data = await readApiJson(res);
+      if (!Array.isArray(data)) throw new Error("Analytics GA4 : la réponse n'est pas une liste");
+      const nextRows = data.map((row) => {
+        const record = requireRecord(row, "Analytics GA4");
+        if (typeof record.date !== "string" && typeof record.date !== "number") {
+          throw new Error("Analytics GA4 : date absente dans une ligne");
+        }
+        return { ...record, date: String(record.date).slice(5, 10) } as unknown as AnalyticsDay;
+      });
+      setAnalytics(prev => ({ ...prev, [siteId]: nextRows }));
+      updateRequestError(errorKey, null);
+      return true;
+    } catch (error) {
+      updateRequestError(
+        errorKey,
+        actionableRequestError(error, "Impossible de charger les données GA4", hasOwn(analytics, siteId)),
+      );
+      return false;
+    } finally {
+      updateDetailLoading(errorKey, false);
+    }
   }
 
-  async function loadDeviceSplit(siteId: number, p: Period) {
-    if (deviceData[siteId]) return;
+  async function loadDeviceSplit(siteId: number, p: Period, force = false): Promise<boolean> {
+    const errorKey = `device:${siteId}`;
+    if (hasOwn(deviceData, siteId) && !force) return true;
+    updateDetailLoading(errorKey, true);
     try {
       const res = await timedFetch("Device split", `/api/device-split?site_id=${siteId}&days=${p}`);
-      const data = await res.json() as { overview?: DeviceRow[] };
-      if (data.overview && Array.isArray(data.overview)) {
-        setDeviceData(prev => ({ ...prev, [siteId]: data.overview as DeviceRow[] }));
-      }
-    } catch { /* ignore */ }
+      const data = requireRecord(await readApiJson(res), "Répartition par appareil");
+      if (!Array.isArray(data.overview)) throw new Error("Répartition par appareil : liste overview absente");
+      setDeviceData(prev => ({ ...prev, [siteId]: data.overview as DeviceRow[] }));
+      updateRequestError(errorKey, null);
+      return true;
+    } catch (error) {
+      updateRequestError(
+        errorKey,
+        actionableRequestError(error, "Impossible de charger la répartition par appareil", hasOwn(deviceData, siteId)),
+      );
+      return false;
+    } finally {
+      updateDetailLoading(errorKey, false);
+    }
   }
 
   async function switchTab(siteId: number, tab: TabType) {
     setActiveTab(prev => ({ ...prev, [siteId]: tab }));
-    if (tab === "keywords") { await loadKeywords(siteId, period); loadGains(siteId); }
+    if (tab === "keywords") { await loadKeywords(siteId, period); void loadGains(siteId); }
     else if (tab === "gains") await loadGains(siteId);
     else if (tab === "analytics") await loadAnalytics(siteId, period);
     else if (tab === "device") await loadDeviceSplit(siteId, period);
   }
 
   async function changePeriod(p: Period) {
+    const sitesLoaded = await fetchSites(undefined, p, true);
+    if (!sitesLoaded) return;
     setPeriod(p);
-    await fetchSites(undefined, p, true);
-    for (const id of expandedIds) await loadKeywords(id, p);
+    await Promise.all([
+      ...Array.from(expandedIds, (id) => loadKeywords(id, p, true)),
+      ...Object.keys(analytics).map((id) => loadAnalytics(Number(id), p, true)),
+      ...Object.keys(deviceData).map((id) => loadDeviceSplit(Number(id), p, true)),
+    ]);
+  }
+
+  function handleSiteTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, siteId: number, currentTab: TabType) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+
+    const currentIndex = SITE_TAB_ORDER.indexOf(currentTab);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? SITE_TAB_ORDER.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + SITE_TAB_ORDER.length) % SITE_TAB_ORDER.length;
+    const nextTab = SITE_TAB_ORDER[nextIndex];
+    void switchTab(siteId, nextTab);
+    requestAnimationFrame(() => document.getElementById(`site-tab-${siteId}-${nextTab}`)?.focus());
   }
 
   async function openHighVolPanel(siteId: number) {
-    if (highVolPanel === siteId) { setHighVolPanel(null); return; }
+    if (highVolPanel === siteId) {
+      highVolRequestIdRef.current += 1;
+      setHighVolPanelLoading(false);
+      setHighVolPanel(null);
+      return;
+    }
+    const requestId = highVolRequestIdRef.current + 1;
+    highVolRequestIdRef.current = requestId;
     setHighVolPanel(siteId);
-    setHighVolKws([]);
-    setHighVolSelected(new Set());
-    setHighVolFeedback(prev => { const next = { ...prev }; delete next[siteId]; return next; });
     setHighVolPanelLoading(true);
     try {
       const res = await timedFetch("High volume", `/api/keywords/high-volume?site_id=${siteId}&min_imp=30`);
-      const d = await res.json() as { success: boolean; keywords?: typeof highVolKws };
-      if (d.success && d.keywords) {
-        const untracked = d.keywords.filter(k => !k.already_tracked).slice(0, 40);
-        setHighVolKws(untracked);
-        // Keep discovery read-only by default. The user chooses what to track.
-        setHighVolSelected(new Set());
-      } else {
-        setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: "La découverte GSC n'a retourné aucune donnée exploitable." } }));
-      }
+      const data = requireSuccess(await readApiJson(res), "Découverte GSC");
+      if (!Array.isArray(data.keywords)) throw new Error("Découverte GSC : liste de mots-clés absente");
+      if (highVolRequestIdRef.current !== requestId) return;
+      const untracked = (data.keywords as typeof highVolKws).filter(k => !k.already_tracked).slice(0, 40);
+      setHighVolKws(untracked);
+      // Keep discovery read-only by default. The user chooses what to track.
+      setHighVolSelected(new Set());
+      setHighVolFeedback(prev => { const next = { ...prev }; delete next[siteId]; return next; });
     } catch (error) {
-      setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: error instanceof Error ? error.message : "La découverte GSC a échoué." } }));
+      if (highVolRequestIdRef.current !== requestId) return;
+      setHighVolFeedback(prev => ({
+        ...prev,
+        [siteId]: {
+          type: "error",
+          text: actionableRequestError(error, "Impossible de charger la découverte GSC"),
+        },
+      }));
+      setHighVolPanel(null);
+    } finally {
+      if (highVolRequestIdRef.current === requestId) setHighVolPanelLoading(false);
     }
-    setHighVolPanelLoading(false);
   }
 
   async function addSelectedHighVol(siteId: number) {
@@ -577,30 +742,54 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ keywords: toAdd.map(k => ({ keyword: k.keyword, source: k.source })) }),
       });
-      const d = await res.json() as { success: boolean; added: number };
-      if (d.success) {
-        setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "ok", text: `${d.added} mot(s)-clé(s) ajouté(s) au suivi sur ${toAdd.length} sélectionné(s).` } }));
-        setHighVolPanel(null);
-        if (d.added > 0) await loadKeywords(siteId, period);
-      } else {
-        setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: "Aucun mot-clé n'a été ajouté au suivi." } }));
+      const data = requireSuccess(await readApiJson(res), "Ajout au suivi");
+      const added = Number(data.added);
+      if (!Number.isInteger(added) || added < 0) throw new Error("Ajout au suivi : compteur added invalide");
+      if (added === 0) {
+        setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: "Aucun mot-clé n'a été ajouté. Ils sont peut-être déjà suivis ; actualise la découverte puis réessaie." } }));
+        return;
       }
+      setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "ok", text: `${added} mot(s)-clé(s) ajouté(s) au suivi sur ${toAdd.length} sélectionné(s).` } }));
+      setHighVolPanel(null);
+      await loadKeywords(siteId, period, true);
     } catch (error) {
-      setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: error instanceof Error ? error.message : "L'ajout au suivi a échoué." } }));
+      setHighVolFeedback(prev => ({
+        ...prev,
+        [siteId]: { type: "error", text: actionableRequestError(error, "Impossible d'ajouter les mots-clés au suivi") },
+      }));
+    } finally {
+      setHighVolLoading(prev => { const n = new Set(prev); n.delete(siteId); return n; });
     }
-    setHighVolLoading(prev => { const n = new Set(prev); n.delete(siteId); return n; });
   }
 
-  async function openKwHistory(siteId: number, query: string) {
-    if (activeKw?.siteId === siteId && activeKw?.query === query) { setActiveKw(null); return; }
+  async function openKwHistory(siteId: number, query: string, force = false) {
+    if (!force && activeKw?.siteId === siteId && activeKw?.query === query) { setActiveKw(null); return; }
     setActiveKw({ siteId, query });
     setKwHistLoading(true);
+    const errorKey = `history:${siteId}`;
     try {
       const res = await timedFetch("Historique mot-cle", `/api/keyword-history?siteId=${siteId}&query=${encodeURIComponent(query)}&days=90`);
-      const data = await res.json();
-      if (Array.isArray(data)) setKwHistory(data.map(r => ({ date: r.date.slice(5), position: Math.round(Number(r.position) * 10) / 10, clicks: Number(r.clicks) })));
-    } catch { setKwHistory([]); }
-    setKwHistLoading(false);
+      const data = await readApiJson(res);
+      if (!Array.isArray(data)) throw new Error("Historique GSC : la réponse n'est pas une liste");
+      const nextHistory = data.map((row) => {
+        const record = requireRecord(row, "Historique GSC");
+        if (typeof record.date !== "string") throw new Error("Historique GSC : date absente dans une ligne");
+        return {
+          date: record.date.slice(5),
+          position: Math.round(Number(record.position) * 10) / 10,
+          clicks: Number(record.clicks),
+        };
+      });
+      setKwHistory(nextHistory);
+      updateRequestError(errorKey, null);
+    } catch (error) {
+      updateRequestError(
+        errorKey,
+        actionableRequestError(error, "Impossible de charger l'historique du mot-clé"),
+      );
+    } finally {
+      setKwHistLoading(false);
+    }
   }
 
   const [syncMsg, setSyncMsg] = useState<{type: "ok"|"err"; text: string} | null>(null);
@@ -610,34 +799,35 @@ export default function DashboardPage() {
     setSyncMsg(null);
     try {
       const res = await timedFetch("Sync GSC/GA4", "/api/sync", { method: "POST" });
-      const data = await res.json();
-      if (res.status === 401 || data.error?.includes("authentifié")) {
-        setSyncMsg({ type: "err", text: "Connecte-toi Google d'abord → /login" });
-      } else if (data.error) {
-        setSyncMsg({ type: "err", text: data.error });
-      } else {
-        const results = (data.results || []) as Array<{
-          gsc?: number | { rows?: number; status?: string };
-        }>;
-        const total = results.reduce((sum, result) => {
-          const rows = typeof result.gsc === "number" ? result.gsc : Number(result.gsc?.rows ?? 0);
-          return sum + rows;
-        }, 0);
-        const failed = results.filter((result) =>
-          typeof result.gsc === "object" && result.gsc?.status === "error"
-        ).length;
-        setSyncMsg(data.success === false || failed > 0
-          ? { type: "err", text: `Sync partielle — ${total} lignes GSC, ${failed || data.errors || 0} erreur(s)` }
-          : { type: "ok", text: `Sync OK — ${total} lignes GSC importées` });
-        setKeywords({}); setGains({});
-        await fetchSites(undefined, undefined, true);
-        await fetchQuality();
+      const data = requireRecord(await readApiJson(res), "Synchronisation GSC/GA4");
+      if (!Array.isArray(data.results)) throw new Error("Synchronisation GSC/GA4 : liste de résultats absente");
+      const results = data.results as Array<{
+        gsc?: number | { rows?: number; status?: string };
+      }>;
+      const total = results.reduce((sum, result) => {
+        const rows = typeof result.gsc === "number" ? result.gsc : Number(result.gsc?.rows ?? 0);
+        return sum + rows;
+      }, 0);
+      const failed = results.filter((result) =>
+        typeof result.gsc === "object" && result.gsc?.status === "error"
+      ).length;
+      if (data.success !== true || failed > 0) {
+        throw new Error(`Synchronisation partielle : ${total} lignes GSC, ${failed || Number(data.errors) || 0} erreur(s)`);
       }
+      setSyncMsg({ type: "ok", text: `Sync OK — ${total} lignes GSC importées` });
+      await fetchSites(undefined, undefined, true);
+      await fetchQuality();
     } catch (err) {
-      setSyncMsg({ type: "err", text: err instanceof Error ? err.message : "Erreur réseau" });
+      setSyncMsg({
+        type: "err",
+        text: err instanceof ApiResponseError && err.status === 401
+          ? "Connecte-toi Google d'abord → /login, puis relance la synchronisation."
+          : actionableRequestError(err, "La synchronisation GSC/GA4 a échoué"),
+      });
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMsg(null), 8000);
     }
-    setSyncing(false);
-    setTimeout(() => setSyncMsg(null), 8000);
   }
 
   const totalClicks = sites.reduce((s, site) => s + (Number(site.gsc_clicks_30d) || 0), 0);
@@ -649,10 +839,36 @@ export default function DashboardPage() {
   const avgServiceMs = serviceTimings.length
     ? serviceTimings.reduce((sum, item) => sum + item.ms, 0) / serviceTimings.length
     : 0;
+  const sortedSites = [...sites].sort((a, b) => {
+    let va = 0, vb = 0;
+    if (siteSortCol === "impressions") { va = Number(a.gsc_impressions_30d); vb = Number(b.gsc_impressions_30d); }
+    else if (siteSortCol === "position") { va = Number(a.avg_position_30d) || 999; vb = Number(b.avg_position_30d) || 999; }
+    else { va = Number(a.gsc_clicks_30d); vb = Number(b.gsc_clicks_30d); }
+    return siteSortDir === "asc" ? va - vb : vb - va;
+  });
+  const sitePageSize = 10;
+  const sitePageCount = Math.max(1, Math.ceil(sortedSites.length / sitePageSize));
+  const safeSitePage = Math.min(sitePage, sitePageCount);
+  const visibleSites = sortedSites.slice((safeSitePage - 1) * sitePageSize, safeSitePage * sitePageSize);
 
   if (loading) return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-      <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+    <div role="status" aria-label="Chargement du cockpit SEO" className="min-h-dvh bg-slate-950 px-4 py-6 text-slate-100 sm:px-6">
+      <div className="flex items-start gap-3">
+        <span className="grid h-11 w-11 place-items-center rounded-xl bg-blue-500/10 text-blue-300">
+          <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        </span>
+        <div>
+          <div className="text-lg font-semibold text-white">Chargement du cockpit SEO</div>
+          <div className="mt-1 text-sm text-slate-400">Lecture des domaines et des dernières mesures disponibles.</div>
+        </div>
+      </div>
+      <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4" aria-hidden="true">
+        {[0, 1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-xl border border-slate-800 bg-slate-900/70 motion-reduce:animate-none" />)}
+      </div>
+      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,0.7fr)]" aria-hidden="true">
+        <div className="h-44 animate-pulse rounded-xl border border-slate-800 bg-slate-900/70 motion-reduce:animate-none" />
+        <div className="h-44 animate-pulse rounded-xl border border-slate-800 bg-slate-900/70 motion-reduce:animate-none" />
+      </div>
     </div>
   );
 
@@ -687,6 +903,24 @@ export default function DashboardPage() {
           >
             Page de connexion (Google)
           </a>
+        </div>
+      </div>
+    );
+  }
+
+  if (sites.length === 0 && requestErrors.sites) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
+        <div role="alert" className="max-w-xl rounded-2xl border border-red-700/50 bg-red-950/30 p-8 shadow-xl">
+          <h1 className="mb-3 text-xl font-bold text-red-200">Domaines indisponibles</h1>
+          <p className="text-sm text-red-100">{requestErrors.sites}</p>
+          <button
+            type="button"
+            onClick={() => void loadInitialDashboard()}
+            className="mt-6 min-h-11 rounded-lg border border-red-600/60 bg-red-900/40 px-4 text-sm font-medium text-red-100 hover:bg-red-900/60"
+          >
+            Réessayer le chargement
+          </button>
         </div>
       </div>
     );
@@ -780,6 +1014,20 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {(["sites", "quality"] as const).map((key) => requestErrors[key] ? (
+        <div key={key} role="alert" className="mx-4 mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-red-700 bg-red-950/30 px-4 py-2 text-sm text-red-200 sm:mx-6">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1">{requestErrors[key]}</span>
+          <button
+            type="button"
+            onClick={() => void (key === "sites" ? fetchSites(undefined, undefined, true) : fetchQuality())}
+            className="min-h-9 rounded border border-red-600/60 px-3 text-xs font-medium text-red-100 hover:bg-red-900/50"
+          >
+            Réessayer
+          </button>
+        </div>
+      ) : null)}
+
       {statsRefreshing && (
         <div role="status" className="mx-4 mt-2 px-4 py-2 rounded-lg text-sm flex items-center gap-2 bg-cyan-950/30 border border-cyan-800/50 text-cyan-200 sm:mx-6">
           <Loader2 className="w-4 h-4 animate-spin" />
@@ -787,17 +1035,23 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <DashboardHealthOverview
-        sites={qualitySites}
-        period={period}
-        totalClicks={totalClicks}
-        totalImpressions={totalImpressions}
-        weightedPosition={avgPosition}
-        positionedSites={activeSites.length}
-        serviceTiming={latestTiming ? `${formatMs(latestTiming.ms)} · moy. ${formatMs(avgServiceMs)}` : formatMs(pageLoadMs ?? 0)}
-        serviceWarning={avgServiceMs > 1500}
-        onRefresh={() => void fetchQuality()}
-      />
+      {qualityLoaded ? (
+        <DashboardHealthOverview
+          sites={qualitySites}
+          period={period}
+          totalClicks={totalClicks}
+          totalImpressions={totalImpressions}
+          weightedPosition={avgPosition}
+          positionedSites={activeSites.length}
+          serviceTiming={latestTiming ? `${formatMs(latestTiming.ms)} · moy. ${formatMs(avgServiceMs)}` : formatMs(pageLoadMs ?? 0)}
+          serviceWarning={avgServiceMs > 1500}
+          onRefresh={() => void fetchQuality()}
+        />
+      ) : !requestErrors.quality ? (
+        <div className="mx-4 my-3 rounded-xl border border-gray-800 bg-gray-900/70 sm:mx-6">
+          <DetailLoadingSkeleton label="Chargement de la qualité du dashboard…" />
+        </div>
+      ) : null}
 
       {/* Sort bar sites */}
       <div className="px-6 pb-2 flex items-center gap-2 flex-wrap">
@@ -810,7 +1064,7 @@ export default function DashboardPage() {
           const active = siteSortCol === col;
           return (
             <button key={col}
-              onClick={() => { if (active) setSiteSortDir(d => d === "desc" ? "asc" : "desc"); else { setSiteSortCol(col); setSiteSortDir(col === "position" ? "asc" : "desc"); } }}
+              onClick={() => { setSitePage(1); if (active) setSiteSortDir(d => d === "desc" ? "asc" : "desc"); else { setSiteSortCol(col); setSiteSortDir(col === "position" ? "asc" : "desc"); } }}
               className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium border transition ${active ? "bg-blue-600 border-blue-500 text-white" : "bg-gray-800 border-gray-700 text-gray-400 hover:text-white hover:border-gray-500"}`}>
               {label}
               <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
@@ -820,28 +1074,45 @@ export default function DashboardPage() {
             </button>
           );
         })}
-        <div className="ml-auto flex items-center gap-2">
-          <button type="button" onClick={toggleAll} disabled={bulkLoading}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-700 bg-gray-800 text-gray-400 hover:text-white hover:border-gray-500 transition disabled:opacity-50 disabled:cursor-wait">
-            {bulkLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : expandedIds.size === sites.length ? <ChevronsDownUp className="w-3 h-3" /> : <ChevronsUpDown className="w-3 h-3" />}
-            {bulkLoading ? "Chargement par lots..." : expandedIds.size === sites.length ? "Tout fermer" : "Tout ouvrir"}
-          </button>
+        <div className="ml-auto flex items-center gap-2 text-xs text-gray-400">
+          <span>{sortedSites.length} domaines</span>
+          {expandedIds.size > 0 && (
+            <button type="button" onClick={() => setExpandedIds(new Set())} className="min-h-10 rounded-lg border border-gray-700 bg-gray-800 px-3 font-medium text-gray-300 hover:border-gray-500 hover:text-white">
+              Fermer les détails
+            </button>
+          )}
         </div>
       </div>
 
       {/* Sites */}
       <div className="px-6 pb-10 space-y-3">
-        {[...sites].sort((a, b) => {
-          let va = 0, vb = 0;
-          if (siteSortCol === "impressions") { va = Number(a.gsc_impressions_30d); vb = Number(b.gsc_impressions_30d); }
-          else if (siteSortCol === "position") { va = Number(a.avg_position_30d) || 999; vb = Number(b.avg_position_30d) || 999; }
-          else { va = Number(a.gsc_clicks_30d); vb = Number(b.gsc_clicks_30d); }
-          return siteSortDir === "asc" ? va - vb : vb - va;
-        }).map((site, i) => {
+        {visibleSites.map((site, i) => {
           const isOpen = expandedIds.has(site.id);
           const tab = activeTab[site.id] || "keywords";
           const quality = qualityById.get(site.id);
           const kwKey = `${site.id}-${period}-${langFilter || "all"}`;
+          const hasKeywordData = hasOwn(keywords, kwKey);
+          const hasGainData = hasOwn(gains, site.id);
+          const hasAnalyticsData = hasOwn(analytics, site.id);
+          const hasDeviceData = hasOwn(deviceData, site.id);
+          const currentTabHasConfirmedData = tab === "keywords"
+            ? hasKeywordData
+            : tab === "gains"
+              ? hasGainData
+              : tab === "analytics"
+                ? hasAnalyticsData
+                : hasDeviceData;
+          const currentTabError = requestErrors[`${tab}:${site.id}`];
+          const currentTabLoading = tab === "keywords"
+            ? kwLoadingIds.has(site.id)
+            : detailLoadingKeys.has(`${tab}:${site.id}`);
+          const currentTabLoadingLabel = tab === "keywords"
+            ? "Chargement des mots-clés GSC…"
+            : tab === "gains"
+              ? "Chargement des gains GSC…"
+              : tab === "analytics"
+                ? "Chargement des données GA4…"
+                : "Chargement des données par appareil…";
           const QUESTION_WORDS = ["comment","pourquoi","quand","quel","quelle","quels","quelles","qu'est","qu est","how","what","why","when","which","where","who","is","are","does","do","can","best","top"];
           const rawKws = keywords[kwKey] || [];
           const searchedKws = rawKws.filter(k => !search || k.query.toLowerCase().includes(search.toLowerCase()));
@@ -940,7 +1211,7 @@ export default function DashboardPage() {
                   {quality && (
                     <div className="hidden lg:block text-right">
                       <div className="text-cyan-300 font-bold">{quality.kp_volumes_imported}</div>
-                      <div className="text-xs text-gray-400">volumes reels</div>
+                      <div className="text-xs text-gray-400">estimations KP importées</div>
                     </div>
                   )}
                   {quality && quality.kp_volumes_missing > 0 && (
@@ -974,22 +1245,28 @@ export default function DashboardPage() {
 
               {/* Content */}
               {isOpen && (
-                <div id={`site-panel-${site.id}`} className="border-t border-gray-800">
+                <div
+                  id={`site-panel-${site.id}`}
+                  role="tabpanel"
+                  aria-labelledby={`site-tab-${site.id}-${tab}`}
+                  aria-busy={currentTabLoading}
+                  className="border-t border-gray-800"
+                >
                   {/* Tabs */}
                   <div className="flex gap-1 overflow-x-auto px-4 pt-3 pb-0" role="tablist" aria-label={`Données de ${site.name}`}>
-                    <button type="button" role="tab" aria-selected={tab === "keywords"} onClick={() => switchTab(site.id, "keywords")}
+                    <button id={`site-tab-${site.id}-keywords`} type="button" role="tab" aria-selected={tab === "keywords"} aria-controls={`site-panel-${site.id}`} tabIndex={tab === "keywords" ? 0 : -1} onKeyDown={(event) => handleSiteTabKeyDown(event, site.id, "keywords")} onClick={() => switchTab(site.id, "keywords")}
                       className={`min-h-11 whitespace-nowrap px-3 py-1.5 rounded-t text-xs font-medium transition ${tab === "keywords" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       Mots clés ({period}j)
                     </button>
-                    <button type="button" role="tab" aria-selected={tab === "gains"} onClick={() => switchTab(site.id, "gains")}
+                    <button id={`site-tab-${site.id}-gains`} type="button" role="tab" aria-selected={tab === "gains"} aria-controls={`site-panel-${site.id}`} tabIndex={tab === "gains" ? 0 : -1} onKeyDown={(event) => handleSiteTabKeyDown(event, site.id, "gains")} onClick={() => switchTab(site.id, "gains")}
                       className={`min-h-11 whitespace-nowrap px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "gains" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <TrendingUp className="w-3 h-3" /> Gains / semaine
                     </button>
-                    <button type="button" role="tab" aria-selected={tab === "analytics"} onClick={() => switchTab(site.id, "analytics")}
+                    <button id={`site-tab-${site.id}-analytics`} type="button" role="tab" aria-selected={tab === "analytics"} aria-controls={`site-panel-${site.id}`} tabIndex={tab === "analytics" ? 0 : -1} onKeyDown={(event) => handleSiteTabKeyDown(event, site.id, "analytics")} onClick={() => switchTab(site.id, "analytics")}
                       className={`min-h-11 whitespace-nowrap px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "analytics" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <BarChart3 className="w-3 h-3" /> Analytics GA4
                     </button>
-                    <button type="button" role="tab" aria-selected={tab === "device"} onClick={() => switchTab(site.id, "device")}
+                    <button id={`site-tab-${site.id}-device`} type="button" role="tab" aria-selected={tab === "device"} aria-controls={`site-panel-${site.id}`} tabIndex={tab === "device" ? 0 : -1} onKeyDown={(event) => handleSiteTabKeyDown(event, site.id, "device")} onClick={() => switchTab(site.id, "device")}
                       className={`min-h-11 whitespace-nowrap px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "device" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <Smartphone className="w-3 h-3" /> Devices
                     </button>
@@ -998,8 +1275,8 @@ export default function DashboardPage() {
                   {tab === "keywords" && (
                     <div className="flex items-center flex-wrap gap-2 px-4 py-2">
                       {(["all","important","highvolume","longtail","questions"] as const).map(f => (
-                        <button key={f} type="button" onClick={() => setKwTypeFilter(f)}
-                          className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
+                        <button key={f} type="button" aria-pressed={kwTypeFilter === f} onClick={() => setKwTypeFilter(f)}
+                          className={`min-h-11 rounded px-3 py-1 text-xs font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
                           {f === "important" ? "Important" : f === "highvolume" ? "Fort volume 3000+" : f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
                         </button>
                       ))}
@@ -1015,11 +1292,11 @@ export default function DashboardPage() {
                   )}
                   {highVolFeedback[site.id] && <div role={highVolFeedback[site.id].type === "error" ? "alert" : "status"} className={`mx-4 my-2 rounded-lg border px-3 py-2 text-xs ${highVolFeedback[site.id].type === "ok" ? "border-emerald-700 bg-emerald-950/30 text-emerald-200" : "border-red-700 bg-red-950/30 text-red-200"}`}>{highVolFeedback[site.id].text}</div>}
 
-                  {(tab === "keywords" || tab === "gains") && (
+                  {((tab === "keywords" && hasKeywordData) || (tab === "gains" && hasGainData)) && (
                     <div className="px-4 py-2 border-t border-gray-800 bg-gray-950/40">
                       <div className="flex flex-wrap items-center gap-2 text-[11px]">
                         <span className="px-2 py-1 rounded border border-green-500/25 bg-green-500/10 text-green-300">
-                          {sourceVolumeCount} volume(s) source
+                            {sourceVolumeCount} estimation(s) importée(s)
                         </span>
                         {tab === "keywords" && keywordImportedZeroVolumeCount > 0 && (
                           <span className="px-2 py-1 rounded border border-slate-600/40 bg-slate-700/30 text-slate-300">
@@ -1038,7 +1315,7 @@ export default function DashboardPage() {
                         )}
                         {tab === "keywords" && highVolumeKeywords.length > 0 && (
                           <span className="inline-flex items-center gap-1 px-2 py-1 rounded border border-orange-500/30 bg-orange-500/10 text-orange-200">
-                            {highVolumeKeywords.length} fort volume 3000+/mois
+                            {highVolumeKeywords.length} estimation(s) à 3000+/mois
                             <CopyKeywordsButton
                               keywords={highVolumeKeywords.slice(0, KEYWORD_RENDER_LIMIT).map((kw) => kw.query)}
                               label="Copier les mots-cles fort volume"
@@ -1060,18 +1337,20 @@ export default function DashboardPage() {
                     <div className="border-t border-yellow-500/20 bg-gray-900">
                       {/* Header + actions */}
                       <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-gray-800">
-                        <span className="text-xs font-semibold text-yellow-300 flex-1 min-w-0">
-                          ⚡ {highVolKws.length} mots-clés du secteur (GSC réel 90j)
+                        <span className="flex min-w-0 flex-1 items-center gap-2 text-xs font-semibold text-yellow-300">
+                          {!highVolPanelLoading && <Zap className="h-4 w-4" aria-hidden="true" />}
+                          {highVolPanelLoading ? "Découverte GSC en cours…" : `${highVolKws.length} mots-clés du secteur (requêtes GSC observées sur 90 jours)`}
                         </span>
                         <button type="button"
                           onClick={() => void addSelectedHighVol(site.id)}
-                          disabled={highVolSelected.size === 0 || highVolLoading.has(site.id)}
-                          className="text-xs px-3 py-1 rounded bg-yellow-500/40 border border-yellow-500/60 text-yellow-100 font-semibold hover:bg-yellow-500/60 disabled:opacity-40">
+                          disabled={highVolPanelLoading || highVolSelected.size === 0 || highVolLoading.has(site.id)}
+                            className="min-h-11 rounded border border-yellow-500/60 bg-yellow-500/40 px-3 text-xs font-semibold text-yellow-100 hover:bg-yellow-500/60 disabled:opacity-40">
                           {highVolLoading.has(site.id) ? <Loader2 className="w-3 h-3 animate-spin inline" /> : null}
                           {` Ajouter (${highVolSelected.size})`}
                         </button>
                         <button type="button"
                           onClick={async () => {
+                            if (highVolPanelLoading) return;
                             const all = new Set(highVolKws.map(k => k.keyword));
                             setHighVolSelected(all);
                             // Direct add without waiting for state update
@@ -1083,39 +1362,51 @@ export default function DashboardPage() {
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({ keywords: highVolKws.map(k => ({ keyword: k.keyword, source: k.source })) }),
                               });
-                              const d = await res.json() as { success: boolean; added: number };
-                              if (d.success) {
-                                setHighVolFeedback(prev => ({ ...prev, [site.id]: { type: "ok", text: `${d.added} mot(s)-clé(s) ajouté(s) au suivi sur ${highVolKws.length}.` } }));
-                                setHighVolPanel(null);
-                                await loadKeywords(site.id, period);
-                              } else {
-                                setHighVolFeedback(prev => ({ ...prev, [site.id]: { type: "error", text: "Aucun mot-clé n'a été ajouté au suivi." } }));
+                              const data = requireSuccess(await readApiJson(res), "Ajout groupé au suivi");
+                              const added = Number(data.added);
+                              if (!Number.isInteger(added) || added < 0) throw new Error("Ajout groupé : compteur added invalide");
+                              if (added === 0) {
+                                setHighVolFeedback(prev => ({ ...prev, [site.id]: { type: "error", text: "Aucun mot-clé n'a été ajouté. Ils sont peut-être déjà suivis ; actualise la découverte puis réessaie." } }));
+                                return;
                               }
+                              setHighVolFeedback(prev => ({ ...prev, [site.id]: { type: "ok", text: `${added} mot(s)-clé(s) ajouté(s) au suivi sur ${highVolKws.length}.` } }));
+                              setHighVolPanel(null);
+                              await loadKeywords(site.id, period, true);
                             } catch (error) {
-                              setHighVolFeedback(prev => ({ ...prev, [site.id]: { type: "error", text: error instanceof Error ? error.message : "L'ajout au suivi a échoué." } }));
+                              setHighVolFeedback(prev => ({
+                                ...prev,
+                                [site.id]: { type: "error", text: actionableRequestError(error, "Impossible d'ajouter tous les mots-clés au suivi") },
+                              }));
+                            } finally {
+                              setHighVolLoading(prev => { const n = new Set(prev); n.delete(site.id); return n; });
                             }
-                            setHighVolLoading(prev => { const n = new Set(prev); n.delete(site.id); return n; });
                           }}
-                          className="text-[10px] px-2 py-1 rounded bg-yellow-600/40 text-yellow-100 font-semibold hover:bg-yellow-600/60 border border-yellow-500/50 transition"
-                          title="Ajouter tous les 40 keywords en un clic">
-                          ⚡ Tout ajouter
+                          disabled={highVolPanelLoading}
+                          className="inline-flex min-h-11 items-center gap-1.5 rounded border border-yellow-500/50 bg-yellow-600/40 px-3 text-xs font-semibold text-yellow-100 transition hover:bg-yellow-600/60 disabled:opacity-40"
+                          title="Ajouter tous les mots-clés affichés au suivi">
+                          <Zap className="h-3.5 w-3.5" aria-hidden="true" /> Tout ajouter
                         </button>
-                        <button type="button" onClick={() => setHighVolSelected(new Set(highVolKws.map(k => k.keyword)))}
-                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">Tout</button>
-                        <button type="button" onClick={() => setHighVolSelected(new Set())}
-                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-300 hover:bg-gray-600">Aucun</button>
-                        <button type="button" onClick={() => setHighVolKws(prev => [...prev].sort((a,b) => a.avg_position - b.avg_position))}
+                        <button type="button" disabled={highVolPanelLoading} onClick={() => setHighVolSelected(new Set(highVolKws.map(k => k.keyword)))}
+                          className="min-h-11 rounded bg-gray-700 px-3 text-xs text-gray-300 hover:bg-gray-600 disabled:opacity-40">Tout</button>
+                        <button type="button" disabled={highVolPanelLoading} onClick={() => setHighVolSelected(new Set())}
+                          className="min-h-11 rounded bg-gray-700 px-3 text-xs text-gray-300 hover:bg-gray-600 disabled:opacity-40">Aucun</button>
+                        <button type="button" disabled={highVolPanelLoading} onClick={() => setHighVolKws(prev => [...prev].sort((a,b) => a.avg_position - b.avg_position))}
                           title="Trier par position (meilleures d'abord)"
-                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-green-300 hover:bg-gray-600">Pos. ↑</button>
-                        <button type="button" onClick={() => setHighVolKws(prev => [...prev].sort((a,b) => b.impressions - a.impressions))}
+                          className="min-h-11 rounded bg-gray-700 px-3 text-xs text-green-300 hover:bg-gray-600 disabled:opacity-40">Position</button>
+                        <button type="button" disabled={highVolPanelLoading} onClick={() => setHighVolKws(prev => [...prev].sort((a,b) => b.impressions - a.impressions))}
                           title="Trier par impressions (les plus vus)"
-                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-blue-300 hover:bg-gray-600">Imp. ↓</button>
-                        <button type="button" onClick={() => setHighVolPanel(null)}
-                          className="text-[10px] px-2 py-1 rounded bg-gray-700 text-gray-400 hover:bg-gray-600">✕</button>
+                          className="min-h-11 rounded bg-gray-700 px-3 text-xs text-blue-300 hover:bg-gray-600 disabled:opacity-40">Impressions</button>
+                        <button type="button" onClick={() => {
+                          highVolRequestIdRef.current += 1;
+                          setHighVolPanelLoading(false);
+                          setHighVolPanel(null);
+                        }}
+                          className="grid h-11 w-11 place-items-center rounded bg-gray-700 text-gray-300 hover:bg-gray-600"
+                          aria-label="Fermer la découverte de mots-clés"><X className="h-4 w-4" aria-hidden="true" /></button>
                       </div>
                       {/* Keyword list — flex rows to avoid table overflow conflicts */}
                       {highVolPanelLoading ? (
-                        <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-yellow-400" /></div>
+                        <DetailLoadingSkeleton label="Recherche des requêtes GSC…" />
                       ) : highVolKws.length === 0 ? (
                         <p className="text-xs text-gray-400 px-4 py-3">Aucun nouveau mot-clé — tous déjà trackés ou trop peu d&apos;impressions.</p>
                       ) : (
@@ -1127,12 +1418,11 @@ export default function DashboardPage() {
                               <span className="flex-1 min-w-[160px]">Mot-clé du secteur</span>
                               {(["impressions","avg_position","clicks"] as HVSort[]).map((col, i) => (
                                 <button key={col} type="button" onClick={() => hvSort(col)}
-                                  className={`w-20 text-right flex items-center justify-end gap-0.5 shrink-0 hover:text-white transition ${hvSortCol === col ? "text-yellow-300" : ""}`}>
+                                  className={`flex min-h-11 w-20 shrink-0 items-center justify-end gap-1 text-right transition hover:text-white ${hvSortCol === col ? "text-yellow-300" : ""}`}>
                                   {["Imp. 90j","Pos.","Clics 90j"][i]}
-                                  <span className="flex flex-col leading-none text-[7px] ml-0.5">
-                                    <span className={hvSortCol === col && hvSortDir === "asc" ? "text-yellow-400" : "opacity-30"}>▲</span>
-                                    <span className={hvSortCol === col && hvSortDir === "desc" ? "text-yellow-400" : "opacity-30"}>▼</span>
-                                  </span>
+                                  {hvSortCol === col && (hvSortDir === "asc"
+                                    ? <ChevronUp className="h-3 w-3" aria-hidden="true" />
+                                    : <ChevronDown className="h-3 w-3" aria-hidden="true" />)}
                                 </button>
                               ))}
                             </div>
@@ -1172,12 +1462,12 @@ export default function DashboardPage() {
                       <div className="flex items-center justify-between gap-3 mb-2">
                         <div>
                           <div className="text-xs uppercase tracking-wide text-orange-300">Mots-cles fort volume niche</div>
-                          <div className="text-[11px] text-gray-400">Volume reel importe, seuil 3000 recherches/mois</div>
+                          <div className="text-[11px] text-gray-400">Volume Keyword Planner importé (estimation), seuil 3 000 recherches/mois</div>
                         </div>
                         <button
                           type="button"
                           onClick={() => setKwTypeFilter("highvolume")}
-                          className="text-xs px-3 py-1.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-200 hover:bg-orange-500/20"
+                          className="min-h-11 rounded border border-orange-500/40 bg-orange-500/10 px-3 text-xs text-orange-200 hover:bg-orange-500/20"
                         >
                           Voir 3000+
                         </button>
@@ -1198,15 +1488,32 @@ export default function DashboardPage() {
                     </div>
                   )}
 
-                  {kwLoadingIds.has(site.id) ? (
-                    <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
-                  ) : tab === "keywords" ? (
+                  {currentTabError && (
+                    <div role="alert" className="mx-4 my-2 flex flex-wrap items-center gap-2 rounded-lg border border-red-700 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+                      <span className="min-w-0 flex-1">{currentTabError}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (tab === "keywords") void loadKeywords(site.id, period, true);
+                          else if (tab === "gains") void loadGains(site.id, true);
+                          else if (tab === "analytics") void loadAnalytics(site.id, period, true);
+                          else void loadDeviceSplit(site.id, period, true);
+                        }}
+                        className="min-h-9 rounded border border-red-600/60 px-3 font-medium text-red-100 hover:bg-red-900/50"
+                      >
+                        Réessayer
+                      </button>
+                    </div>
+                  )}
+                  {currentTabLoading ? (
+                    <DetailLoadingSkeleton label={currentTabLoadingLabel} />
+                  ) : !currentTabHasConfirmedData ? null : tab === "keywords" ? (
                     kws.length === 0 ? (
                       <div className="py-6 text-center text-gray-400 text-sm">
                         {rawKws.length === 0
                           ? `Aucune requete GSC pour ce site${langFilter ? " avec ce pays/langue" : ""}.`
                           : kwTypeFilter === "highvolume"
-                            ? "Aucun mot-cle avec volume reel importe >= 3000/mois pour ce site."
+                            ? "Aucun mot-clé avec estimation importée >= 3000/mois pour ce site."
                             : "Aucun mot-cle ne correspond au filtre actif."}
                       </div>
                     ) : (
@@ -1226,11 +1533,11 @@ export default function DashboardPage() {
                               const active = sortCol === col;
                               return (
                                 <th key={col} className="px-1 py-1 text-right" aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
-                                  <button type="button" onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir(col === "position" ? "asc" : "desc"); } }} className={`inline-flex min-h-10 w-full select-none items-center justify-end gap-1 rounded px-2 ${active ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>
+                                  <button type="button" aria-label={`Trier par ${labels[col]}${active ? `, ordre ${sortDir === "asc" ? "croissant" : "décroissant"}` : ""}`} onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir(col === "position" ? "asc" : "desc"); } }} className={`inline-flex min-h-11 w-full select-none items-center justify-end gap-1 rounded px-2 ${active ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>
                                     {labels[col]}
-                                    <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
-                                      <span className={active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}>▲</span>
-                                      <span className={active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}>▼</span>
+                                    <span className="flex flex-col" aria-hidden="true">
+                                      <ChevronUp className={`h-2.5 w-2.5 ${active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}`} />
+                                      <ChevronDown className={`h-2.5 w-2.5 ${active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}`} />
                                     </span>
                                   </button>
                                 </th>
@@ -1241,11 +1548,11 @@ export default function DashboardPage() {
                               const active = sortCol === col;
                               return (
                                 <th className="px-1 py-1 text-right" aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
-                                  <button type="button" onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir("desc"); } }} className={`inline-flex min-h-10 w-full select-none items-center justify-end gap-1 rounded px-2 ${active ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>
+                                  <button type="button" aria-label={`Trier par volume source${active ? `, ordre ${sortDir === "asc" ? "croissant" : "décroissant"}` : ""}`} onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir("desc"); } }} className={`inline-flex min-h-11 w-full select-none items-center justify-end gap-1 rounded px-2 ${active ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>
                                     Volume source
-                                    <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
-                                      <span className={active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}>▲</span>
-                                      <span className={active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}>▼</span>
+                                    <span className="flex flex-col" aria-hidden="true">
+                                      <ChevronUp className={`h-2.5 w-2.5 ${active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}`} />
+                                      <ChevronDown className={`h-2.5 w-2.5 ${active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}`} />
                                     </span>
                                   </button>
                                 </th>
@@ -1334,7 +1641,7 @@ export default function DashboardPage() {
                       </table>
                       </div>
                     )
-                  ) : (
+                  ) : tab === "gains" ? (
                     gainList.length === 0 ? (
                       <div className="py-6 text-center text-gray-400 text-sm">
                         Aucune variation hebdo comparable dans la derniere fenetre GSC importee.
@@ -1529,10 +1836,9 @@ export default function DashboardPage() {
                       </table>
                       </div>
                     )
-                  )}
-                  {tab === "analytics" && (() => {
+                  ) : null}
+                  {tab === "analytics" && !currentTabLoading && hasAnalyticsData && (() => {
                     const aData = analytics[site.id] || [];
-                    if (kwLoadingIds.has(site.id)) return <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>;
                     if (aData.length === 0) return (
                       <div className="py-8 text-center space-y-2">
                         <p className="text-gray-400 text-sm">Pas de données GA4 pour ce site</p>
@@ -1601,7 +1907,7 @@ export default function DashboardPage() {
                     );
                   })()}
 
-                  {tab === "device" && (() => {
+                  {tab === "device" && !currentTabLoading && hasDeviceData && (() => {
                     const devRows = deviceData[site.id] || [];
                     const totalClicks = devRows.reduce((s, r) => s + r.clicks, 0);
                     return devRows.length === 0 ? (
@@ -1639,10 +1945,21 @@ export default function DashboardPage() {
                           <span className="text-sm font-semibold text-white">&quot;{activeKw.query}&quot;</span>
                           <span className="text-xs text-gray-400 ml-2">— évolution position 90 jours</span>
                         </div>
-                        <button onClick={() => setActiveKw(null)} className="text-gray-400 hover:text-white"><X className="w-4 h-4" /></button>
+                        <button type="button" onClick={() => setActiveKw(null)} aria-label="Fermer l'historique du mot-clé" className="grid h-11 w-11 place-items-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"><X className="w-4 h-4" aria-hidden="true" /></button>
                       </div>
                       {kwHistLoading ? (
-                        <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-blue-500" /></div>
+                        <DetailLoadingSkeleton label="Chargement de l'historique GSC…" />
+                      ) : requestErrors[`history:${site.id}`] ? (
+                        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-red-700 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+                          <span className="min-w-0 flex-1">{requestErrors[`history:${site.id}`]}</span>
+                          <button
+                            type="button"
+                            onClick={() => void openKwHistory(site.id, activeKw.query, true)}
+                            className="min-h-9 rounded border border-red-600/60 px-3 font-medium text-red-100 hover:bg-red-900/50"
+                          >
+                            Réessayer
+                          </button>
+                        </div>
                       ) : kwHistory.length === 0 ? (
                         <div className="text-center py-6 text-gray-400 text-sm">Pas assez d&apos;historique pour ce mot clé</div>
                       ) : (
@@ -1670,6 +1987,16 @@ export default function DashboardPage() {
             </div>
           );
         })}
+        {sitePageCount > 1 && (
+          <nav aria-label="Pagination des domaines" className="flex flex-col gap-3 rounded-xl border border-gray-800 bg-gray-900/70 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <span className="text-sm text-gray-400">Domaines {(safeSitePage - 1) * sitePageSize + 1}–{Math.min(safeSitePage * sitePageSize, sortedSites.length)} sur {sortedSites.length}</span>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setSitePage((value) => Math.max(1, value - 1))} disabled={safeSitePage <= 1} className="min-h-11 rounded-lg border border-gray-700 px-3 text-sm text-gray-200 hover:bg-gray-800 disabled:opacity-30">Précédent</button>
+              <span className="min-w-20 text-center text-sm tabular-nums text-gray-300">{safeSitePage} / {sitePageCount}</span>
+              <button type="button" onClick={() => setSitePage((value) => Math.min(sitePageCount, value + 1))} disabled={safeSitePage >= sitePageCount} className="min-h-11 rounded-lg border border-gray-700 px-3 text-sm text-gray-200 hover:bg-gray-800 disabled:opacity-30">Suivant</button>
+            </div>
+          </nav>
+        )}
       </div>
     </div>
   );

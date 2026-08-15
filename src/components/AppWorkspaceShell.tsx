@@ -1,14 +1,20 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Menu } from "lucide-react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { DashboardToolNavigation } from "@/components/dashboard/DashboardToolNavigation";
 import { dashboardToolForPath } from "@/lib/dashboard-tools";
 
 export function AppWorkspaceShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  if (pathname?.startsWith("/login")) return <>{children}</>;
+  return <AuthenticatedWorkspace pathname={pathname ?? "/dashboard"}>{children}</AuthenticatedWorkspace>;
+}
+
+function AuthenticatedWorkspace({ children, pathname }: { children: React.ReactNode; pathname: string }) {
+  const router = useRouter();
   const { status } = useSession();
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -17,15 +23,19 @@ export function AppWorkspaceShell({ children }: { children: React.ReactNode }) {
     window.requestAnimationFrame(() => menuButtonRef.current?.focus());
   }, []);
 
-  if (pathname?.startsWith("/login")) return <>{children}</>;
-  if (status === "loading") {
+  useEffect(() => {
+    if (pathname?.startsWith("/login") || status !== "unauthenticated") return;
+    const callbackUrl = pathname && pathname !== "/" ? pathname : "/dashboard";
+    router.replace(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
+  }, [pathname, router, status]);
+
+  if (status === "loading" || status === "unauthenticated") {
     return (
       <div role="status" className="grid min-h-dvh place-items-center bg-slate-950 text-sm text-slate-400">
-        Chargement de l&apos;espace SEO…
+        {status === "loading" ? "Vérification de la session…" : "Redirection vers la connexion…"}
       </div>
     );
   }
-  if (status !== "authenticated") return <>{children}</>;
 
   const currentTool = dashboardToolForPath(pathname ?? "/dashboard");
   return (

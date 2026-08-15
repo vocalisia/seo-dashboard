@@ -9,6 +9,17 @@ type Props = {
   credentialsEnabled: boolean;
 };
 
+export function safeDashboardCallback(rawValue: string | null): string {
+  if (!rawValue || !rawValue.startsWith("/") || rawValue.startsWith("//")) return "/dashboard";
+  try {
+    const url = new URL(rawValue, "https://dashboard.local");
+    if (url.origin !== "https://dashboard.local" || url.pathname.startsWith("/login")) return "/dashboard";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/dashboard";
+  }
+}
+
 export function LoginForm({ credentialsEnabled }: Props) {
   const router = useRouter();
   const [username, setUsername] = useState("");
@@ -20,14 +31,15 @@ export function LoginForm({ credentialsEnabled }: Props) {
     e.preventDefault();
     setLoading(true);
     setError("");
+    const callbackUrl = safeDashboardCallback(new URLSearchParams(window.location.search).get("callbackUrl"));
     const res = await signIn("credentials", {
       username,
       password,
       redirect: false,
-      callbackUrl: "/dashboard",
+      callbackUrl,
     });
     if (res?.ok) {
-      router.push("/dashboard");
+      router.push(callbackUrl);
     } else {
       setError("Login ou mot de passe incorrect.");
     }
@@ -82,7 +94,7 @@ export function LoginForm({ credentialsEnabled }: Props) {
           </form>
         ) : (
           <p className="text-gray-500 text-center text-sm">
-            Connexion indisponible. Configure les variables d&apos;acc?s du dashboard.
+            Connexion indisponible. Configure les variables d&apos;accès du dashboard.
           </p>
         )}
       </div>

@@ -18,11 +18,12 @@ import { getSQL } from "@/lib/db";
 import { getAnalyticsClient } from "@/lib/google-auth";
 import { requireApiSession } from "@/lib/api-auth";
 import { siteCountryCode } from "@/lib/site-country";
+import { buildTrafficSummary, type TrafficWindow } from "@/lib/ga4-traffic-summary";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-type Window = "7d" | "28d" | "90d";
+type Window = TrafficWindow;
 
 const WINDOW_DAYS: Record<Window, number> = { "7d": 7, "28d": 28, "90d": 90 };
 
@@ -343,33 +344,40 @@ export async function GET(req: Request) {
         return cached.data;
       }
       const data = await fetchSiteTraffic(site, win);
-      CACHE.set(cacheKey, { data, ts: now });
+      // A provider/configuration failure must not be served as fresh data for
+      // fifteen minutes. Only cache successful GA4 measurements.
+      if (data.error === null) CACHE.set(cacheKey, { data, ts: now });
       return data;
     });
 
-    // Portfolio summary
-    const totalUsers = results.reduce((acc, r) => acc + r.global.users, 0);
-    const totalPerDay = results.reduce((acc, r) => acc + r.per_day.users, 0);
-    const sortedByUsers = [...results].sort((a, b) => b.global.users - a.global.users);
-    const summary = {
-      sites_count: results.length,
-      total_users: totalUsers,
-      avg_users_per_day: totalPerDay,
-      top_3: sortedByUsers.slice(0, 3).map((r) => ({
-        site: r.site_name,
-        users: r.global.users,
-        per_day: r.per_day.users,
-      })),
-      bottom_3: sortedByUsers
-        .filter((r) => r.error === null)
-        .slice(-3)
-        .reverse()
-        .map((r) => ({ site: r.site_name, users: r.global.users, per_day: r.per_day.users })),
-      window: win,
-      window_days: WINDOW_DAYS[win],
-    };
+    // Portfolio totals only include successful measurements. An unavailable
+    // property is not equivalent to a measured zero.
+    const { measuredResults, failedResults, summary } = buildTrafficSummary(results, win);
 
-    return NextResponse.json({ success: true, summary, sites: results });
+    if (measuredResults.length === 0) {
+      const onlyMissingConfiguration = failedResults.every((result) => result.error === "ga_property_id not configured");
+      return NextResponse.json(
+        {
+          success: false,
+          partial: false,
+          status: onlyMissingConfiguration ? "not_configured" : "unavailable",
+          error: onlyMissingConfiguration
+            ? "Aucune propriété GA4 valide n'est configurée pour la sélection."
+            : "Aucune mesure GA4 n'a pu être récupérée.",
+          summary,
+          sites: results,
+        },
+        { status: onlyMissingConfiguration ? 422 : 502 },
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      partial: failedResults.length > 0,
+      status: failedResults.length > 0 ? "partial" : "complete",
+      summary,
+      sites: results,
+    });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ success: false, error: message }, { status: 500 });

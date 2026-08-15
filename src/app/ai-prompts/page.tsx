@@ -10,6 +10,52 @@ interface PromptItem {
   reasoning: string;
 }
 
+type PromptSource = "local_engine" | "validated_cache" | "validated_ai";
+
+interface PromptPayload {
+  success: true;
+  prompts: PromptItem[];
+  notice: string;
+  source: PromptSource;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isPromptItem(value: unknown): value is PromptItem {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.prompt === "string"
+    && item.prompt.trim().length > 0
+    && ["info", "transac", "comm", "nav"].includes(String(item.intent))
+    && typeof item.reasoning === "string";
+}
+
+function isPromptSource(value: unknown): value is PromptSource {
+  return value === "local_engine" || value === "validated_cache" || value === "validated_ai";
+}
+
+function parsePromptPayload(value: unknown): PromptPayload | null {
+  if (!isRecord(value)
+    || value.success !== true
+    || !Array.isArray(value.prompts)
+    || value.prompts.length === 0
+    || !value.prompts.every(isPromptItem)
+    || typeof value.notice !== "string"
+    || !isPromptSource(value.source)) {
+    return null;
+  }
+  return value as unknown as PromptPayload;
+}
+
+function apiError(value: unknown, fallback: string): string {
+  if (!isRecord(value)) return fallback;
+  if (typeof value.error === "string" && value.error.trim()) return value.error;
+  if (typeof value.message === "string" && value.message.trim()) return value.message;
+  return fallback;
+}
+
 const INTENT_LABELS: Record<string, string> = {
   info: "Informationnel",
   transac: "Transactionnel",
@@ -41,28 +87,36 @@ export default function AIPromptsPage() {
   const [sourceNotice, setSourceNotice] = useState<string | null>(null);
 
   async function generate() {
-    if (!topic.trim()) return;
+    const requestedTopic = topic.trim();
+    if (!requestedTopic) return;
     setLoading(true);
     setError(null);
-    setPrompts([]);
-    setSourceNotice(null);
     try {
       const res = await fetch("/api/ai-prompts/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: topic.trim(), lang }),
+        body: JSON.stringify({ topic: requestedTopic, lang }),
       });
-      const data = await res.json() as { success: boolean; prompts?: PromptItem[]; notice?: string; error?: string };
-      if (data.success && data.prompts) {
-        setPrompts(data.prompts);
-        setSourceNotice(data.notice ?? null);
-      } else {
-        setError(data.error ?? "Erreur inconnue");
+      const data = await res.json().catch(() => null) as unknown;
+      if (!res.ok) {
+        throw new Error(apiError(data, `Génération impossible (HTTP ${res.status})`));
       }
+      const parsed = parsePromptPayload(data);
+      if (!parsed) throw new Error("La réponse reçue ne respecte pas le contrat attendu pour les prompts.");
+
+      setPrompts(parsed.prompts);
+      const source = parsed.source === "local_engine"
+        ? "Moteur local déterministe"
+        : parsed.source === "validated_cache"
+          ? "Réponse externe validée depuis le cache"
+          : "Réponse externe validée";
+      setSourceNotice(`${source} pour « ${requestedTopic} ». ${parsed.notice}`.trim());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur réseau");
+      const message = err instanceof Error ? err.message : "Erreur réseau pendant la génération.";
+      setError(`${message}${prompts.length > 0 ? " Le dernier résultat validé reste affiché." : ""}`);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   function exportCSV() {
@@ -100,29 +154,29 @@ export default function AIPromptsPage() {
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
           <div className="grid grid-cols-3 gap-4">
             <div className="col-span-2">
-              <label className="text-xs text-gray-400 uppercase block mb-1">Thème / Mot-clé</label>
-              <input id="ai-prompt-topic" aria-label="Thème ou mot-clé" value={topic} onChange={(e) => setTopic(e.target.value)}
+              <label htmlFor="ai-prompt-topic" className="text-xs text-gray-400 uppercase block mb-1">Thème / Mot-clé</label>
+              <input id="ai-prompt-topic" value={topic} onChange={(e) => setTopic(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") void generate(); }}
                 placeholder="ex: logiciel comptabilité PME"
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
             <div>
-              <label className="text-xs text-gray-400 uppercase block mb-1">Langue</label>
-              <select id="ai-prompt-language" aria-label="Langue" value={lang} onChange={(e) => setLang(e.target.value as typeof lang)}
+              <label htmlFor="ai-prompt-language" className="text-xs text-gray-400 uppercase block mb-1">Langue</label>
+              <select id="ai-prompt-language" value={lang} onChange={(e) => setLang(e.target.value as typeof lang)}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
                 {LANG_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </div>
           </div>
           <div className="flex gap-3">
-            <button onClick={generate} disabled={loading || !topic.trim()}
-              className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors">
+            <button type="button" onClick={generate} disabled={loading || !topic.trim()}
+              className="flex min-h-11 items-center gap-2 px-5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors">
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
               {loading ? "Génération..." : "Générer 30 prompts"}
             </button>
             {prompts.length > 0 && (
-              <button onClick={exportCSV}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+              <button type="button" onClick={exportCSV}
+                className="flex min-h-11 items-center gap-2 px-4 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
                 <Download className="w-4 h-4" /> Export CSV
               </button>
             )}
@@ -159,7 +213,7 @@ export default function AIPromptsPage() {
                         </div>
                         <a
                           href={`/ai-visibility?query=${encodeURIComponent(p.prompt)}`}
-                          className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded text-xs transition-all"
+                          className="flex min-h-11 items-center gap-1 rounded bg-blue-600/20 px-3 text-xs text-blue-300 opacity-70 transition-all hover:bg-blue-600/40 hover:opacity-100 focus-visible:opacity-100"
                         >
                           <ExternalLink className="w-3 h-3" /> Tester
                         </a>
@@ -174,7 +228,7 @@ export default function AIPromptsPage() {
 
         {!loading && prompts.length === 0 && !error && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center text-gray-500 text-sm">
-            Saisis un thème et génère 30 prompts IA à cibler
+            Saisis un thème. Le moteur local fonctionne sans API ; un fournisseur externe n&apos;est utilisé que si le serveur l&apos;autorise explicitement.
           </div>
         )}
       </div>

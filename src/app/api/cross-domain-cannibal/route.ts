@@ -1,3 +1,4 @@
+import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
@@ -25,6 +26,9 @@ interface CrossCannib {
 }
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const days = parseInt(request.nextUrl.searchParams.get("days") || "28");
   const limit = parseInt(request.nextUrl.searchParams.get("limit") || "50");
 

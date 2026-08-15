@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { getGoogleAuth } from "@/lib/google-auth";
 import { isVerifiedBacklinkRow } from "@/lib/backlink-data";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -117,6 +118,9 @@ function buildResponse(links: LinkRow[], source: string) {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = await requireApiSession();
+  if (auth.unauthorized) return auth.unauthorized;
+
   const startedAt = Date.now();
   try {
     const { searchParams } = new URL(req.url);

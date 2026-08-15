@@ -2,41 +2,82 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { assertPublicHttpUrl } from "@/lib/safe-url";
 import { requireApiSession } from "@/lib/api-auth";
+import { extractPageSpeedMetrics, runOriginPerformanceProbe } from "@/lib/pagespeed";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-interface PageSpeedMetrics {
-  score: number;
-  lcp: number;
-  cls: number;
-  fcp: number;
-  ttfb: number;
-  inp: number;
+interface CachedPageSpeedRow {
+  url: string;
+  mobile_score: number;
+  desktop_score: number;
+  mobile_lcp: number;
+  desktop_lcp: number;
+  mobile_cls: number;
+  desktop_cls: number;
+  mobile_fcp: number;
+  desktop_fcp: number;
+  mobile_ttfb: number;
+  desktop_ttfb: number;
+  checked_at: string;
 }
 
-function extractMetrics(data: Record<string, unknown>): PageSpeedMetrics {
-  const cats = data.categories as Record<string, Record<string, unknown>> | undefined;
-  const score = Math.round(Number(cats?.performance?.score ?? 0) * 100);
+async function readCachedMeasurement(siteId: number) {
+  try {
+    const sql = getSQL();
+    const rows = await sql`
+      SELECT url, mobile_score, desktop_score,
+        mobile_lcp, desktop_lcp, mobile_cls, desktop_cls,
+        mobile_fcp, desktop_fcp, mobile_ttfb, desktop_ttfb,
+        checked_at::text
+      FROM pagespeed_scores
+      WHERE site_id = ${siteId}
+      ORDER BY checked_at DESC
+      LIMIT 1
+    ` as CachedPageSpeedRow[];
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      mobile: { score: Number(row.mobile_score), lcp: Number(row.mobile_lcp), cls: Number(row.mobile_cls), fcp: Number(row.mobile_fcp), ttfb: Number(row.mobile_ttfb), inp: 0 },
+      desktop: { score: Number(row.desktop_score), lcp: Number(row.desktop_lcp), cls: Number(row.desktop_cls), fcp: Number(row.desktop_fcp), ttfb: Number(row.desktop_ttfb), inp: 0 },
+      url: row.url,
+      measurement_status: "cache" as const,
+      checked_at: row.checked_at,
+    };
+  } catch {
+    return null;
+  }
+}
 
-  const audits = data.lighthouseResult
-    ? (data.lighthouseResult as Record<string, unknown>).audits as Record<string, Record<string, unknown>>
-    : {};
+async function fallbackMeasurementResponse(
+  siteId: number | null,
+  url: string,
+  notice: string,
+): Promise<NextResponse | null> {
+  if (siteId) {
+    const cached = await readCachedMeasurement(siteId);
+    if (cached) {
+      return NextResponse.json({
+        ...cached,
+        measurement_notice: notice,
+        live_measurement_status: "unavailable",
+      });
+    }
+  }
 
-  const numVal = (key: string): number => {
-    const audit = audits[key];
-    if (!audit) return 0;
-    return Number(audit.numericValue ?? 0) / 1000;
-  };
-
-  return {
-    score,
-    lcp: Math.round(numVal("largest-contentful-paint") * 100) / 100,
-    cls: Math.round(Number(audits["cumulative-layout-shift"]?.numericValue ?? 0) * 1000) / 1000,
-    fcp: Math.round(numVal("first-contentful-paint") * 100) / 100,
-    ttfb: Math.round(numVal("server-response-time") * 100) / 100,
-    inp: Math.round(numVal("interaction-to-next-paint") * 100) / 100,
-  };
+  try {
+    const originProbe = await runOriginPerformanceProbe(url);
+    return NextResponse.json({
+      url,
+      measurement_status: "origin_probe",
+      checked_at: new Date().toISOString(),
+      measurement_notice: `${notice} Un diagnostic réseau mobile et desktop réel est affiché à la place; il ne s’agit pas d’un score Lighthouse.`,
+      live_measurement_status: "unavailable",
+      origin_probe: originProbe,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -47,6 +88,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const url = searchParams.get("url");
     const siteId = searchParams.get("site_id");
+    const cacheOnly = searchParams.get("mode") === "cache";
     const numericSiteId = siteId && /^[1-9]\d*$/.test(siteId) ? Number(siteId) : null;
 
     if (!url) return NextResponse.json({ error: "url required" }, { status: 400 });
@@ -62,41 +104,45 @@ export async function GET(req: NextRequest) {
     }
 
     const normalizedUrl = safeUrl.toString();
+    if (cacheOnly) {
+      if (!numericSiteId) return NextResponse.json({ error: "site_id required for cache mode" }, { status: 400 });
+      const cached = await readCachedMeasurement(numericSiteId);
+      if (!cached) return NextResponse.json({ error: "Aucune mesure PageSpeed sauvegardée pour ce site" }, { status: 404 });
+      return NextResponse.json(cached);
+    }
     const encodedUrl = encodeURIComponent(normalizedUrl);
     const apiKey = process.env.PAGESPEED_API_KEY;
     const keyParam = apiKey ? `&key=${apiKey}` : "";
     const baseUrl = `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodedUrl}${keyParam}`;
 
-    // Séquentiel pour éviter le rate-limit (1 QPS sans clé)
-    const mobileRes = await fetch(`${baseUrl}&strategy=mobile`, { signal: AbortSignal.timeout(60000) });
-    await new Promise((r) => setTimeout(r, 1100));
-    const desktopRes = await fetch(`${baseUrl}&strategy=desktop`, { signal: AbortSignal.timeout(60000) });
-
-    if (!mobileRes.ok || !desktopRes.ok) {
-      const failedResponse = !mobileRes.ok ? mobileRes : desktopRes;
+    const fallbackFor = async (failedResponse: Response) => {
       const errBody = await failedResponse.text().catch(() => "");
       const isQuota = failedResponse.status === 429 || errBody.includes("429");
-
-      if (isQuota) {
-        return NextResponse.json(
-          { error: "Google PageSpeed limite temporairement les requetes. Reessaie dans une minute." },
-          { status: 429, headers: { "Retry-After": "60" } },
-        );
-      }
-
+      const notice = isQuota
+        ? "Google limite temporairement les mesures PageSpeed live."
+        : `Mesure PageSpeed live indisponible (HTTP ${failedResponse.status}).`;
+      const fallback = await fallbackMeasurementResponse(numericSiteId, normalizedUrl, notice);
+      if (fallback) return fallback;
       return NextResponse.json(
-        { error: `PageSpeed API error (${failedResponse.status})` },
-        { status: 502 },
+        { error: isQuota ? "Google PageSpeed limite temporairement les requêtes et le diagnostic de secours a échoué." : `PageSpeed API error (${failedResponse.status})` },
+        { status: isQuota ? 429 : 502, headers: isQuota ? { "Retry-After": "60" } : undefined },
       );
-    }
+    };
+
+    // Séquentiel pour éviter le rate-limit public et arrêt immédiat si le premier appel échoue.
+    const mobileRes = await fetch(`${baseUrl}&strategy=mobile`, { signal: AbortSignal.timeout(24000) });
+    if (!mobileRes.ok) return fallbackFor(mobileRes);
+    await new Promise((r) => setTimeout(r, 1100));
+    const desktopRes = await fetch(`${baseUrl}&strategy=desktop`, { signal: AbortSignal.timeout(24000) });
+    if (!desktopRes.ok) return fallbackFor(desktopRes);
 
     const [mobileData, desktopData] = await Promise.all([
       mobileRes.json() as Promise<Record<string, unknown>>,
       desktopRes.json() as Promise<Record<string, unknown>>,
     ]);
 
-    const mobile = extractMetrics(mobileData);
-    const desktop = extractMetrics(desktopData);
+    const mobile = extractPageSpeedMetrics(mobileData);
+    const desktop = extractPageSpeedMetrics(desktopData);
 
     if (numericSiteId) {
       try {
@@ -116,9 +162,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ mobile, desktop, url: normalizedUrl });
+    return NextResponse.json({ mobile, desktop, url: normalizedUrl, measurement_status: "live", checked_at: new Date().toISOString() });
   } catch (err) {
     console.error(err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    const isTimeout = err instanceof Error && /timeout|timed out|abort/i.test(`${err.name} ${err.message}`);
+    const rawSiteId = new URL(req.url).searchParams.get("site_id");
+    const fallbackSiteId = rawSiteId && /^[1-9]\d*$/.test(rawSiteId) ? Number(rawSiteId) : null;
+    const fallback = await fallbackMeasurementResponse(
+      fallbackSiteId,
+      new URL(req.url).searchParams.get("url") ?? "",
+      isTimeout
+        ? "Google PageSpeed n'a pas répondu dans le délai de sécurité."
+        : "La mesure PageSpeed live est indisponible.",
+    );
+    if (fallback) return fallback;
+    return NextResponse.json({ error: isTimeout ? "Google PageSpeed n'a pas répondu dans le délai de sécurité. Réessaie plus tard." : "Internal server error" }, { status: isTimeout ? 504 : 500 });
   }
 }

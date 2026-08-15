@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Loader2, Target, TrendingUp, AlertTriangle, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, Bot, Loader2, RefreshCw, Target, TrendingUp } from "lucide-react";
 import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 import { formatFixed, toFiniteNumber } from "@/lib/safe-number";
+import { isRecord, readApiJson } from "@/lib/api-response";
 
 interface Action {
   site_id: number;
@@ -19,12 +20,27 @@ interface Action {
 }
 
 interface ApiResp {
-  success: boolean;
-  generated_at?: string;
-  total_potential_clicks?: number;
-  actions?: Action[];
-  ai_summary?: string;
-  error?: string;
+  success: true;
+  generated_at: string;
+  total_potential_clicks: number;
+  actions: Action[];
+  ai_summary: string;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isApiResp(payload: unknown): payload is ApiResp {
+  return isRecord(payload) && payload.success === true
+    && typeof payload.generated_at === "string" && !Number.isNaN(Date.parse(payload.generated_at))
+    && isFiniteNumber(payload.total_potential_clicks)
+    && typeof payload.ai_summary === "string"
+    && Array.isArray(payload.actions)
+    && payload.actions.every((action) => isRecord(action)
+      && [action.site_id, action.position, action.impressions, action.clicks, action.monthly_impressions, action.potential_clicks].every(isFiniteNumber)
+      && [action.site_name, action.site_url, action.query].every((value) => typeof value === "string")
+      && (action.action_type === "push" || action.action_type === "optimize" || action.action_type === "maintain" || action.action_type === "create"));
 }
 
 const TYPE_COLOR: Record<Action["action_type"], string> = {
@@ -35,30 +51,33 @@ const TYPE_COLOR: Record<Action["action_type"], string> = {
 };
 
 const TYPE_LABEL: Record<Action["action_type"], string> = {
-  push: "🚀 Pousser top 10",
-  optimize: "✨ Optimiser CTR",
-  maintain: "🏆 Maintenir",
-  create: "📝 Créer contenu",
+  push: "Pousser top 10",
+  optimize: "Optimiser CTR",
+  maintain: "Maintenir",
+  create: "Créer contenu",
 };
 
 export default function WeeklyActionsPage() {
   const [data, setData] = useState<ApiResp | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
+    setData(null);
+    setError(null);
     try {
       const res = await fetch("/api/weekly-actions");
-      const json = await res.json() as ApiResp;
+      const json = await readApiJson(res, isApiResp, "Impossible de charger les actions de la semaine");
       setData(json);
-    } catch (e) {
-      setData({ success: false, error: e instanceof Error ? e.message : "Erreur" });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Impossible de charger les actions de la semaine");
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -80,27 +99,27 @@ export default function WeeklyActionsPage() {
       </header>
 
       <main className="p-6 space-y-6">
-        {loading && !data && (
+        {loading && (
           <div className="flex flex-col items-center justify-center py-24 gap-3 text-gray-400">
             <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
             <div>Calcul des opportunités multi-sites...</div>
           </div>
         )}
 
-        {data?.error && (
-          <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-4 text-red-300">
+        {error && (
+          <div role="alert" className="bg-red-900/30 border border-red-700/50 rounded-lg p-4 text-red-300">
             <AlertTriangle className="inline w-4 h-4 mr-2" />
-            {data.error}
+            Erreur de chargement : {error}
           </div>
         )}
 
-        {data?.success && data.actions && data.actions.length === 0 && (
+        {data && data.actions.length === 0 && (
           <div className="bg-gray-900 border border-gray-800 rounded-lg p-8 text-center text-gray-400">
             Pas de quick wins détectés cette semaine. Synchronise GSC ou attends plus de données.
           </div>
         )}
 
-        {data?.success && data.actions && data.actions.length > 0 && (
+        {data && data.actions.length > 0 && (
           <>
             {/* Header KPI */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -108,7 +127,7 @@ export default function WeeklyActionsPage() {
                 <div className="text-xs text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1">
                   <TrendingUp className="w-3 h-3" /> Potentiel total
                 </div>
-                <div className="text-3xl font-bold text-orange-400">+{data.total_potential_clicks?.toLocaleString()}</div>
+                <div className="text-3xl font-bold text-orange-400">+{data.total_potential_clicks.toLocaleString()}</div>
                 <div className="text-xs text-gray-500 mt-1">estimation sur impressions GSC réelles</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
@@ -118,7 +137,7 @@ export default function WeeklyActionsPage() {
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
                 <div className="text-xs text-gray-400 uppercase tracking-wider mb-2">Généré</div>
-                <div className="text-sm font-semibold text-gray-300">{data.generated_at ? new Date(data.generated_at).toLocaleString("fr-FR") : "—"}</div>
+                <div className="text-sm font-semibold text-gray-300">{new Date(data.generated_at).toLocaleString("fr-FR")}</div>
                 <div className="text-xs text-gray-500 mt-1">re-clic pour rafraîchir</div>
               </div>
             </div>
@@ -127,7 +146,8 @@ export default function WeeklyActionsPage() {
             {data.ai_summary && (
               <div className="bg-gradient-to-br from-blue-950/40 to-purple-950/40 border border-blue-500/30 rounded-xl p-6">
                 <div className="text-xs uppercase tracking-wider text-blue-400 font-semibold mb-3 flex items-center gap-2">
-                  🤖 Plan d&apos;action — Head of SEO IA
+                  <Bot className="h-4 w-4" aria-hidden="true" />
+                  Plan d&apos;action — Head of SEO IA
                 </div>
                 <div className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap">
                   {data.ai_summary}

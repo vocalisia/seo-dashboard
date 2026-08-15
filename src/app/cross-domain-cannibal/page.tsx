@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Loader2, ChevronLeft, GitMerge, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { AlertTriangle, Loader2, ChevronLeft, GitMerge, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { formatFixed, toFiniteNumber } from "@/lib/safe-number";
+import { isRecord, readApiJson } from "@/lib/api-response";
 
 interface SitePerf {
   site_id: number; site_name: string; page: string;
@@ -16,21 +17,51 @@ interface Conflict {
   best_site: string; worst_position_diff: number;
   suggested_action: string;
 }
+type LoadState = "loading" | "ready" | "error";
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isSitePerf(value: unknown): value is SitePerf {
+  return isRecord(value)
+    && isFiniteNumber(value.site_id)
+    && typeof value.site_name === "string"
+    && typeof value.page === "string"
+    && [value.clicks, value.impressions, value.position].every(isFiniteNumber);
+}
+
+function isConflictList(payload: unknown): payload is Conflict[] {
+  return Array.isArray(payload) && payload.every((row) =>
+    isRecord(row)
+    && typeof row.query === "string"
+    && typeof row.best_site === "string"
+    && typeof row.suggested_action === "string"
+    && [row.total_impressions, row.total_clicks, row.sites_count, row.worst_position_diff].every(isFiniteNumber)
+    && Array.isArray(row.sites)
+    && row.sites.every(isSitePerf)
+  );
+}
 
 export default function CrossDomainCannibalPage() {
   const [rows, setRows] = useState<Conflict[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [error, setError] = useState<string | null>(null);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    fetch("/api/cross-domain-cannibal?days=28&limit=100")
-      .then(r => r.json())
-      .then((data: unknown) => {
-        if (Array.isArray(data)) setRows(data as Conflict[]);
-      })
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
+  const loadConflicts = useCallback(async () => {
+    try {
+      const response = await fetch("/api/cross-domain-cannibal?days=28&limit=100");
+      const data = await readApiJson(response, isConflictList, "Impossible de charger les conflits inter-sites");
+      setRows(data);
+      setLoadState("ready");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Impossible de charger les conflits inter-sites");
+      setLoadState("error");
+    }
   }, []);
+
+  useEffect(() => { void Promise.resolve().then(loadConflicts); }, [loadConflicts]);
 
   const totalImp = rows.reduce((s, r) => s + toFiniteNumber(r.total_impressions), 0);
   const allSites = new Set<string>();
@@ -47,7 +78,7 @@ export default function CrossDomainCannibalPage() {
         </div>
       </header>
 
-      <div className="px-6 py-4 grid grid-cols-3 gap-4">
+      {loadState === "ready" && <div className="px-6 py-4 grid grid-cols-3 gap-4">
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400">Conflits inter-sites</div>
           <div className="text-2xl font-bold text-pink-400">{rows.length}</div>
@@ -60,10 +91,10 @@ export default function CrossDomainCannibalPage() {
           <div className="text-xs text-gray-400">Impressions cumulées</div>
           <div className="text-2xl font-bold text-blue-400">{totalImp.toLocaleString()}</div>
         </div>
-      </div>
+      </div>}
 
       <div className="px-6 pb-10 space-y-2">
-        {!loading && rows.length > 0 && (
+        {loadState === "ready" && rows.length > 0 && (
           <div className="flex justify-end pb-1">
             <button type="button"
               onClick={() => expandedKeys.size === rows.length ? setExpandedKeys(new Set()) : setExpandedKeys(new Set(rows.map(r => r.query)))}
@@ -73,10 +104,15 @@ export default function CrossDomainCannibalPage() {
             </button>
           </div>
         )}
-        {loading ? (
+        {loadState === "loading" ? (
           <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-pink-500" /></div>
+        ) : loadState === "error" ? (
+          <div role="alert" className="rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+            <AlertTriangle className="mr-2 inline h-4 w-4" />
+            Erreur de chargement : {error ?? "réponse indisponible"}
+          </div>
         ) : rows.length === 0 ? (
-          <div className="py-12 text-center text-gray-500">Aucun conflit cross-domain — tes sites se respectent 🎉</div>
+          <div className="py-12 text-center text-gray-500">Aucun conflit cross-domain — tes sites se respectent</div>
         ) : (
           rows.map((r, i) => {
             const isOpen = expandedKeys.has(r.query);

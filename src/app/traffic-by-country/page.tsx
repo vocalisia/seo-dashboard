@@ -1,68 +1,116 @@
 "use client";
 
-/**
- * /traffic-by-country — REAL visitor metrics per site, broken down by country.
- *
- * Surfaces `totalUsers` (deduped humans) instead of `eventCount`. Prevents the
- * confusion that led the user to think vocalis.pro had 60/day USA when reality
- * is 7-8 humans.
- */
-
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft, Loader2, RefreshCw, Globe, AlertTriangle, Info, ExternalLink, Users,
 } from "lucide-react";
+import { getApiErrorMessage, isRecord } from "@/lib/api-response";
 
 type Window = "7d" | "28d" | "90d";
 
-interface CountryMetrics {
-  country: string;
-  users: number;
-  sessions: number;
-  pageviews: number;
-  engagement_rate: number;
-}
+interface CountryMetrics { country: string; users: number; sessions: number; pageviews: number; engagement_rate: number }
 
 interface TopPage { page: string; users: number; sessions: number }
 interface TopSource { channel: string; users: number; sessions: number }
-
 interface SiteTraffic {
-  site_id: number;
-  site_name: string;
-  site_url: string;
-  ga_property_id: string | null;
-  window: Window;
-  window_days: number;
+  site_id: number; site_name: string; site_url: string; ga_property_id: string | null;
+  window: Window; window_days: number;
   primary_market: { iso3: string; ga4_name: string; metrics: CountryMetrics | null };
   usa: CountryMetrics | null;
   global: CountryMetrics;
-  top_countries: CountryMetrics[];
-  top_pages: TopPage[];
-  top_sources: TopSource[];
+  top_countries: CountryMetrics[]; top_pages: TopPage[]; top_sources: TopSource[];
   per_day: { users: number; sessions: number; pageviews: number };
-  warnings: string[];
-  error: string | null;
-  fetched_at: string;
+  warnings: string[]; error: string | null; fetched_at: string;
 }
 
 interface Summary {
-  sites_count: number;
-  total_users: number;
-  avg_users_per_day: number;
+  sites_count: number; requested_sites: number; failed_sites: number;
+  total_users: number; avg_users_per_day: number;
   top_3: { site: string; users: number; per_day: number }[];
   bottom_3: { site: string; users: number; per_day: number }[];
-  window: Window;
-  window_days: number;
+  window: Window; window_days: number;
 }
 
-interface ApiResponse {
-  success: boolean;
-  summary?: Summary;
-  sites?: SiteTraffic[];
-  error?: string;
+interface ApiSuccess { success: true; partial: boolean; status: "complete" | "partial"; summary: Summary; sites: SiteTraffic[] }
+interface ApiFailure {
+  success: false; partial?: false; status?: "not_configured" | "unavailable";
+  summary?: Summary; sites?: SiteTraffic[]; error: string;
+}
+type ApiResponse = ApiSuccess | ApiFailure;
+function isFiniteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
+function isWindow(value: unknown): value is Window { return value === "7d" || value === "28d" || value === "90d"; }
+function isStringList(value: unknown): value is string[] { return Array.isArray(value) && value.every((item) => typeof item === "string"); }
+function isMetrics(value: unknown): value is CountryMetrics {
+  return isRecord(value) && typeof value.country === "string"
+    && [value.users, value.sessions, value.pageviews, value.engagement_rate].every(isFiniteNumber);
+}
+function isTopPage(value: unknown): value is TopPage {
+  return isRecord(value) && typeof value.page === "string" && [value.users, value.sessions].every(isFiniteNumber);
+}
+function isTopSource(value: unknown): value is TopSource {
+  return isRecord(value) && typeof value.channel === "string" && [value.users, value.sessions].every(isFiniteNumber);
+}
+function isSiteTraffic(value: unknown): value is SiteTraffic {
+  return isRecord(value) && isFiniteNumber(value.site_id)
+    && [value.site_name, value.site_url].every((item) => typeof item === "string")
+    && typeof value.fetched_at === "string" && !Number.isNaN(Date.parse(value.fetched_at))
+    && (value.ga_property_id === null || typeof value.ga_property_id === "string")
+    && isWindow(value.window) && isFiniteNumber(value.window_days)
+    && isRecord(value.primary_market) && typeof value.primary_market.iso3 === "string"
+    && typeof value.primary_market.ga4_name === "string"
+    && (value.primary_market.metrics === null || isMetrics(value.primary_market.metrics))
+    && (value.usa === null || isMetrics(value.usa)) && isMetrics(value.global)
+    && Array.isArray(value.top_countries) && value.top_countries.every(isMetrics)
+    && Array.isArray(value.top_pages) && value.top_pages.every(isTopPage)
+    && Array.isArray(value.top_sources) && value.top_sources.every(isTopSource)
+    && isRecord(value.per_day) && [value.per_day.users, value.per_day.sessions, value.per_day.pageviews].every(isFiniteNumber)
+    && isStringList(value.warnings) && (value.error === null || (typeof value.error === "string" && value.error.trim().length > 0));
+}
+function isSummary(value: unknown): value is Summary {
+  const isRanked = (item: unknown) => isRecord(item) && typeof item.site === "string" && [item.users, item.per_day].every(isFiniteNumber);
+  return isRecord(value)
+    && [value.sites_count, value.requested_sites, value.failed_sites, value.total_users, value.avg_users_per_day, value.window_days].every(isFiniteNumber)
+    && isWindow(value.window) && Array.isArray(value.top_3) && value.top_3.every(isRanked)
+    && Array.isArray(value.bottom_3) && value.bottom_3.every(isRanked);
+}
+function hasConsistentCounts(summary: Summary, sites: SiteTraffic[]): boolean {
+  const measured = sites.filter((site) => site.error === null);
+  const failed = sites.filter((site) => site.error !== null);
+  const rankings = [...summary.top_3, ...summary.bottom_3];
+  return summary.requested_sites === sites.length && summary.sites_count === measured.length
+    && summary.failed_sites === failed.length
+    && sites.every((site) => site.window === summary.window && site.window_days === summary.window_days)
+    && summary.total_users === measured.reduce((total, site) => total + site.global.users, 0)
+    && summary.avg_users_per_day === measured.reduce((total, site) => total + site.per_day.users, 0)
+    && rankings.every((rank) => measured.some((site) => site.site_name === rank.site && site.global.users === rank.users && site.per_day.users === rank.per_day));
+}
+function isApiResponse(value: unknown): value is ApiResponse {
+  if (!isRecord(value) || typeof value.success !== "boolean") return false;
+  const sitesValid = value.sites === undefined || (Array.isArray(value.sites) && value.sites.every(isSiteTraffic));
+  const summaryValid = value.summary === undefined || isSummary(value.summary);
+  if (!sitesValid || !summaryValid) return false;
+  if (value.success) return ((value.partial === false && value.status === "complete") || (value.partial === true && value.status === "partial"))
+    && isSummary(value.summary) && value.partial === (value.summary.failed_sites > 0)
+    && Array.isArray(value.sites) && hasConsistentCounts(value.summary, value.sites);
+  return typeof value.error === "string" && value.error.trim().length > 0
+    && (value.partial === undefined || value.partial === false)
+    && (value.status === undefined || value.status === "not_configured" || value.status === "unavailable")
+    && ((value.summary === undefined && value.sites === undefined)
+      || (isSummary(value.summary) && Array.isArray(value.sites) && hasConsistentCounts(value.summary, value.sites)));
 }
 
+async function readTrafficResponse(response: Response): Promise<ApiResponse> {
+  let payload: unknown;
+  try { payload = await response.json(); }
+  catch { throw new Error(`Réponse GA4 invalide (JSON, HTTP ${response.status})`); }
+  if (!isApiResponse(payload)) throw new Error(getApiErrorMessage(payload, "Réponse GA4 invalide"));
+  if (!response.ok) {
+    if (payload.success) throw new Error(`Réponse GA4 incohérente (HTTP ${response.status})`);
+    return payload;
+  }
+  return payload;
+}
 const FLAGS: Record<string, string> = {
   FRA: "🇫🇷", CHE: "🇨🇭", BEL: "🇧🇪", CAN: "🇨🇦", USA: "🇺🇸",
 };
@@ -134,12 +182,19 @@ function MetricCell({
 function SiteCard({ site }: { site: SiteTraffic }) {
   const days = site.window_days;
   const perDay = site.per_day.users;
+  const primaryFlag = FLAGS[site.primary_market.iso3];
+  const borderColor = site.error ? "border-zinc-700" : usersPerDayBorder(perDay);
   return (
-    <div className={`rounded-xl border-2 ${usersPerDayBorder(perDay)} bg-zinc-950/50 p-4 shadow`}>
+    <div className={`rounded-xl border-2 ${borderColor} bg-zinc-950/50 p-4 shadow`}>
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-lg font-semibold text-zinc-100">
-            {FLAGS[site.primary_market.iso3] ?? "🌍"} {site.site_name}
+            {primaryFlag ? (
+              <span aria-hidden="true">{primaryFlag} </span>
+            ) : (
+              <Globe className="mr-1 inline h-4 w-4 text-zinc-400" aria-hidden="true" />
+            )}
+            {site.site_name}
           </div>
           <a
             href={site.site_url}
@@ -157,9 +212,9 @@ function SiteCard({ site }: { site: SiteTraffic }) {
       </div>
 
       {site.error ? (
-        <div className="rounded-lg border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+        <div role="status" className="rounded-lg border border-red-700 bg-red-950/40 px-3 py-2 text-sm text-red-300">
           <AlertTriangle className="mr-1 inline h-4 w-4" />
-          {site.error}
+          Données GA4 indisponibles : {site.error}. Ce site n’est pas compté comme un zéro mesuré.
         </div>
       ) : (
         <>
@@ -277,35 +332,36 @@ export default function TrafficByCountryPage() {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
 
-  async function fetchData() {
+  const fetchData = useCallback(async () => {
     setLoading(true);
+    setData(null);
+    setLastLoadedAt(null);
+    let timeout: number | undefined;
     try {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 65000);
+      timeout = window.setTimeout(() => controller.abort(), 65000);
       const res = await fetch(`/api/ga4-traffic?window=${windowKey}`, { cache: "no-store", signal: controller.signal });
-      window.clearTimeout(timeout);
-      const json: ApiResponse = await res.json();
+      const json = await readTrafficResponse(res);
+      if (json.summary && json.summary.window !== windowKey) throw new Error("La fenêtre GA4 reçue ne correspond pas à la demande");
       setData(json);
       if (json.success) setLastLoadedAt(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
     } catch (err) {
       setData({
         success: false,
         error: err instanceof Error && err.name === "AbortError"
-          ? "GA4 trop long: limite 65s atteinte. Essaie 7d ou recharge."
-          : err instanceof Error ? err.message : "Network error",
+          ? "Délai GA4 dépassé après 65 secondes. Essayez la fenêtre 7 jours ou rechargez."
+          : err instanceof Error ? err.message : "Erreur réseau lors du chargement GA4",
       });
     } finally {
+      if (timeout !== undefined) window.clearTimeout(timeout);
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    void fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [windowKey]);
 
-  const sites = useMemo(() => data?.sites ?? [], [data]);
-  const summary = data?.summary;
+  useEffect(() => { void fetchData(); }, [fetchData]);
+
+  const sites = data?.sites ?? [];
+  const summary = data?.success ? data.summary : undefined;
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -364,16 +420,23 @@ export default function TrafficByCountryPage() {
           <div className="mb-3 text-xs text-zinc-500">Dernière mise à jour locale: {lastLoadedAt}</div>
         )}
 
-        {loading && !data && (
+        {loading && (
           <div className="flex h-64 items-center justify-center text-zinc-500">
-            <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Querying GA4 for {sites.length || 21} properties…
+            <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Interrogation des propriétés GA4…
           </div>
         )}
 
         {data && !data.success && (
-          <div className="rounded-lg border border-red-700 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+          <div role="alert" className="rounded-lg border border-red-700 bg-red-950/40 px-4 py-3 text-sm text-red-300">
             <AlertTriangle className="mr-1 inline h-4 w-4" />
-            {data.error ?? "Unknown error"}
+            Données GA4 indisponibles : {data.error}. Aucune propriété indisponible n’est comptée comme un zéro mesuré.
+          </div>
+        )}
+
+        {summary && summary.failed_sites > 0 && (
+          <div role="status" className="mb-4 rounded-lg border border-yellow-700 bg-yellow-950/30 px-4 py-3 text-sm text-yellow-200">
+            <AlertTriangle className="mr-1 inline h-4 w-4" />
+            Résultat partiel : {summary.failed_sites} site{summary.failed_sites > 1 ? "s" : ""} GA4 indisponible{summary.failed_sites > 1 ? "s" : ""}. Les totaux couvrent uniquement {summary.sites_count} site{summary.sites_count > 1 ? "s" : ""} mesuré{summary.sites_count > 1 ? "s" : ""} sur {summary.requested_sites} demandé{summary.requested_sites > 1 ? "s" : ""}.
           </div>
         )}
 
@@ -385,7 +448,7 @@ export default function TrafficByCountryPage() {
                 {fmtNum(summary.total_users)}
               </div>
               <div className="text-xs text-zinc-500">
-                {fmtPerDay(summary.avg_users_per_day)} users/day across {summary.sites_count} sites
+                {fmtPerDay(summary.avg_users_per_day)} utilisateurs/jour sur {summary.sites_count} site{summary.sites_count > 1 ? "s" : ""} mesuré{summary.sites_count > 1 ? "s" : ""} parmi {summary.requested_sites}
               </div>
             </div>
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
@@ -413,12 +476,12 @@ export default function TrafficByCountryPage() {
           </div>
         )}
 
-        <div className="mb-3 rounded-lg border border-blue-700/50 bg-blue-950/30 px-3 py-2 text-xs text-blue-200">
+        {data?.success && sites.length > 0 && <div className="mb-3 rounded-lg border border-blue-700/50 bg-blue-950/30 px-3 py-2 text-xs text-blue-200">
           <Globe className="mr-1 inline h-3 w-3" />
           Color code: <span className="text-red-400">red &lt; 1 user/day</span> ·{" "}
           <span className="text-yellow-400">yellow 1-5/day</span> ·{" "}
           <span className="text-emerald-400">green &gt; 5/day</span>. Bot warning = ≥5 USA users with engagement_rate &lt; 30%.
-        </div>
+        </div>}
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {sites.map((s) => (

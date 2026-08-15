@@ -9,6 +9,7 @@ import { requireCronOrUser } from "@/lib/cron-auth";
 import { ensureSchema, getSQL, isDatabaseConfigured } from "@/lib/db";
 import { unifiedSearch, BrandMention } from "@/lib/brand-mentions";
 import { logError, logger } from "@/lib/logger";
+import { runOutcome } from "@/lib/run-outcome";
 
 interface SiteRow {
   id: number;
@@ -35,10 +36,11 @@ async function loadSites(siteId?: number): Promise<SiteRow[]> {
 async function storeMentions(
   siteId: number,
   mentions: BrandMention[]
-): Promise<number> {
-  if (mentions.length === 0) return 0;
+): Promise<{ inserted: number; failed: number }> {
+  if (mentions.length === 0) return { inserted: 0, failed: 0 };
   const sql = getSQL();
   let inserted = 0;
+  let failed = 0;
   for (const m of mentions) {
     try {
       const rows = (await sql`
@@ -55,10 +57,11 @@ async function storeMentions(
       `) as Array<{ id: number }>;
       if (rows.length > 0) inserted += 1;
     } catch (e) {
+      failed += 1;
       logError("brand-mentions.store", e, { siteId, source: m.source });
     }
   }
-  return inserted;
+  return { inserted, failed };
 }
 
 export async function POST(request: NextRequest) {
@@ -82,23 +85,33 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No sites found" }, { status: 404 });
   }
 
-  const summary: Array<{ site_id: number; site: string; found: number; inserted: number }> = [];
+  const summary: Array<{ site_id: number; site: string; found: number; inserted: number; store_errors: number; error?: string }> = [];
 
   for (const s of sites) {
     const domain = s.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
     const brand = brandFromName(s.name);
     try {
       const mentions = await unifiedSearch(domain, brand);
-      const inserted = await storeMentions(s.id, mentions);
-      summary.push({ site_id: s.id, site: s.name, found: mentions.length, inserted });
-      logger.info({ ctx: "brand-mentions.scan", site: s.name, found: mentions.length, inserted });
+      const stored = await storeMentions(s.id, mentions);
+      summary.push({ site_id: s.id, site: s.name, found: mentions.length, inserted: stored.inserted, store_errors: stored.failed });
+      logger.info({ ctx: "brand-mentions.scan", site: s.name, found: mentions.length, inserted: stored.inserted, store_errors: stored.failed });
     } catch (e) {
       logError("brand-mentions.scan", e, { site: s.name });
-      summary.push({ site_id: s.id, site: s.name, found: 0, inserted: 0 });
+      summary.push({ site_id: s.id, site: s.name, found: 0, inserted: 0, store_errors: 0, error: e instanceof Error ? e.message : "Scan failed" });
     }
   }
 
-  return NextResponse.json({ success: true, summary });
+  const failedSites = summary.filter((result) => Boolean(result.error)).length;
+  const storeErrors = summary.reduce((total, result) => total + result.store_errors, 0);
+  const outcome = runOutcome(sites.length - failedSites, failedSites, sites.length);
+  const partial = outcome.partial || storeErrors > 0;
+  return NextResponse.json({
+    success: outcome.success,
+    partial,
+    failed_sites: failedSites,
+    store_errors: storeErrors,
+    summary,
+  }, { status: outcome.success ? (partial ? 207 : 200) : outcome.statusCode });
 }
 
 export const GET = POST;

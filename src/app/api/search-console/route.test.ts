@@ -1,15 +1,18 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  requireApiSession: vi.fn(),
   ensureSchemaOnce: vi.fn(),
+  getSQL: vi.fn(),
   sql: vi.fn(),
   sqlCalls: [] as string[],
 }));
 
+vi.mock("@/lib/api-auth", () => ({ requireApiSession: mocks.requireApiSession }));
 vi.mock("@/lib/db", () => ({
   ensureSchemaOnce: mocks.ensureSchemaOnce,
-  getSQL: () => mocks.sql,
+  getSQL: mocks.getSQL,
 }));
 
 vi.mock("@/lib/local-dev", () => ({
@@ -28,9 +31,35 @@ function queryText(strings: TemplateStringsArray | string): string {
 
 describe("search-console keyword data correctness", () => {
   beforeEach(() => {
+    mocks.requireApiSession.mockReset();
+    mocks.requireApiSession.mockResolvedValue({
+      session: { user: { email: "tester@example.com" } },
+      unauthorized: null,
+    });
+    mocks.ensureSchemaOnce.mockReset();
     mocks.ensureSchemaOnce.mockResolvedValue(undefined);
+    mocks.getSQL.mockReset();
+    mocks.getSQL.mockReturnValue(mocks.sql);
     mocks.sql.mockReset();
     mocks.sqlCalls.length = 0;
+  });
+
+  it("returns the shared 401 before validating query parameters", async () => {
+    mocks.requireApiSession.mockResolvedValueOnce({
+      session: null,
+      unauthorized: NextResponse.json(
+        { success: false, error: "Unauthorized" },
+        { status: 401 }
+      ),
+    });
+
+    const response = await GET(request("/api/search-console"));
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ success: false, error: "Unauthorized" });
+    expect(mocks.ensureSchemaOnce).not.toHaveBeenCalled();
+    expect(mocks.getSQL).not.toHaveBeenCalled();
+    expect(mocks.sql).not.toHaveBeenCalled();
   });
 
   it("returns only current positioned rows when strict mode is enabled", async () => {

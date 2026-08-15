@@ -5,10 +5,15 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Loader2, Search, Zap, TrendingUp, ExternalLink,
   Target, GitCompare, Bot, Copy, Check, X, Filter, RefreshCw,
-  ChevronDown, ChevronUp, Shield, FileText,
+  ChevronDown, ChevronUp, ChevronRight, Shield, FileText, Globe2,
 } from "lucide-react";
 import Link from "next/link";
 import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
+import {
+  buildCompetitorArticleRequest,
+  competitorContentPlanAvailability,
+  isConfirmedCompetitorKeywordResponse,
+} from "@/lib/competitor-gaps";
 
 interface Site {
   id: number;
@@ -50,6 +55,52 @@ interface ResearchResult {
 interface CachedData {
   gaps: KeywordGap[];
   competitors: CompetitorStat[];
+}
+
+interface ApiEnvelope {
+  success?: boolean;
+  error?: string;
+  message?: string;
+}
+
+function requestErrorMessage(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
+async function parseJsonResponse<T>(response: Response, fallback: string): Promise<T> {
+  try {
+    return await response.json() as T;
+  } catch {
+    throw new Error(`${fallback} : réponse JSON invalide (HTTP ${response.status}).`);
+  }
+}
+
+async function readSuccessfulResponse<T extends ApiEnvelope>(
+  response: Response,
+  fallback: string,
+): Promise<T> {
+  const payload = await parseJsonResponse<T>(response, fallback);
+  if (!response.ok || payload.success !== true) {
+    throw new Error(payload.error?.trim() || payload.message?.trim() || `${fallback} (HTTP ${response.status}).`);
+  }
+  return payload;
+}
+
+async function readSitesResponse(response: Response): Promise<Site[]> {
+  const payload = await parseJsonResponse<Site[] | ({ sites?: Site[] } & ApiEnvelope)>(
+    response,
+    "Impossible de charger les sites",
+  );
+  if (!response.ok) {
+    const error = Array.isArray(payload) ? undefined : payload.error ?? payload.message;
+    throw new Error(error?.trim() || `Impossible de charger les sites (HTTP ${response.status}).`);
+  }
+  // `/api/sites` conserve un contrat historique en tableau brut; l'objet enveloppé exige success=true.
+  if (Array.isArray(payload)) return payload;
+  if (payload.success !== true || !Array.isArray(payload.sites)) {
+    throw new Error(payload.error?.trim() || payload.message?.trim() || "Réponse sites non confirmée par l'API.");
+  }
+  return payload.sites;
 }
 
 const INTENT_COLOR: Record<string, string> = {
@@ -228,22 +279,37 @@ export default function CompetitorsPage() {
   async function fetchSites() {
     try {
       const res = await fetch("/api/sites");
-      const d = await res.json() as Site[] | { sites?: Site[] };
-      const list = Array.isArray(d) ? d : d.sites ?? [];
-      if (list.length > 0) {
-        setSites(list);
-        if (!selectedSite && list.length > 0) setSelectedSite(list[0].id);
+      const list = await readSitesResponse(res);
+      if (list.length === 0) {
+        setError("Aucun site n'a été retourné; la sélection existante est conservée.");
+        return;
       }
-    } catch { /* ignore */ }
+      setSites(list);
+      setSelectedSite((current) => current ?? list[0].id);
+      setError(null);
+    } catch (reason) {
+      setError(requestErrorMessage(reason, "Impossible de charger les sites; les données existantes sont conservées."));
+    }
   }
 
   async function fetchCached() {
     if (!selectedSite || selectedSite === "all") return;
     try {
       const res = await fetch(`/api/competitors?site_id=${selectedSite}`);
-      const d = await res.json() as { gaps?: KeywordGap[]; competitors?: CompetitorStat[] };
-      setCached({ gaps: d.gaps ?? [], competitors: d.competitors ?? [] });
-    } catch { setCached({ gaps: [], competitors: [] }); }
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        error?: string;
+        gaps?: KeywordGap[];
+        competitors?: CompetitorStat[];
+      }>(res, "Impossible de charger le cache concurrentiel");
+      if (!Array.isArray(d.gaps) || !Array.isArray(d.competitors)) {
+        throw new Error("Le cache concurrentiel est incomplet; les données existantes sont conservées.");
+      }
+      setCached({ gaps: d.gaps, competitors: d.competitors });
+      setError(null);
+    } catch (reason) {
+      setError(requestErrorMessage(reason, "Impossible de charger le cache concurrentiel; les données existantes sont conservées."));
+    }
   }
 
   async function viewCachedAnalysis() {
@@ -255,29 +321,27 @@ export default function CompetitorsPage() {
 
     setLoading(true);
     setError(null);
-    setResult(null);
     setActiveCompetitorFilter(null);
     try {
       // GET only: this control must never start an AI request when no cache exists.
       const res = await fetch(`/api/competitors?site_id=${selectedSite}`);
-      const d = await res.json() as {
+      const d = await readSuccessfulResponse<{
         success?: boolean;
         error?: string;
         gaps?: KeywordGap[];
         competitors?: CompetitorStat[];
-      };
-      if (d.success === false) {
-        setError(d.error ?? "Impossible de lire l'analyse en cache");
-        return;
+      }>(res, "Impossible de lire l'analyse en cache");
+      if (!Array.isArray(d.gaps) || !Array.isArray(d.competitors)) {
+        throw new Error("L'analyse en cache est incomplète; l'affichage existant est conservé.");
       }
 
-      const nextCached = { gaps: d.gaps ?? [], competitors: d.competitors ?? [] };
-      setCached(nextCached);
+      const nextCached = { gaps: d.gaps, competitors: d.competitors };
       if (nextCached.gaps.length === 0 && nextCached.competitors.length === 0) {
         setError("Aucune analyse concurrentielle en cache pour ce site. Utilise « Rescan web sourcé » pour lancer une nouvelle recherche publique.");
         return;
       }
 
+      setCached(nextCached);
       setResult({
         success: true,
         cached: true,
@@ -302,20 +366,39 @@ export default function CompetitorsPage() {
       const res = await fetch(
         `/api/competitors/keywords?site_id=${selectedSite}&competitor_domain=${encodeURIComponent(domain)}`,
       );
-      const d = await res.json() as { success: boolean; categories?: CompetitorKeywords["categories"]; total_keywords?: number; competitor_domain?: string };
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        error?: string;
+        categories?: CompetitorKeywords["categories"];
+        total_keywords?: number;
+        competitor_domain?: string;
+      }>(res, `Impossible de charger les mots-clés de ${domain}`);
       const cats = d.categories;
-      if (d.success && cats) {
-        setCompetitorKw((prev) => ({
-          ...prev,
-          [domain]: {
-            competitor_domain: domain,
-            total_keywords: d.total_keywords ?? 0,
-            categories: cats,
-          },
-        }));
+      const categoryNames: KwTabName[] = ["general", "longtail", "questions"];
+      if (
+        !cats
+        || categoryNames.some((category) => (
+          !cats[category]
+          || !Array.isArray(cats[category].top)
+          || typeof cats[category].count !== "number"
+          || typeof cats[category].total_volume !== "number"
+        ))
+      ) {
+        throw new Error(`La réponse pour ${domain} ne contient pas de catégories de mots-clés valides.`);
       }
-    } catch { /* ignore */ }
-    setKwLoading(null);
+      setCompetitorKw((prev) => ({
+        ...prev,
+        [domain]: {
+          competitor_domain: domain,
+          total_keywords: d.total_keywords ?? 0,
+          categories: cats,
+        },
+      }));
+    } catch (reason) {
+      showNotification("error", requestErrorMessage(reason, `Impossible de charger les mots-clés de ${domain}.`));
+    } finally {
+      setKwLoading(null);
+    }
   }
 
   async function fetchLlmScans() {
@@ -323,15 +406,27 @@ export default function CompetitorsPage() {
     setLlmScanLoading(true);
     try {
       const res = await fetch(`/api/competitors/llm-scan?site_id=${selectedSite}`);
-      const d = await res.json() as { success: boolean; scans?: LLMScanResult[]; own_site_scan?: LLMScanResult | null };
-      if (d.success && d.scans) {
-        const map: Record<string, LLMScanResult> = {};
-        for (const s of d.scans) map[s.competitor_domain.toLowerCase()] = s;
-        setLlmScans(map);
-        setOwnSiteScan(d.own_site_scan ?? null);
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        error?: string;
+        scans?: LLMScanResult[];
+        own_site_scan?: LLMScanResult | null;
+      }>(res, "Impossible de charger les scans LLM");
+      if (
+        !Array.isArray(d.scans)
+        || !Object.prototype.hasOwnProperty.call(d, "own_site_scan")
+      ) {
+        throw new Error("La réponse des scans LLM est incomplète; les données existantes sont conservées.");
       }
-    } catch { /* ignore */ }
-    setLlmScanLoading(false);
+      const map: Record<string, LLMScanResult> = {};
+      for (const scan of d.scans) map[scan.competitor_domain.toLowerCase()] = scan;
+      setLlmScans(map);
+      setOwnSiteScan(d.own_site_scan ?? null);
+    } catch (reason) {
+      showNotification("error", requestErrorMessage(reason, "Impossible de charger les scans LLM."));
+    } finally {
+      setLlmScanLoading(false);
+    }
   }
 
   async function runLlmScan(forceRefresh = false) {
@@ -343,33 +438,39 @@ export default function CompetitorsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ force_refresh: forceRefresh, include_own_site: true }),
       });
-      const d = await res.json() as { success: boolean; scans?: LLMScanResult[]; scanned_now?: number; from_cache?: number; error?: string };
-      if (d.success && d.scans) {
-        // Identify own site scan and separate it
-        const siteObj = sites.find((s) => s.id === selectedSite);
-        const ownDomain = siteObj
-          ? siteObj.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "").toLowerCase()
-          : "";
-        const map: Record<string, LLMScanResult> = {};
-        let own: LLMScanResult | null = null;
-        for (const s of d.scans) {
-          const sDom = s.competitor_domain.toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
-          if (ownDomain && (sDom === ownDomain || sDom.includes(ownDomain) || ownDomain.includes(sDom))) {
-            own = s;
-          } else {
-            map[s.competitor_domain.toLowerCase()] = s;
-          }
-        }
-        setLlmScans(map);
-        setOwnSiteScan(own);
-        showNotification("success", `LLM scan: ${d.scanned_now ?? 0} fresh, ${d.from_cache ?? 0} from cache (7d)`);
-      } else {
-        showNotification("error", d.error ?? "Scan échoué");
+      const d = await readSuccessfulResponse<{
+        success?: boolean;
+        scans?: LLMScanResult[];
+        scanned_now?: number;
+        from_cache?: number;
+        error?: string;
+      }>(res, "Le scan LLM a échoué");
+      if (!Array.isArray(d.scans) || d.scans.length === 0) {
+        throw new Error("Le scan LLM n'a retourné aucun résultat; les données existantes sont conservées.");
       }
+      // Identify own site scan and separate it
+      const siteObj = sites.find((s) => s.id === selectedSite);
+      const ownDomain = siteObj
+        ? siteObj.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "").toLowerCase()
+        : "";
+      const map: Record<string, LLMScanResult> = {};
+      let own: LLMScanResult | null = null;
+      for (const scan of d.scans) {
+        const scanDomain = scan.competitor_domain.toLowerCase().replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, "");
+        if (ownDomain && (scanDomain === ownDomain || scanDomain.includes(ownDomain) || ownDomain.includes(scanDomain))) {
+          own = scan;
+        } else {
+          map[scan.competitor_domain.toLowerCase()] = scan;
+        }
+      }
+      setLlmScans(map);
+      setOwnSiteScan(own);
+      showNotification("success", `LLM scan: ${d.scanned_now ?? 0} fresh, ${d.from_cache ?? 0} from cache (7d)`);
     } catch (err) {
-      showNotification("error", err instanceof Error ? err.message : "Erreur réseau");
+      showNotification("error", requestErrorMessage(err, "Erreur réseau pendant le scan LLM."));
+    } finally {
+      setLlmScanRunning(false);
     }
-    setLlmScanRunning(false);
   }
 
   function toggleExpandCompetitor(domain: string) {
@@ -390,7 +491,6 @@ export default function CompetitorsPage() {
     }
     setLoading(true);
     setError(null);
-    setResult(null);
     setActiveCompetitorFilter(null);
     try {
       const res = await fetch("/api/competitors", {
@@ -398,30 +498,38 @@ export default function CompetitorsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite, force_refresh: forceRefresh }),
       });
-      const d = await res.json() as ResearchResult & { mode?: string; sites_processed?: number; sites_total?: number; cached?: boolean; stale?: boolean };
-      if (d.success) {
-        setResult(d);
-        if (selectedSite === "all") {
-          showNotification("success", `Analyse multi-sites: ${d.sites_processed ?? 0}/${d.sites_total ?? 0} sites traités`);
-        } else {
-          const nextCached = cachedDataFromResearch(d);
-          if (nextCached.gaps.length > 0 || nextCached.competitors.length > 0) {
-            setCached(nextCached);
-          } else {
-            await fetchCached();
-          }
-          const compCount = d.competitors?.length ?? 0;
-          const gapCount = d.gaps?.length ?? 0;
-          const tag = d.cached ? (d.stale ? "cache ancien" : "depuis cache") : "fresh AI";
-          showNotification("success", `Analyse OK — ${compCount} concurrents, ${gapCount} gaps (${tag})`);
+      const d = await readSuccessfulResponse<ResearchResult & {
+        mode?: string;
+        sites_processed?: number;
+        sites_total?: number;
+      }>(res, "L'analyse concurrentielle a échoué");
+      if (selectedSite === "all") {
+        const processed = d.sites_processed ?? 0;
+        const total = d.sites_total ?? 0;
+        if (processed <= 0 || total <= 0) {
+          throw new Error("L'analyse multi-sites n'a confirmé aucun site traité.");
         }
-      } else {
-        setError(d.error ?? "Erreur inconnue");
+        showNotification("success", `Analyse multi-sites: ${processed}/${total} sites traités`);
+        return;
       }
+      if (!Array.isArray(d.gaps) || !Array.isArray(d.competitors)) {
+        throw new Error("L'analyse reçue est incomplète; les données existantes sont conservées.");
+      }
+      const nextCached = cachedDataFromResearch(d);
+      if (nextCached.gaps.length === 0 && nextCached.competitors.length === 0) {
+        throw new Error(d.warning?.trim() || "Le rescan n'a retourné aucune donnée concurrentielle; les données existantes sont conservées.");
+      }
+      setResult(d);
+      setCached(nextCached);
+      const compCount = d.competitors.length;
+      const gapCount = d.gaps.length;
+      const tag = d.cached ? (d.stale ? "cache ancien" : "depuis cache") : "fresh AI";
+      showNotification("success", `Analyse OK — ${compCount} concurrents, ${gapCount} gaps (${tag})`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur réseau");
+      setError(requestErrorMessage(err, "Erreur réseau pendant l'analyse concurrentielle."));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   function showNotification(type: "success" | "error", text: string) {
@@ -437,30 +545,44 @@ export default function CompetitorsPage() {
       const res = await fetch("/api/autopilot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ site_id: selectedSite, dry_run: true, language: "fr" }),
+        body: JSON.stringify(buildCompetitorArticleRequest(selectedSite, keyword)),
       });
-      const d = await res.json() as { success: boolean };
-      if (d.success) {
+      const d = await res.json() as { success?: boolean; keyword?: string; error?: string };
+      if (isConfirmedCompetitorKeywordResponse(res.ok, d, keyword)) {
         showNotification("success", `Article preview créé pour "${keyword}"`);
         router.push("/autopilot");
       } else {
-        showNotification("error", "Échec de la création de l'article.");
+        const message = res.ok && d.success === true
+          ? `Aucun succès annoncé : l'API n'a pas confirmé le mot-clé cliqué "${keyword}".`
+          : d.error ?? `Échec de la création de l'article (HTTP ${res.status}).`;
+        showNotification("error", message);
       }
-    } catch {
-      showNotification("error", "Erreur réseau.");
+    } catch (reason) {
+      showNotification("error", reason instanceof Error ? reason.message : "Erreur réseau.");
     }
     setGenerating(null);
   }
 
-  async function fetchGapRows() {
-    if (!selectedSite || selectedSite === "all") return;
+  async function fetchGapRows(): Promise<boolean> {
+    if (!selectedSite || selectedSite === "all") return false;
     setGapsLoading(true);
     try {
       const res = await fetch(`/api/competitors/gaps?siteId=${selectedSite}`);
-      const data = await res.json() as { success: boolean; gaps?: GapRow[] };
-      if (data.success && data.gaps) setGapRows(data.gaps);
-    } catch { /* ignore */ }
-    setGapsLoading(false);
+      const data = await readSuccessfulResponse<{ success?: boolean; error?: string; gaps?: GapRow[] }>(
+        res,
+        "Impossible de charger les gaps",
+      );
+      if (!Array.isArray(data.gaps)) {
+        throw new Error("La réponse des gaps est incomplète; les données existantes sont conservées.");
+      }
+      setGapRows(data.gaps);
+      return true;
+    } catch (reason) {
+      showNotification("error", requestErrorMessage(reason, "Impossible de charger les gaps; les données existantes sont conservées."));
+      return false;
+    } finally {
+      setGapsLoading(false);
+    }
   }
 
   async function refreshGapsFromAI() {
@@ -472,17 +594,19 @@ export default function CompetitorsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ site_id: selectedSite, force_refresh: true }),
       });
-      const d = await res.json() as { success: boolean; error?: string };
-      if (d.success) {
-        showNotification("success", "Recherche web relancée. Rechargement des gaps...");
-        await fetchGapRows();
-      } else {
-        showNotification("error", d.error || "Échec relance audit");
+      await readSuccessfulResponse<{ success?: boolean; error?: string }>(
+        res,
+        "La relance de la recherche web a échoué",
+      );
+      const gapsReloaded = await fetchGapRows();
+      if (gapsReloaded) {
+        showNotification("success", "Recherche web terminée et gaps rechargés.");
       }
     } catch (e) {
-      showNotification("error", `Erreur réseau : ${e instanceof Error ? e.message : "inconnu"}`);
+      showNotification("error", requestErrorMessage(e, "Erreur réseau pendant l'actualisation des gaps."));
+    } finally {
+      setGapsRefreshing(false);
     }
-    setGapsRefreshing(false);
   }
 
   function isQuestion(kw: string): boolean {
@@ -519,28 +643,29 @@ export default function CompetitorsPage() {
 
   const callAiWidget = useCallback(async (prompt: string, competitors: string[]) => {
     const ctx = `Concurrents analysés: ${competitors.join(", ")}`;
-    setAiWidget((s) => ({ ...s, loading: true, error: null, result: null }));
+    setAiWidget((s) => ({ ...s, loading: true, error: null }));
     try {
       const res = await fetch("/api/ai/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "competitor", prompt, context: ctx }),
       });
-      const data = await res.json() as { success: boolean; reply?: string; error?: string };
-      if (data.success && data.reply) {
-        setAiWidget((s) => ({ ...s, loading: false, result: data.reply ?? null }));
-      } else {
-        setAiWidget((s) => ({ ...s, loading: false, error: data.error ?? "Erreur inconnue" }));
+      const data = await readSuccessfulResponse<{ success?: boolean; reply?: string; error?: string }>(
+        res,
+        "L'analyse IA a échoué",
+      );
+      if (!data.reply?.trim()) {
+        throw new Error("L'analyse IA n'a retourné aucun contenu; le résultat existant est conservé.");
       }
+      setAiWidget((s) => ({ ...s, loading: false, result: data.reply ?? null }));
     } catch (err) {
-      setAiWidget((s) => ({ ...s, loading: false, error: err instanceof Error ? err.message : "Erreur réseau" }));
+      setAiWidget((s) => ({ ...s, loading: false, error: requestErrorMessage(err, "Erreur réseau pendant l'analyse IA.") }));
     }
   }, []);
 
   async function callBriefIA(gap: KeywordGap) {
     const key = gap.keyword;
     setBriefLoading(key);
-    setBriefResult(null);
     const prompt = `Génère un brief SEO complet pour cibler le mot-clé "${gap.keyword}" où concurrent "${gap.competitor}" est positionné #${gap.competitor_position}. Inclus: angle unique, plan H2/H3, mots-clés sémantiques, longueur cible, schema FAQ, CTA recommandé.`;
     try {
       const res = await fetch("/api/ai/assistant", {
@@ -548,46 +673,31 @@ export default function CompetitorsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "write", prompt }),
       });
-      const data = await res.json() as { success: boolean; reply?: string; error?: string };
-      if (data.success && data.reply) {
-        setBriefResult({ keyword: key, text: data.reply });
-      } else {
-        showNotification("error", data.error ?? "Erreur IA");
+      const data = await readSuccessfulResponse<{ success?: boolean; reply?: string; error?: string }>(
+        res,
+        "La génération du brief a échoué",
+      );
+      if (!data.reply?.trim()) {
+        throw new Error("Le brief reçu est vide; le brief existant est conservé.");
       }
-    } catch {
-      showNotification("error", "Erreur réseau");
-    }
-    setBriefLoading(null);
-  }
-
-  async function saveToContentPlan(keyword: string) {
-    if (!selectedSite || selectedSite === "all") {
-      showNotification("error", "Sélectionne un site d'abord");
-      return;
-    }
-    try {
-      const res = await fetch("/api/content-plan/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ siteId: selectedSite }),
-      });
-      const data = await res.json() as { success: boolean };
-      if (data.success) {
-        showNotification("success", `"${keyword}" ajouté au content plan`);
-      } else {
-        showNotification("error", "Impossible d'enregistrer dans le content plan");
-      }
-    } catch {
-      showNotification("error", "Erreur réseau");
+      setBriefResult({ keyword: key, text: data.reply });
+    } catch (reason) {
+      showNotification("error", requestErrorMessage(reason, "Erreur réseau pendant la génération du brief."));
+    } finally {
+      setBriefLoading(null);
     }
   }
 
   useEffect(() => {
     void fetchSites();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
+    setResult(null);
+    setCached({ gaps: [], competitors: [] });
+    setGapRows([]);
+    setLlmScans({});
+    setOwnSiteScan(null);
     if (selectedSite && selectedSite !== "all") {
       void fetchCached();
       void fetchLlmScans();
@@ -645,18 +755,27 @@ export default function CompetitorsPage() {
               <div className="p-5 flex-1 overflow-y-auto space-y-3">
                 <div className="flex gap-2 justify-end">
                   <button
-                    onClick={() => { void navigator.clipboard.writeText(briefResult.text); showNotification("success", "Copié !"); }}
+                    onClick={() => {
+                      void navigator.clipboard.writeText(briefResult.text).catch(() => {
+                        showNotification("error", "Impossible de copier le brief.");
+                      });
+                    }}
                     className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
                   >
                     <Copy className="w-3 h-3" /> Copier
                   </button>
                   <button
-                    onClick={() => void saveToContentPlan(briefResult.keyword)}
-                    className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
+                    type="button"
+                    disabled
+                    title={competitorContentPlanAvailability(briefResult.keyword).reason}
+                    className="flex items-center gap-1 text-xs text-gray-500 px-2 py-1 rounded bg-gray-800 cursor-not-allowed"
                   >
-                    Sauvegarder dans content-plan
+                    Content-plan indisponible
                   </button>
                 </div>
+                <p className="text-xs text-amber-300">
+                  {competitorContentPlanAvailability(briefResult.keyword).reason}
+                </p>
                 <div className="bg-gray-800 rounded-lg p-4 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed max-h-[60vh] overflow-y-auto">
                   {briefResult.text}
                 </div>
@@ -962,7 +1081,7 @@ export default function CompetitorsPage() {
                 <div className="mb-4 rounded-lg border-2 border-blue-500/40 bg-gradient-to-br from-blue-900/20 to-purple-900/20 p-4">
                   <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
                     <div className="flex items-center gap-2">
-                      <Shield className="w-4 h-4 text-blue-400" />
+                      <Shield className="w-4 h-4 text-blue-400" aria-hidden="true" />
                       <span className="text-sm font-semibold text-blue-300">TON SITE — {sites.find((s) => s.id === selectedSite)?.name ?? ""}</span>
                       <span className="text-xs text-gray-400">{ownSiteScan.competitor_domain}</span>
                     </div>
@@ -976,8 +1095,8 @@ export default function CompetitorsPage() {
                   </div>
                   {/* Quick stats inline */}
                   <div className="flex flex-wrap gap-2 text-xs">
-                    <span className={`px-2 py-1 rounded ${ownSiteScan.llms_txt_present ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
-                      llms.txt {ownSiteScan.llms_txt_present ? "✓" : "✗"}
+                    <span className={`inline-flex items-center gap-1 rounded px-2 py-1 ${ownSiteScan.llms_txt_present ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+                      llms.txt {ownSiteScan.llms_txt_present ? <Check className="h-3 w-3" aria-hidden="true" /> : <X className="h-3 w-3" aria-hidden="true" />}
                     </span>
                     <span className="px-2 py-1 rounded bg-gray-800 text-gray-300">
                       {ownSiteScan.ai_bots_allowed.length} bots IA autorisés
@@ -986,7 +1105,7 @@ export default function CompetitorsPage() {
                       {ownSiteScan.schemas_detected.length} schemas
                     </span>
                     {ownSiteScan.has_open_graph && (
-                      <span className="px-2 py-1 rounded bg-green-500/10 text-green-400">OG ✓</span>
+                      <span className="inline-flex items-center gap-1 rounded bg-green-500/10 px-2 py-1 text-green-400">OG <Check className="h-3 w-3" aria-hidden="true" /></span>
                     )}
                   </div>
                   {/* Top 3 recommendations */}
@@ -995,7 +1114,7 @@ export default function CompetitorsPage() {
                       <div className="text-xs text-gray-400 mb-1.5">À AMÉLIORER POUR ÊTRE MIEUX CITÉ PAR LES LLM :</div>
                       <ul className="text-xs text-gray-200 space-y-1">
                         {ownSiteScan.recommendations.slice(0, 3).map((rec, i) => (
-                          <li key={i} className="flex gap-2"><span className="text-blue-400">→</span>{rec}</li>
+                          <li key={i} className="flex gap-2"><ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-blue-400" aria-hidden="true" />{rec}</li>
                         ))}
                       </ul>
                     </div>
@@ -1027,13 +1146,7 @@ export default function CompetitorsPage() {
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-2">
-                        <img
-                          src={`https://www.google.com/s2/favicons?domain=${c.domain}&sz=16`}
-                          alt=""
-                          width={16}
-                          height={16}
-                          className="rounded-sm"
-                        />
+                        <Globe2 className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
                         <a
                           href={`https://${c.domain}`}
                           target="_blank"
@@ -1326,6 +1439,8 @@ export default function CompetitorsPage() {
                         void navigator.clipboard.writeText(aiWidget.result ?? "").then(() => {
                           setAiWidget((s) => ({ ...s, copied: true }));
                           setTimeout(() => setAiWidget((s) => ({ ...s, copied: false })), 2000);
+                        }).catch((reason) => {
+                          showNotification("error", requestErrorMessage(reason, "Impossible de copier le résultat IA."));
                         });
                       }}
                       className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
@@ -1347,7 +1462,7 @@ export default function CompetitorsPage() {
             <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center">
               <Target className="w-12 h-12 text-gray-700 mx-auto mb-4" />
               <div className="text-gray-400 text-sm">
-                Clique &quot;Lancer l&apos;analyse&quot; pour trouver les keyword gaps de tes concurrents
+                Consulte le cache ou lance &quot;Rescan web sourcé&quot; pour trouver les keyword gaps de tes concurrents.
               </div>
             </div>
           )}
@@ -1396,13 +1511,7 @@ function ExpandedCompetitorPanel({
     <div className="mt-5 bg-gray-950/60 border border-blue-900/50 rounded-xl p-5 space-y-5">
       <div className="flex items-center justify-between border-b border-gray-800 pb-3">
         <div className="flex items-center gap-2">
-          <img
-            src={`https://www.google.com/s2/favicons?domain=${domain}&sz=20`}
-            alt=""
-            width={20}
-            height={20}
-            className="rounded-sm"
-          />
+          <Globe2 className="h-5 w-5 shrink-0 text-slate-400" aria-hidden="true" />
           <h3 className="font-semibold text-white">{domain}</h3>
           <span className="text-xs text-gray-500">— détail keywords + LLM readiness</span>
         </div>

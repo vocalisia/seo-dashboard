@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, Loader2, ArrowLeftRight, TrendingUp, TrendingDown } from "lucide-react";
 import Link from "next/link";
 
@@ -18,21 +18,83 @@ interface SiteStats {
 }
 
 interface CompareData {
-  success: boolean;
+  success: true;
   site_a: SiteStats;
   site_b: SiteStats;
   methodology?: string;
 }
 
-function DeltaCell({ a, b, inverted = false }: { a: number; b: number; inverted?: boolean }) {
-  const diff = a - b;
-  const better = inverted ? diff < 0 : diff > 0;
-  const color = diff === 0 ? "text-gray-500" : better ? "text-emerald-400" : "text-red-400";
-  return (
-    <span className={`text-xs font-medium ${color}`}>
-      {diff > 0 ? "+" : ""}{inverted ? diff.toFixed(1) : diff.toLocaleString()}
-    </span>
-  );
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getApiError(payload: unknown): string | null {
+  if (!isRecord(payload)) return null;
+  for (const key of ["error", "message"] as const) {
+    const value = payload[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    throw new Error(`réponse JSON illisible (HTTP ${response.status})`);
+  }
+}
+
+function parseSites(payload: unknown): Site[] {
+  if (isRecord(payload) && "success" in payload && payload.success !== true) {
+    throw new Error(getApiError(payload) ?? "le contrat success de l’API a échoué");
+  }
+  const candidate = Array.isArray(payload)
+    ? payload
+    : isRecord(payload) && Array.isArray(payload.sites)
+      ? payload.sites
+      : null;
+  if (!candidate || !candidate.every((site) => (
+    isRecord(site)
+    && typeof site.id === "number"
+    && typeof site.name === "string"
+  ))) {
+    throw new Error("contrat API invalide : liste de sites absente ou mal formée");
+  }
+  return candidate as Site[];
+}
+
+function isSiteStats(value: unknown): value is SiteStats {
+  return isRecord(value)
+    && typeof value.name === "string"
+    && typeof value.clicks === "number"
+    && typeof value.impressions === "number"
+    && typeof value.avg_position === "number"
+    && typeof value.sessions === "number"
+    && typeof value.users === "number"
+    && typeof value.articles === "number"
+    && Array.isArray(value.top_keywords)
+    && value.top_keywords.every((keyword) => typeof keyword === "string");
+}
+
+function parseComparison(payload: unknown): CompareData {
+  if (!isRecord(payload) || payload.success !== true) {
+    throw new Error(getApiError(payload) ?? "le contrat success de l’API a échoué");
+  }
+  if (!isSiteStats(payload.site_a) || !isSiteStats(payload.site_b)) {
+    throw new Error("contrat API invalide : statistiques de comparaison absentes ou mal formées");
+  }
+  return payload as unknown as CompareData;
+}
+
+function actionableError(action: string, reason: unknown, retained: boolean): string {
+  const detail = reason instanceof Error && reason.message.trim()
+    ? ` Détail : ${reason.message.trim()}.`
+    : "";
+  const preservation = retained
+    ? " La comparaison précédemment chargée reste affichée."
+    : "";
+  return `${action} impossible. Réessaie ; si le problème persiste, vérifie ta session et l’API.${preservation}${detail}`;
 }
 
 function StatRow({ label, valA, valB, inverted = false, format = "number" }: {
@@ -72,34 +134,68 @@ export default function ComparePage() {
   const [siteB, setSiteB] = useState<number | null>(null);
   const [data, setData] = useState<CompareData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sitesLoaded, setSitesLoaded] = useState(false);
+  const [sitesError, setSitesError] = useState<string | null>(null);
+  const [compareError, setCompareError] = useState<string | null>(null);
+  const compareRequestId = useRef(0);
+  const sitesRef = useRef<Site[]>([]);
 
-  async function fetchSites() {
+  const fetchSites = useCallback(async () => {
     try {
       const res = await fetch("/api/sites");
-      const d = await res.json() as Site[];
-      const list = Array.isArray(d) ? d : [];
-      setSites(list);
-      if (list.length >= 2) {
-        setSiteA(list[0].id);
-        setSiteB(list[1].id);
+      const payload = await readJson(res);
+      if (!res.ok) {
+        throw new Error(getApiError(payload) ?? `HTTP ${res.status}`);
       }
-    } catch { /* ignore */ }
-  }
+      const list = parseSites(payload);
+      sitesRef.current = list;
+      setSites(list);
+      setSitesLoaded(true);
+      setSitesError(null);
+      if (list.length >= 2) {
+        setSiteA((current) => current ?? list[0].id);
+        setSiteB((current) => current ?? list[1].id);
+      }
+    } catch (reason) {
+      setSitesError(actionableError("Chargement des sites", reason, sitesRef.current.length > 0));
+    }
+  }, []);
 
   useEffect(() => {
     const id = setTimeout(() => { void fetchSites(); }, 0);
     return () => clearTimeout(id);
-  }, []);
+  }, [fetchSites]);
 
   async function compare() {
     if (!siteA || !siteB) return;
+    const requestId = ++compareRequestId.current;
+    const requestedSiteA = siteA;
+    const requestedSiteB = siteB;
     setLoading(true);
+    setCompareError(null);
     try {
-      const res = await fetch(`/api/compare?site_a=${siteA}&site_b=${siteB}`);
-      const d = await res.json() as CompareData;
-      if (d.success) setData(d);
-    } catch { setData(null); }
+      const res = await fetch(`/api/compare?site_a=${requestedSiteA}&site_b=${requestedSiteB}`);
+      const payload = await readJson(res);
+      if (!res.ok) {
+        throw new Error(getApiError(payload) ?? `HTTP ${res.status}`);
+      }
+      const nextData = parseComparison(payload);
+      if (requestId !== compareRequestId.current) return;
+      setData(nextData);
+    } catch (reason) {
+      if (requestId === compareRequestId.current) {
+        setCompareError(actionableError("Comparaison", reason, data !== null));
+      }
+    } finally {
+      if (requestId === compareRequestId.current) setLoading(false);
+    }
+  }
+
+  function selectSite(setter: (value: number) => void, value: string) {
+    compareRequestId.current += 1;
     setLoading(false);
+    setCompareError(null);
+    setter(parseInt(value, 10));
   }
 
   return (
@@ -113,7 +209,17 @@ export default function ComparePage() {
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
-        {sites.length < 2 && (
+        {sitesError && (
+          <div className="bg-red-950/30 border border-red-800/50 rounded-xl px-5 py-4 text-sm text-red-300">
+            {sitesError}
+          </div>
+        )}
+        {compareError && (
+          <div className="bg-red-950/30 border border-red-800/50 rounded-xl px-5 py-4 text-sm text-red-300">
+            {compareError}
+          </div>
+        )}
+        {sitesLoaded && sites.length < 2 && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl px-5 py-4 text-sm text-gray-400">
             Tu dois avoir au moins 2 sites pour comparer. Ajoute-en via{" "}
             <Link href="/dashboard" className="text-blue-400 hover:text-blue-300 underline">Dashboard</Link>.
@@ -121,12 +227,12 @@ export default function ComparePage() {
         )}
         {/* Selectors */}
         <div className="flex items-center gap-4 justify-center">
-          <select aria-label="Premier site à comparer" value={siteA ?? ""} onChange={(e) => setSiteA(parseInt(e.target.value, 10))}
+          <select aria-label="Premier site à comparer" value={siteA ?? ""} onChange={(e) => selectSite(setSiteA, e.target.value)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-52">
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
           <ArrowLeftRight className="w-5 h-5 text-gray-500" />
-          <select aria-label="Second site à comparer" value={siteB ?? ""} onChange={(e) => setSiteB(parseInt(e.target.value, 10))}
+          <select aria-label="Second site à comparer" value={siteB ?? ""} onChange={(e) => selectSite(setSiteB, e.target.value)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-52">
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>

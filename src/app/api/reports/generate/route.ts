@@ -3,6 +3,11 @@ import { NextResponse } from "next/server";
 import { askAICached } from "@/lib/ai-cache";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { GSC_LAG_DAYS } from "@/lib/gsc-window";
+import { isRecord } from "@/lib/api-response";
+import {
+  buildReportGenerationOutcome,
+  type ReportGenerationResult,
+} from "@/lib/report-generation-contract";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -144,7 +149,7 @@ function buildFallbackReport(weekStart: string, data: {
 
 async function sendWeeklyReportsEmail(
   weekStart: string,
-  results: Array<{ site: string; status: string; clicks?: number; error?: string }>,
+  results: ReportGenerationResult[],
 ) {
   const resendKey = process.env.RESEND_API_KEY?.replace(/\\n/g, "").trim();
   const alertEmail = process.env.ALERT_EMAIL?.replace(/\\n/g, "").trim();
@@ -258,33 +263,67 @@ export async function POST(request: Request) {
   }
 
   try {
+    let requestedSiteId: number | null = null;
+    const rawBody = await request.text();
+    if (rawBody.trim()) {
+      let body: unknown;
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        return NextResponse.json(
+          { success: false, error: "Request body must be valid JSON" },
+          { status: 400 },
+        );
+      }
+
+      if (!isRecord(body)) {
+        return NextResponse.json(
+          { success: false, error: "Request body must be a JSON object" },
+          { status: 400 },
+        );
+      }
+
+      if ("site_id" in body) {
+        if (
+          typeof body.site_id !== "number"
+          || !Number.isInteger(body.site_id)
+          || body.site_id <= 0
+        ) {
+          return NextResponse.json(
+            { success: false, error: "site_id must be a positive integer" },
+            { status: 400 },
+          );
+        }
+        requestedSiteId = body.site_id;
+      }
+    }
+
     await initDB();
     const sql = getSQL();
-
-    let requestedSiteId: number | null = null;
-    try {
-      const body = (await request.json()) as { site_id?: unknown };
-      if (typeof body.site_id === "number" && Number.isFinite(body.site_id)) {
-        requestedSiteId = Math.floor(body.site_id);
-      }
-    } catch {
-      // Cron calls can send an empty body. Generate all sites in that case.
-    }
 
     const sites = requestedSiteId
       ? await sql`SELECT id, name, url FROM sites WHERE is_active = true AND id = ${requestedSiteId}`
       : await sql`SELECT id, name, url FROM sites WHERE is_active = true`;
     const isBulkRun = requestedSiteId === null;
 
-    if (requestedSiteId && sites.length === 0) {
-      return NextResponse.json({ success: false, error: "Site introuvable ou inactif" }, { status: 404 });
-    }
-
     const weekStart = new Date();
     weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
     const weekStartStr = weekStart.toISOString().split("T")[0];
 
-    const results: Array<{ site: string; status: string; clicks?: number; error?: string }> = [];
+    if (requestedSiteId && sites.length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          week: weekStartStr,
+          error: "Site introuvable ou inactif",
+          summary: { total: 0, generated: 0, no_data: 0, failed: 0 },
+          results: [],
+        },
+        { status: 404 },
+      );
+    }
+
+    const results: ReportGenerationResult[] = [];
 
     for (const site of sites as SiteRow[]) {
       try {
@@ -324,7 +363,12 @@ export async function POST(request: Request) {
         `;
 
         if (topQueries.length === 0) {
-          results.push({ site: site.name, status: "no_data" });
+          results.push({
+            site_id: site.id,
+            site: site.name,
+            status: "no_data",
+            reason: "Aucune donnée GSC query-level exploitable sur la fenêtre analysée",
+          });
           continue;
         }
 
@@ -427,9 +471,10 @@ export async function POST(request: Request) {
             created_at = NOW()
         `;
 
-        results.push({ site: site.name, status: "ok", clicks: totalClicks });
+        results.push({ site_id: site.id, site: site.name, status: "ok", clicks: totalClicks });
       } catch (err: unknown) {
         results.push({
+          site_id: site.id,
           site: site.name,
           status: "error",
           error: err instanceof Error ? err.message : "Unknown",
@@ -439,9 +484,10 @@ export async function POST(request: Request) {
 
     await sendWeeklyReportsEmail(weekStartStr, results);
 
-    return NextResponse.json({ success: true, week: weekStartStr, results });
+    const outcome = buildReportGenerationOutcome(weekStartStr, results);
+    return NextResponse.json(outcome.body, { status: outcome.status });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }

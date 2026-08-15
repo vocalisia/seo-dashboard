@@ -32,7 +32,12 @@ function errorResult(keyword: string, message: string): NicheScanResult {
     demandScore: 0,
     competitionScore: 0,
     opportunityScore: 0,
-    estimatedCPM: { min: 0, max: 0 },
+    monetizationSignal: "low",
+    monetizationBasis: "keyword_category_heuristic",
+    measurementSource: "unavailable",
+    measurementWindow: "unavailable",
+    subscriberDataStatus: "unavailable",
+    likeDataStatus: "unavailable",
     recommendation: "Erreur lors du scan",
     error: message,
   };
@@ -51,7 +56,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (rawKeywords.length > 10) {
-      return NextResponse.json({ error: "Maximum 10 niches par scan (quota API)" }, { status: 400 });
+      return NextResponse.json({ error: "Maximum 10 niches par scan" }, { status: 400 });
     }
 
     const cleanKeywords = rawKeywords
@@ -65,6 +70,7 @@ export async function POST(request: NextRequest) {
 
     const now = Date.now();
     let cacheHits = 0;
+    let quotaUnitsEstimated = 0;
 
     const results = await mapLimit(cleanKeywords, 2, async (keyword): Promise<NicheScanResult> => {
       const cacheKey = keyword.toLowerCase();
@@ -76,6 +82,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const result = await scanNiche(keyword);
+        if (result.measurementSource === "youtube_data_api") quotaUnitsEstimated += 202;
         CACHE.set(cacheKey, { ts: now, result });
         return result;
       } catch (err: unknown) {
@@ -84,11 +91,26 @@ export async function POST(request: NextRequest) {
       }
     });
 
+    const successfulResults = results.filter((result) => !result.error);
+    const failedResults = results.filter((result) => Boolean(result.error));
+
+    if (successfulResults.length === 0) {
+      return NextResponse.json({
+        success: false,
+        partial: false,
+        error: "Aucune niche n'a pu être mesurée via l'API ni la recherche publique YouTube.",
+        results,
+        cache_hits: cacheHits,
+        quota_units_estimated: quotaUnitsEstimated,
+      }, { status: 502 });
+    }
+
     return NextResponse.json({
       success: true,
+      partial: failedResults.length > 0,
       results,
       cache_hits: cacheHits,
-      quota_units_estimated: (cleanKeywords.length - cacheHits) * 202,
+      quota_units_estimated: quotaUnitsEstimated,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Erreur inconnue";

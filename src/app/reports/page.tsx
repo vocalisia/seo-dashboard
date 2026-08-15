@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
   BarChart3,
@@ -16,37 +16,18 @@ import {
   TrendingUp,
 } from "lucide-react";
 import Link from "next/link";
-
-interface Opportunity {
-  query: string;
-  clicks?: number;
-  impressions: number;
-  position: number;
-  ctr?: number;
-  source_volume?: number;
-  volume_source?: string | null;
-  volume_status?: "imported" | "missing";
-  priority_score?: number;
-  reason?: string;
-  data_source?: string;
-}
-
-interface Report {
-  id: number;
-  site_id: number;
-  site_name: string;
-  site_url: string;
-  week_start: string;
-  summary: string;
-  recommendations: string;
-  top_opportunities: Opportunity[];
-  created_at: string;
-}
-
-interface Site {
-  id: number;
-  name: string;
-}
+import { readApiJson } from "@/lib/api-response";
+import {
+  type SiteOption,
+  isSiteOptionList,
+} from "@/lib/content-refresh-contract";
+import {
+  type ReportOpportunity as Opportunity,
+  type WeeklyReport as Report,
+  isInitSuccess,
+  isReportGenerationSuccess,
+  isWeeklyReportList,
+} from "@/lib/report-generation-contract";
 
 function fmtDate(iso: string) {
   try {
@@ -168,28 +149,41 @@ export default function ReportsPage() {
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
   const [generationProgress, setGenerationProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
 
-  function showNotification(type: "success" | "error", text: string) {
+  const showNotification = useCallback((type: "success" | "error", text: string) => {
     setNotification({ type, text });
     setTimeout(() => setNotification(null), 4000);
-  }
+  }, []);
 
-  const fetchReports = async () => {
+  const fetchReports = useCallback(async (notifyOnError = true): Promise<boolean> => {
     setLoading(true);
     try {
       const res = await fetch("/api/reports");
-      const data = await res.json();
-      if (Array.isArray(data)) setReports(data);
-    } catch {
-      showNotification("error", "Impossible de charger les rapports");
+      const data = await readApiJson(
+        res,
+        isWeeklyReportList,
+        "Impossible de charger les rapports",
+      );
+      setReports(data);
+      return true;
+    } catch (error) {
+      if (notifyOnError) {
+        showNotification(
+          "error",
+          error instanceof Error ? error.message : "Impossible de charger les rapports",
+        );
+      }
+      return false;
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  };
+  }, [showNotification]);
 
   useEffect(() => {
-    setTimeout(() => {
+    const timeout = window.setTimeout(() => {
       void fetchReports();
     }, 0);
-  }, []);
+    return () => window.clearTimeout(timeout);
+  }, [fetchReports]);
 
   const allExpanded = reports.length > 0 && expandedIds.size === reports.length;
 
@@ -214,23 +208,29 @@ export default function ReportsPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  async function fetchSitesForGeneration(): Promise<Site[]> {
+  async function fetchSitesForGeneration(): Promise<SiteOption[]> {
     const res = await fetch("/api/sites");
-    const data = await res.json() as Site[] | { sites?: Site[] };
-    const list = Array.isArray(data) ? data : data.sites ?? [];
-    return list.filter((site) => Number.isFinite(site.id));
+    return readApiJson(res, isSiteOptionList, "Impossible de charger les sites");
   }
 
   async function generateNowBySite() {
     setGenerating(true);
+    setLastGenerated(null);
     setGenerationProgress(null);
     setGenerationStatus("Initialisation des tables...");
     try {
-      await fetch("/api/init", { method: "POST" });
+      const initResponse = await fetch("/api/init", { method: "POST" });
+      await readApiJson(
+        initResponse,
+        isInitSuccess,
+        "Impossible d'initialiser les tables",
+      );
+
       const sites = await fetchSitesForGeneration();
       if (sites.length === 0) throw new Error("Aucun site actif");
 
       let failed = 0;
+      const failures: Array<{ site: string; error: string }> = [];
       setGenerationProgress({ done: 0, total: sites.length, failed: 0 });
 
       for (let i = 0; i < sites.length; i++) {
@@ -245,28 +245,51 @@ export default function ReportsPage() {
             body: JSON.stringify({ site_id: site.id }),
             signal: controller.signal,
           });
-          if (!res.ok) failed++;
-        } catch {
+          await readApiJson(
+            res,
+            isReportGenerationSuccess,
+            `Rapport ${site.name} non généré`,
+          );
+        } catch (error) {
           failed++;
+          failures.push({
+            site: site.name,
+            error: error instanceof Error ? error.message : "Erreur réseau inconnue",
+          });
         } finally {
           window.clearTimeout(timeout);
           setGenerationProgress({ done: i + 1, total: sites.length, failed });
         }
       }
 
-      if (failed === 0) {
+      const reportsReloaded = await fetchReports(false);
+      if (failed === 0 && reportsReloaded) {
         setLastGenerated(new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }));
-        showNotification("success", "Rapports generes avec succes");
+        showNotification("success", "Rapports générés avec succès");
       } else {
-        showNotification("error", `${failed} rapport(s) non genere(s). Les autres ont continue.`);
+        const failureDetails = failures
+          .slice(0, 3)
+          .map((failure) => `${failure.site}: ${failure.error}`)
+          .join(" ; ");
+        const remaining = failures.length > 3 ? ` ; +${failures.length - 3} autre(s)` : "";
+        const generationError = failed > 0
+          ? `${failed} rapport(s) non généré(s). ${failureDetails}${remaining}`
+          : "Rapports générés, mais leur rechargement a échoué";
+        const reloadError = failed > 0 && !reportsReloaded
+          ? " La liste des rapports n'a pas pu être rechargée."
+          : "";
+        showNotification("error", `${generationError}${reloadError}`);
       }
-      await fetchReports();
-    } catch (e) {
-      showNotification("error", `Erreur generation : ${e instanceof Error ? e.message : "reseau"}`);
+    } catch (error) {
+      showNotification(
+        "error",
+        `Erreur génération : ${error instanceof Error ? error.message : "réseau"}`,
+      );
+    } finally {
+      setGenerationStatus(null);
+      setGenerationProgress(null);
+      setGenerating(false);
     }
-    setGenerationStatus(null);
-    setGenerationProgress(null);
-    setGenerating(false);
   }
 
   return (

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { askAICached } from "@/lib/ai-cache";
+import { isRecord } from "@/lib/api-response";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -8,10 +10,17 @@ export const dynamic = "force-dynamic";
 // GET — declining articles detection
 // ---------------------------------------------------------------------------
 export async function GET(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   try {
-    const siteId = req.nextUrl.searchParams.get("site_id");
-    if (!siteId) {
-      return NextResponse.json({ error: "site_id required" }, { status: 400 });
+    const siteIdParam = req.nextUrl.searchParams.get("site_id");
+    const siteId = Number(siteIdParam);
+    if (!siteIdParam || !Number.isInteger(siteId) || siteId <= 0) {
+      return NextResponse.json(
+        { success: false, error: "site_id must be a positive integer" },
+        { status: 400 },
+      );
     }
 
     const sql = getSQL();
@@ -38,7 +47,7 @@ export async function GET(req: NextRequest) {
                SUM(clicks) AS clicks_now,
                AVG(position) AS pos_now
         FROM search_console_data
-        WHERE site_id = ${Number(siteId)}
+        WHERE site_id = ${siteId}
           AND date >= NOW() - INTERVAL '14 days'
           AND page IS NOT NULL
           AND country IS NULL
@@ -49,7 +58,7 @@ export async function GET(req: NextRequest) {
                SUM(clicks) AS clicks_prev,
                AVG(position) AS pos_prev
         FROM search_console_data
-        WHERE site_id = ${Number(siteId)}
+        WHERE site_id = ${siteId}
           AND date >= NOW() - INTERVAL '28 days'
           AND date < NOW() - INTERVAL '14 days'
           AND page IS NOT NULL
@@ -71,10 +80,18 @@ export async function GET(req: NextRequest) {
       ORDER BY (p.clicks_prev - c.clicks_now) DESC
     `;
 
-    return NextResponse.json({ pages: rows });
+    const suggestions = await sql`
+      SELECT id, page_url, suggestions, status, created_at
+      FROM content_refresh
+      WHERE site_id = ${siteId}
+      ORDER BY created_at DESC
+      LIMIT 20
+    `;
+
+    return NextResponse.json({ success: true, pages: rows, suggestions });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }
 
@@ -82,17 +99,32 @@ export async function GET(req: NextRequest) {
 // POST — trigger AI refresh suggestions for a specific page
 // ---------------------------------------------------------------------------
 export async function POST(req: NextRequest) {
-  try {
-    const body = (await req.json()) as {
-      site_id: number;
-      page_url: string;
-    };
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
 
-    const { site_id, page_url } = body;
-    if (!site_id || !page_url) {
+  try {
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
       return NextResponse.json(
-        { error: "site_id and page_url required" },
-        { status: 400 }
+        { success: false, error: "Request body must be valid JSON" },
+        { status: 400 },
+      );
+    }
+
+    const siteId = isRecord(body) ? body.site_id : null;
+    const rawPageUrl = isRecord(body) ? body.page_url : null;
+    const pageUrl = typeof rawPageUrl === "string" ? rawPageUrl.trim() : "";
+    if (
+      typeof siteId !== "number"
+      || !Number.isInteger(siteId)
+      || siteId <= 0
+      || !pageUrl
+    ) {
+      return NextResponse.json(
+        { success: false, error: "site_id must be a positive integer and page_url is required" },
+        { status: 400 },
       );
     }
 
@@ -115,8 +147,14 @@ export async function POST(req: NextRequest) {
     `;
 
     // Fetch site name
-    const siteRows = await sql`SELECT name FROM sites WHERE id = ${site_id}`;
-    const siteName = siteRows[0]?.name ?? "Unknown";
+    const siteRows = await sql`SELECT name FROM sites WHERE id = ${siteId}`;
+    if (siteRows.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "Site not found" },
+        { status: 404 },
+      );
+    }
+    const siteName = String(siteRows[0].name);
 
     // Fetch decline metrics for this page
     const metrics = await sql`
@@ -125,11 +163,11 @@ export async function POST(req: NextRequest) {
                SUM(clicks) AS clicks_now,
                AVG(position) AS pos_now
         FROM search_console_data
-        WHERE site_id = ${site_id}
+        WHERE site_id = ${siteId}
           AND date >= NOW() - INTERVAL '14 days'
           AND page IS NOT NULL
           AND country IS NULL
-          AND page = ${page_url}
+          AND page = ${pageUrl}
         GROUP BY page
       ),
       previous_period AS (
@@ -137,12 +175,12 @@ export async function POST(req: NextRequest) {
                SUM(clicks) AS clicks_prev,
                AVG(position) AS pos_prev
         FROM search_console_data
-        WHERE site_id = ${site_id}
+        WHERE site_id = ${siteId}
           AND date >= NOW() - INTERVAL '28 days'
           AND date < NOW() - INTERVAL '14 days'
           AND page IS NOT NULL
           AND country IS NULL
-          AND page = ${page_url}
+          AND page = ${pageUrl}
         GROUP BY page
       )
       SELECT
@@ -160,10 +198,10 @@ export async function POST(req: NextRequest) {
     const posAfter = metrics[0]?.pos_now ?? 0;
 
     // Ask AI for optimization suggestions
-    const prompt = `Analyze this URL ${page_url} for site ${siteName}. It's declining in Google rankings (position went from ${posBefore} to ${posAfter}, clicks dropped from ${clicksBefore} to ${clicksAfter}). Suggest 5 specific content improvements: title tag, meta description, new sections to add, internal links to add, and keyword density improvements. Respond in JSON format.`;
+    const prompt = `Analyze this URL ${pageUrl} for site ${siteName}. It's declining in Google rankings (position went from ${posBefore} to ${posAfter}, clicks dropped from ${clicksBefore} to ${clicksAfter}). Suggest 5 specific content improvements: title tag, meta description, new sections to add, internal links to add, and keyword density improvements. Respond in JSON format.`;
 
     const { reply: raw } = await askAICached({
-      cacheKey: `content-refresh:${site_id}:${page_url}`,
+      cacheKey: `content-refresh:${siteId}:${pageUrl}`,
       messages: [{ role: "user", content: prompt }],
       model: "smart",
       maxTokens: 2000,
@@ -182,13 +220,17 @@ export async function POST(req: NextRequest) {
     // Store in DB
     const inserted = await sql`
       INSERT INTO content_refresh (site_id, page_url, clicks_before, clicks_after, position_before, position_after, suggestions, status)
-      VALUES (${site_id}, ${page_url}, ${clicksBefore}, ${clicksAfter}, ${posBefore}, ${posAfter}, ${JSON.stringify(suggestions)}, 'pending')
+      VALUES (${siteId}, ${pageUrl}, ${clicksBefore}, ${clicksAfter}, ${posBefore}, ${posAfter}, ${JSON.stringify(suggestions)}, 'pending')
       RETURNING *
     `;
 
-    return NextResponse.json({ refresh: inserted[0] });
+    if (!inserted[0]) {
+      throw new Error("Refresh suggestion was not persisted");
+    }
+
+    return NextResponse.json({ success: true, refresh: inserted[0] });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }

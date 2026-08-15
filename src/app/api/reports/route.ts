@@ -16,11 +16,28 @@ export async function GET(request: NextRequest) {
     const sql = getSQL();
 
     if (siteId) {
+      const parsedSiteId = Number(siteId);
+      if (!Number.isInteger(parsedSiteId) || parsedSiteId <= 0) {
+        return NextResponse.json(
+          { success: false, error: "siteId must be a positive integer" },
+          { status: 400 },
+        );
+      }
+
       const rows = await sql`
-        SELECT wr.*, s.name as site_name, s.url as site_url
+        SELECT
+          wr.id,
+          wr.site_id,
+          wr.week_start,
+          COALESCE(wr.summary, '') AS summary,
+          COALESCE(wr.recommendations, '') AS recommendations,
+          COALESCE(wr.top_opportunities, '[]'::jsonb) AS top_opportunities,
+          wr.created_at,
+          s.name AS site_name,
+          s.url AS site_url
         FROM weekly_reports wr
         JOIN sites s ON s.id = wr.site_id
-        WHERE wr.site_id = ${parseInt(siteId)}
+        WHERE wr.site_id = ${parsedSiteId}
         ORDER BY wr.week_start DESC
         LIMIT ${limit}
       `;
@@ -30,7 +47,15 @@ export async function GET(request: NextRequest) {
     // Latest report per site
     const rows = await sql`
       SELECT DISTINCT ON (wr.site_id)
-        wr.*, s.name as site_name, s.url as site_url
+        wr.id,
+        wr.site_id,
+        wr.week_start,
+        COALESCE(wr.summary, '') AS summary,
+        COALESCE(wr.recommendations, '') AS recommendations,
+        COALESCE(wr.top_opportunities, '[]'::jsonb) AS top_opportunities,
+        wr.created_at,
+        s.name AS site_name,
+        s.url AS site_url
       FROM weekly_reports wr
       JOIN sites s ON s.id = wr.site_id
       ORDER BY wr.site_id, wr.week_start DESC
@@ -38,6 +63,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(rows);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }

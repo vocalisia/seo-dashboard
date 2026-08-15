@@ -149,7 +149,7 @@ export function DashboardToolNavigation({ mobileOpen, onMobileClose }: Dashboard
             </span>
             <span>
               <span id={mobile ? "mobile-tool-navigation-title" : undefined} className="block text-sm font-semibold text-white">SEO Dashboard</span>
-              <span className="block text-xs text-slate-400">{DASHBOARD_TOOLS.length} outils reliés</span>
+              <span className="block text-xs text-slate-400">Pilotage SEO unifié</span>
             </span>
           </Link>
           {mobile && (

@@ -70,13 +70,13 @@ export const DASHBOARD_TOOLS: DashboardTool[] = [
   { href: "/clusters", label: "Clusters", description: "Regroupements sémantiques", group: "content", icon: "clusters" },
   { href: "/ai-visibility", label: "Visibilité IA", description: "Présence dans les réponses IA", group: "content", icon: "aiVisibility" },
   { href: "/ai-prompts", label: "Prompts IA", description: "Questions et citations à suivre", group: "content", icon: "aiPrompts" },
-  { href: "/aio-detector", label: "Préparation LLM", description: "Lisibilité et citabilité", group: "content", icon: "aio" },
+  { href: "/aio-detector", label: "Signaux AIO", description: "Candidats CTR à vérifier dans la SERP", group: "content", icon: "aio" },
   { href: "/youtube", label: "YouTube", description: "Analyse de visibilité vidéo", group: "content", icon: "youtube" },
 
   { href: "/keyword-planner-import", label: "Import Keyword Planner", description: "Volumes sourcés par marché", group: "data", icon: "import" },
   { href: "/ga4-audit", label: "Audit GA4", description: "Mesure et configuration Analytics", group: "data", icon: "ga4" },
   { href: "/traffic-by-country", label: "Trafic par pays", description: "Répartition géographique GA4", group: "data", icon: "traffic" },
-  { href: "/logs", label: "Journaux", description: "Synchronisations et erreurs récentes", group: "data", icon: "logs" },
+  { href: "/logs", label: "Logs de crawl", description: "Passages observés des robots", group: "data", icon: "logs" },
 ];
 
 export function dashboardToolForPath(pathname: string): DashboardTool | undefined {

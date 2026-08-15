@@ -15,6 +15,7 @@ import {
   isBraveConfigured,
 } from "@/lib/brave-search";
 import { logError, logger } from "@/lib/logger";
+import { runOutcome } from "@/lib/run-outcome";
 
 interface SiteRow {
   id: number;
@@ -161,7 +162,7 @@ export async function POST(request: Request) {
     summary.push({
       site_id: site.id,
       site_name: site.name,
-      checked: kws.length,
+      checked: Math.max(0, kws.length - errors),
       ranked,
       errors,
     });
@@ -172,15 +173,20 @@ export async function POST(request: Request) {
     "rank tracker run finished"
   );
 
+  const requestedChecks = summary.reduce((total, site) => total + site.checked + site.errors, 0);
+  const outcome = runOutcome(totalChecks, totalErrors, requestedChecks);
+
   return NextResponse.json({
-    success: true,
+    success: outcome.success,
+    partial: outcome.partial,
+    skipped: outcome.skipped,
     engine: "brave",
     limit_per_site: limitPerSite,
     sites: sites.length,
     total_checks: totalChecks,
     total_errors: totalErrors,
     summary,
-  });
+  }, { status: outcome.statusCode });
 }
 
 // Vercel cron sends GET — alias to POST so /api/cron/rank-tracker-daily can fire it.

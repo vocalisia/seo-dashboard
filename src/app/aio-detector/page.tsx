@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Loader2, ChevronLeft, Sparkles, RefreshCw } from "lucide-react";
 
@@ -33,6 +33,7 @@ interface AIOSummary {
 }
 
 interface AIOResponse {
+  success?: boolean;
   rows?: AIORow[];
   summary?: AIOSummary[];
   coverage?: AIOSummary[];
@@ -43,6 +44,110 @@ interface AIOResponse {
 }
 
 type SiteFilter = number | "all";
+
+interface ParsedAIOResponse {
+  rows: AIORow[];
+  summary: AIOSummary[];
+  coverage: AIOSummary[];
+  scanned: number;
+  sitesScanned: number;
+  sitesWithSignals: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isSite(value: unknown): value is Site {
+  return isRecord(value)
+    && isFiniteNumber(value.id)
+    && typeof value.name === "string"
+    && value.name.trim().length > 0;
+}
+
+function isAIORow(value: unknown): value is AIORow {
+  if (!isRecord(value)) return false;
+  const validSiteId = value.site_id === null || isFiniteNumber(value.site_id);
+  const validSiteName = value.site_name === null || typeof value.site_name === "string";
+  const validConfidence = value.confidence === undefined
+    || value.confidence === "probable"
+    || value.confidence === "watch";
+
+  return typeof value.query === "string"
+    && typeof value.page === "string"
+    && validSiteId
+    && validSiteName
+    && isFiniteNumber(value.position)
+    && isFiniteNumber(value.impressions)
+    && isFiniteNumber(value.clicks)
+    && isFiniteNumber(value.ctr_actual_pct)
+    && isFiniteNumber(value.ctr_expected_pct)
+    && isFiniteNumber(value.ctr_ratio)
+    && isFiniteNumber(value.missed_clicks)
+    && typeof value.aio_likely === "boolean"
+    && validConfidence
+    && typeof value.recommendation === "string";
+}
+
+function isAIOSummary(value: unknown): value is AIOSummary {
+  if (!isRecord(value)) return false;
+  return isFiniteNumber(value.site_id)
+    && (value.site_name === null || typeof value.site_name === "string")
+    && isFiniteNumber(value.candidates)
+    && isFiniteNumber(value.probable)
+    && isFiniteNumber(value.watch)
+    && isFiniteNumber(value.missed_clicks)
+    && (value.checked === undefined || typeof value.checked === "boolean");
+}
+
+function optionalCount(value: unknown): number | null {
+  if (value === undefined) return 0;
+  return isFiniteNumber(value) && value >= 0 ? value : null;
+}
+
+function parseAIOResponse(value: unknown): ParsedAIOResponse | null {
+  if (Array.isArray(value)) {
+    if (!value.every(isAIORow)) return null;
+    return {
+      rows: value,
+      summary: [],
+      coverage: [],
+      scanned: value.length,
+      sitesScanned: 0,
+      sitesWithSignals: 0,
+    };
+  }
+  if (!isRecord(value)) return null;
+  const response = value as AIOResponse;
+  if (!Array.isArray(response.rows) || !response.rows.every(isAIORow)) return null;
+  if (!Array.isArray(response.summary) || !response.summary.every(isAIOSummary)) return null;
+  if (response.coverage !== undefined && (!Array.isArray(response.coverage) || !response.coverage.every(isAIOSummary))) return null;
+
+  const scanned = optionalCount(response.scanned);
+  const sitesScanned = optionalCount(response.sites_scanned);
+  const sitesWithSignals = optionalCount(response.sites_with_signals);
+  if (scanned === null || sitesScanned === null || sitesWithSignals === null) return null;
+
+  return {
+    rows: response.rows,
+    summary: response.summary,
+    coverage: response.coverage ?? response.summary,
+    scanned,
+    sitesScanned,
+    sitesWithSignals: response.sites_with_signals === undefined ? response.summary.length : sitesWithSignals,
+  };
+}
+
+function apiError(value: unknown, fallback: string): string {
+  if (!isRecord(value)) return fallback;
+  if (typeof value.error === "string" && value.error.trim()) return value.error;
+  if (typeof value.message === "string" && value.message.trim()) return value.message;
+  return fallback;
+}
 
 export default function AIODetectorPage() {
   const [sites, setSites] = useState<Site[]>([]);
@@ -56,58 +161,57 @@ export default function AIODetectorPage() {
   const [sitesWithSignals, setSitesWithSignals] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sitesError, setSitesError] = useState<string | null>(null);
+  const [resultKey, setResultKey] = useState<string | null>(null);
+  const scanRequestId = useRef(0);
 
   useEffect(() => {
     fetch("/api/sites")
-      .then((r) => r.json())
-      .catch(() => null)
-      .then((data: unknown) => {
-        if (Array.isArray(data)) setSites(data as Site[]);
-      });
+      .then(async (response) => {
+        const data = await response.json().catch(() => null) as unknown;
+        if (!response.ok) {
+          throw new Error(apiError(data, `Liste des sites indisponible (HTTP ${response.status})`));
+        }
+        if (!Array.isArray(data) || !data.every(isSite)) {
+          throw new Error("La liste des sites reçue est invalide.");
+        }
+        setSites(data);
+        setSitesError(null);
+      })
+      .catch((reason) => setSitesError(reason instanceof Error ? reason.message : "Liste des sites indisponible"));
   }, []);
 
   async function runScan(nextSiteId: SiteFilter = siteId, nextDays: 28 | 90 = days) {
+    const requestId = ++scanRequestId.current;
+    const nextResultKey = `${nextSiteId}:${nextDays}`;
     setLoading(true);
     setError(null);
     const limit = nextSiteId === "all" ? 500 : 150;
     try {
       const res = await fetch(`/api/aio-detector?siteId=${nextSiteId}&days=${nextDays}&limit=${limit}&include_watch=1`);
-      const data = await res.json() as AIOResponse | AIORow[];
-      if (Array.isArray(data)) {
-        setRows(data);
-        setSummary([]);
-        setCoverage([]);
-        setScanned(data.length);
-        setSitesScanned(0);
-        setSitesWithSignals(0);
-        return;
+      const data = await res.json().catch(() => null) as unknown;
+      if (requestId !== scanRequestId.current) return;
+      if (!res.ok) {
+        throw new Error(apiError(data, `Analyse AIO impossible (HTTP ${res.status})`));
       }
-      if (data.error) {
-        setRows([]);
-        setSummary([]);
-        setCoverage([]);
-        setScanned(0);
-        setSitesScanned(0);
-        setSitesWithSignals(0);
-        setError(data.error);
-        return;
+      if (isRecord(data) && (data.success === false || typeof data.error === "string")) {
+        throw new Error(apiError(data, "L'analyse AIO a échoué."));
       }
-      setRows(data.rows ?? []);
-      setSummary(data.summary ?? []);
-      setCoverage(data.coverage ?? data.summary ?? []);
-      setScanned(data.scanned ?? 0);
-      setSitesScanned(data.sites_scanned ?? 0);
-      setSitesWithSignals(data.sites_with_signals ?? data.summary?.length ?? 0);
+      const parsed = parseAIOResponse(data);
+      if (!parsed) throw new Error("La réponse AIO reçue est incomplète ou invalide.");
+
+      setRows(parsed.rows);
+      setSummary(parsed.summary);
+      setCoverage(parsed.coverage);
+      setScanned(parsed.scanned);
+      setSitesScanned(parsed.sitesScanned);
+      setSitesWithSignals(parsed.sitesWithSignals);
+      setResultKey(nextResultKey);
     } catch (err) {
-      setRows([]);
-      setSummary([]);
-      setCoverage([]);
-      setScanned(0);
-      setSitesScanned(0);
-      setSitesWithSignals(0);
-      setError(err instanceof Error ? err.message : "Erreur reseau");
+      if (requestId !== scanRequestId.current) return;
+      setError(err instanceof Error ? err.message : "Erreur réseau pendant l'analyse AIO.");
     } finally {
-      setLoading(false);
+      if (requestId === scanRequestId.current) setLoading(false);
     }
   }
 
@@ -120,6 +224,7 @@ export default function AIODetectorPage() {
   const probableCount = rows.filter((row) => row.confidence === "probable" || row.aio_likely).length;
   const visibleCoverage = coverage.length > 0 ? coverage : summary;
   const zeroSignalCount = Math.max(0, (sitesScanned || sites.length) - sitesWithSignals);
+  const hasCurrentResult = resultKey === `${siteId}:${days}`;
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -129,8 +234,8 @@ export default function AIODetectorPage() {
             <ChevronLeft className="w-5 h-5" />
           </Link>
           <Sparkles className="w-6 h-6 text-cyan-400 shrink-0" />
-          <h1 className="text-xl font-bold whitespace-nowrap">AI Overview Detector</h1>
-          <span className="text-xs text-gray-500 truncate">queries top 10 avec CTR anormalement bas</span>
+          <h1 className="text-xl font-bold whitespace-nowrap">Signaux AIO</h1>
+          <span className="text-xs text-gray-500 truncate">heuristique CTR sur les requêtes GSC en top 10</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -171,25 +276,34 @@ export default function AIODetectorPage() {
       </header>
 
       <div className="px-6 py-3 mx-6 mt-4 bg-cyan-900/20 border border-cyan-700/40 rounded-lg text-xs text-cyan-200">
-        <strong>Methode heuristique sans scraping</strong> — probable: requete informationnelle en top 5 avec CTR tres bas. A verifier: CTR bas en top 10.
+        <strong>Méthode heuristique, sans observation de la SERP.</strong> Un CTR bas en top 10 peut venir d&apos;un aperçu IA, mais aussi du snippet, de l&apos;intention ou des fonctionnalités de résultats. Ces lignes sont des candidats à vérifier, pas des AIO confirmés.
       </div>
+      {sitesError && <div role="alert" className="mx-6 mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">{sitesError} Le scan global reste disponible.</div>}
+      {error && (
+        <div role="alert" className="mx-6 mt-3 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+          {error}{hasCurrentResult ? " Le dernier résultat valide reste affiché." : ""}
+        </div>
+      )}
 
       <div className="px-6 py-4 grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400">Signaux AIO / CTR bas</div>
-          <div className="text-2xl font-bold text-cyan-400">{rows.length}</div>
+          <div className="text-2xl font-bold text-cyan-400">{hasCurrentResult ? rows.length : "—"}</div>
           <div className="text-[11px] text-gray-500">
-            {siteId === "all" ? `${sitesScanned || sites.length} sites controles - ` : ""}{scanned} requetes top 10 controlees
+            {hasCurrentResult
+              ? `${siteId === "all" ? `${sitesScanned || sites.length} sites contrôlés - ` : ""}${scanned} requêtes top 10 contrôlées`
+              : loading ? "Analyse en cours" : "Aucune analyse valide pour ce filtre"}
           </div>
         </div>
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400">Clics manques ({days}j)</div>
-          <div className="text-2xl font-bold text-red-400">-{totalMissed.toLocaleString()}</div>
+          <div className="text-xs text-gray-400">Clics potentiels estimés ({days}j)</div>
+          <div className="text-2xl font-bold text-amber-300">{hasCurrentResult ? totalMissed.toLocaleString() : "—"}</div>
+          <div className="text-[11px] text-gray-500">écart à une courbe CTR théorique, non mesuré</div>
         </div>
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400">Tres probable</div>
-          <div className="text-2xl font-bold text-red-500">{probableCount}</div>
-          {siteId === "all" && (
+          <div className="text-xs text-gray-400">Signaux forts</div>
+          <div className="text-2xl font-bold text-red-500">{hasCurrentResult ? probableCount : "—"}</div>
+          {hasCurrentResult && siteId === "all" && (
             <div className="text-[11px] text-gray-500">{sitesWithSignals} sites avec signal - {zeroSignalCount} sans signal</div>
           )}
         </div>
@@ -197,12 +311,12 @@ export default function AIODetectorPage() {
 
       <div className="px-6 pb-10">
         {loading ? (
-          <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-cyan-500" /></div>
-        ) : error ? (
-          <div className="py-12 text-center text-red-300">{error}</div>
-        ) : rows.length === 0 ? (
+          <div role="status" className="flex items-center justify-center gap-2 py-12 text-sm text-gray-400">
+            <Loader2 className="w-6 h-6 animate-spin text-cyan-500" /> Analyse AIO en cours...
+          </div>
+        ) : !hasCurrentResult ? null : rows.length === 0 ? (
           <div className="py-12 text-center text-gray-500">
-            Aucun signal AIO detecte sur {days}j. {scanned > 0 ? `${scanned} requetes top 10 ont ete controlees.` : "Aucune requete top 10 suffisante a controler."}
+            Analyse terminée : aucun signal AIO détecté sur {days}j. {scanned > 0 ? `${scanned} requêtes top 10 ont été contrôlées.` : "Aucune requête top 10 suffisante n'a pu être contrôlée."}
           </div>
         ) : (
           <div className="space-y-4">

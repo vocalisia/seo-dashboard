@@ -7,6 +7,7 @@ import { requireCronOrUser } from "@/lib/cron-auth";
 import { requireApiSession } from "@/lib/api-auth";
 import { logError } from "@/lib/logger";
 import { searchWebNoKey, type WebSearchProvider, type WebSearchResult } from "@/lib/web-research";
+import { runOutcome } from "@/lib/run-outcome";
 
 interface SerpEntry {
   position: number;
@@ -111,21 +112,26 @@ export async function POST(request: Request) {
   `) as Array<{ id: number; name: string; url: string }>;
 
   const insights: SerpInsight[] = [];
+  let requestedQueries = 0;
+  let failedQueries = 0;
 
   for (const site of sites) {
     const topKw = (await sql`
-      SELECT query, SUM(impressions) AS impressions, AVG(position) AS pos
+      SELECT query, SUM(impressions) AS impressions,
+             SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) AS pos
       FROM search_console_data
       WHERE site_id = ${site.id}
         AND date >= CURRENT_DATE - 7
         AND query IS NOT NULL
       GROUP BY query
-      HAVING SUM(impressions) >= 50 AND AVG(position) <= 30 AND AVG(position) >= 4
+      HAVING SUM(impressions) >= 50
+         AND SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) BETWEEN 4 AND 30
       ORDER BY SUM(impressions) DESC
       LIMIT 3
     `) as Array<{ query: string; impressions: string; pos: string }>;
 
     for (const kw of topKw) {
+      requestedQueries += 1;
       try {
         // Source snapshot: Bing RSS first, DuckDuckGo HTML only as fallback.
         const search = await searchWebNoKey(kw.query, "fr-FR", 20);
@@ -136,6 +142,7 @@ export async function POST(request: Request) {
             query: kw.query,
             providers: search.providers,
           });
+          failedQueries += 1;
           continue;
         }
         const { source: resultSource, results: sourceResults } = snapshot;
@@ -194,20 +201,25 @@ export async function POST(request: Request) {
           ai_analysis: analysis,
         });
       } catch (e) {
-        // Skip this KW on error
+        failedQueries += 1;
         logError("serp-track.kw", e, { site: site.name, query: kw.query });
       }
     }
   }
 
+  const outcome = runOutcome(insights.length, failedQueries, requestedQueries);
   return NextResponse.json({
-    success: true,
+    success: outcome.success,
+    partial: outcome.partial,
+    skipped: outcome.skipped,
     sites_tracked: sites.length,
+    queries_requested: requestedQueries,
+    queries_failed: failedQueries,
     insights_count: insights.length,
     new_competitor_alerts: insights.filter((i) => i.new_competitors_top10.length > 0).length,
     analysis_engine: "local_rules_v2",
     insights,
-  });
+  }, { status: outcome.statusCode });
 }
 
 export async function GET() {

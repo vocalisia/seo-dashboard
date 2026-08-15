@@ -4,19 +4,12 @@ export const maxDuration = 120;
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { extractPageSpeedMetrics, type PageSpeedMetrics } from "@/lib/pagespeed";
 
 interface Site {
   id: number;
   name: string;
   url: string;
-}
-
-interface PageSpeedMetrics {
-  score: number;
-  lcp: number;
-  cls: number;
-  fcp: number;
-  ttfb: number;
 }
 
 interface SiteResult {
@@ -29,28 +22,6 @@ interface SiteResult {
   desktop_lcp: number;
   status: string;
   error?: string;
-}
-
-function extractMetrics(data: Record<string, unknown>): PageSpeedMetrics {
-  const lr = data.lighthouseResult as Record<string, unknown> | undefined;
-  const cats = lr?.categories as Record<string, Record<string, unknown>> | undefined;
-  const score = Math.round(Number(cats?.performance?.score ?? 0) * 100);
-
-  const audits = (lr?.audits ?? {}) as Record<string, Record<string, unknown>>;
-
-  const numVal = (key: string): number => {
-    const audit = audits[key];
-    if (!audit) return 0;
-    return Number(audit.numericValue ?? 0) / 1000;
-  };
-
-  return {
-    score,
-    lcp: Math.round(numVal("largest-contentful-paint") * 100) / 100,
-    cls: Math.round(Number(audits["cumulative-layout-shift"]?.numericValue ?? 0) * 1000) / 1000,
-    fcp: Math.round(numVal("first-contentful-paint") * 100) / 100,
-    ttfb: Math.round(numVal("server-response-time") * 100) / 100,
-  };
 }
 
 async function fetchPageSpeed(url: string, strategy: "mobile" | "desktop"): Promise<PageSpeedMetrics> {
@@ -66,7 +37,7 @@ async function fetchPageSpeed(url: string, strategy: "mobile" | "desktop"): Prom
   }
 
   const data = (await res.json()) as Record<string, unknown>;
-  return extractMetrics(data);
+  return extractPageSpeedMetrics(data);
 }
 
 export async function POST(request: Request) {

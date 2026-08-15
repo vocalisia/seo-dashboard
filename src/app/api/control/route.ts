@@ -363,7 +363,15 @@ async function probeEndpoint(
     if (!res.ok) return { name, status: "fail", detail: `HTTP ${res.status} (${ms}ms)`, metric: res.status };
     const text = await res.text();
     let parsed: unknown = null;
-    try { parsed = JSON.parse(text); } catch {}
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return {
+        name,
+        status: "fail",
+        detail: `Réponse non JSON (${ms}ms, ${text.length} octets)`,
+      };
+    }
     if (parsed && typeof parsed === "object") {
       const obj = parsed as Record<string, unknown>;
       if (name === "GET /api/realtime (GA4)" && typeof obj.totalActive === "number") {
@@ -381,7 +389,7 @@ async function probeEndpoint(
       const count = arr ? arr.length : Array.isArray(parsed) ? parsed.length : 0;
       return { name, status: count === 0 ? "warn" : "ok", detail: count === 0 ? `200 but 0 results (${ms}ms)` : `${count} results (${ms}ms)`, metric: count };
     }
-    return { name, status: "ok", detail: `200 (${ms}ms, non-JSON ${text.length} bytes)` };
+    return { name, status: "warn", detail: `200 (${ms}ms, réponse JSON sans données reconnues)` };
   } catch (e) {
     return { name, status: "fail", detail: `Network error: ${e instanceof Error ? e.message : "unknown"}` };
   }

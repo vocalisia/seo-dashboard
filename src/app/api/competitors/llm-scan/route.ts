@@ -6,6 +6,7 @@ import { getSQL, ensureSchema } from "@/lib/db";
 import { logError, logger } from "@/lib/logger";
 import { scanCompetitors, scoreReadiness, type LLMScanFindings } from "@/lib/llm-scan";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { requireApiSession } from "@/lib/api-auth";
 
 const CACHE_DAYS = 7;
 
@@ -84,9 +85,12 @@ function cacheRowToPayload(row: CachedScanRow): ScanResultPayload {
 
 /**
  * GET /api/competitors/llm-scan?site_id=X
- * Returns cached scans (no auth — read-only, same as parent /api/competitors GET).
+ * Returns cached scans for an authenticated dashboard session.
  */
 export async function GET(req: NextRequest) {
+  const auth = await requireApiSession();
+  if (auth.unauthorized) return auth.unauthorized;
+
   const siteIdParam = req.nextUrl.searchParams.get("site_id");
   if (!siteIdParam) {
     return NextResponse.json(

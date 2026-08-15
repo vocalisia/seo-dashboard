@@ -143,7 +143,7 @@ export const proxy = auth((req) => {
   // Other routes: need session
   if (!req.auth && !isPublic) {
     const loginUrl = new URL("/login", req.url);
-    loginUrl.searchParams.set("callbackUrl", req.url);
+    loginUrl.searchParams.set("callbackUrl", `${req.nextUrl.pathname}${req.nextUrl.search}`);
     return NextResponse.redirect(loginUrl);
   }
 

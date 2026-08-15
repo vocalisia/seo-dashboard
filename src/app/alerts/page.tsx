@@ -113,6 +113,7 @@ function AlertDetails({ alert }: { alert: Alert }) {
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
+  const [alertsError, setAlertsError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [filterSite, setFilterSite] = useState<string>("all");
   const [filterSeverity, setFilterSeverity] = useState<string>("all");
@@ -120,54 +121,124 @@ export default function AlertsPage() {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [mentions, setMentions] = useState<BrandMention[]>([]);
   const [mentionsLoading, setMentionsLoading] = useState(false);
+  const [mentionsError, setMentionsError] = useState<string | null>(null);
   const [scanningMentions, setScanningMentions] = useState(false);
+  const [markingReadId, setMarkingReadId] = useState<number | null>(null);
+  const [operationMessage, setOperationMessage] = useState<string | null>(null);
+
+  function errorMessage(error: unknown, fallback: string) {
+    return error instanceof Error && error.message ? error.message : fallback;
+  }
 
   async function fetchMentions() {
     setMentionsLoading(true);
+    setMentionsError(null);
     try {
       const res = await fetch("/api/brand-mentions?limit=30");
-      const d = await res.json() as { mentions?: BrandMention[] };
+      const d = await res.json().catch(() => ({})) as {
+        success?: boolean;
+        mentions?: BrandMention[];
+        error?: string;
+      };
+      if (!res.ok || d.success === false) {
+        throw new Error(d.error || `Chargement impossible (HTTP ${res.status})`);
+      }
       setMentions(d.mentions ?? []);
-    } catch { /* ignore */ }
-    setMentionsLoading(false);
+    } catch (error) {
+      setMentionsError(errorMessage(error, "Impossible de charger les mentions."));
+    } finally {
+      setMentionsLoading(false);
+    }
   }
 
   async function scanMentions() {
     setScanningMentions(true);
+    setMentionsError(null);
+    setOperationMessage(null);
     try {
-      await fetch("/api/brand-mentions/scan", { method: "POST" });
+      const res = await fetch("/api/brand-mentions/scan", { method: "POST" });
+      const d = await res.json().catch(() => ({})) as {
+        success?: boolean;
+        summary?: Array<{ found?: number; inserted?: number }>;
+        error?: string;
+      };
+      if (!res.ok || d.success !== true) {
+        throw new Error(d.error || `Scan impossible (HTTP ${res.status})`);
+      }
       await fetchMentions();
-    } catch { /* ignore */ }
-    setScanningMentions(false);
+      const found = d.summary?.reduce((sum, item) => sum + (item.found ?? 0), 0) ?? 0;
+      setOperationMessage(`Scan des mentions terminé : ${found} résultat${found > 1 ? "s" : ""} détecté${found > 1 ? "s" : ""}.`);
+    } catch (error) {
+      setMentionsError(errorMessage(error, "Le scan des mentions a échoué."));
+    } finally {
+      setScanningMentions(false);
+    }
   }
 
   async function fetchAlerts() {
     setLoading(true);
+    setAlertsError(null);
     try {
       const res = await fetch("/api/alerts");
-      const d = await res.json() as { alerts?: Alert[] };
+      const d = await res.json().catch(() => ({})) as {
+        success?: boolean;
+        alerts?: Alert[];
+        error?: string;
+      };
+      if (!res.ok || d.success !== true) {
+        throw new Error(d.error || `Chargement impossible (HTTP ${res.status})`);
+      }
       setAlerts(d.alerts ?? []);
-    } catch { /* ignore */ }
-    setLoading(false);
+    } catch (error) {
+      setAlertsError(errorMessage(error, "Impossible de charger les alertes."));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function runCheck() {
     setChecking(true);
+    setAlertsError(null);
+    setOperationMessage(null);
     try {
-      await fetch("/api/alerts/check", { method: "POST" });
+      const res = await fetch("/api/alerts/check", { method: "POST" });
+      const d = await res.json().catch(() => ({})) as {
+        success?: boolean;
+        alerts?: number;
+        error?: string;
+      };
+      if (!res.ok || d.success !== true) {
+        throw new Error(d.error || `Vérification impossible (HTTP ${res.status})`);
+      }
       await fetchAlerts();
-    } catch { /* ignore */ }
-    setChecking(false);
+      const count = d.alerts ?? 0;
+      setOperationMessage(`Vérification terminée : ${count} alerte${count > 1 ? "s" : ""} détectée${count > 1 ? "s" : ""}.`);
+    } catch (error) {
+      setAlertsError(errorMessage(error, "La vérification des alertes a échoué."));
+    } finally {
+      setChecking(false);
+    }
   }
 
   async function markRead(id: number) {
+    setMarkingReadId(id);
+    setAlertsError(null);
     try {
-      await fetch(`/api/alerts/${id}/read`, { method: "POST" });
+      const res = await fetch(`/api/alerts/${id}/read`, { method: "POST" });
+      const d = await res.json().catch(() => ({})) as { success?: boolean; error?: string };
+      if (!res.ok || d.success !== true) {
+        throw new Error(d.error || `Mise à jour impossible (HTTP ${res.status})`);
+      }
       setAlerts((prev) => prev.map((a) => a.id === id ? { ...a, is_read: true } : a));
-    } catch { /* ignore */ }
+    } catch (error) {
+      setAlertsError(errorMessage(error, "Impossible de marquer cette alerte comme lue."));
+    } finally {
+      setMarkingReadId(null);
+    }
   }
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  // Initial load is intentionally tied to the page mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchAlerts(); void fetchMentions(); }, []);
 
   const siteNames = Array.from(new Set(alerts.map((a) => a.site_name).filter((n): n is string => n !== null)));
@@ -198,19 +269,31 @@ export default function AlertsPage() {
       </div>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {operationMessage && (
+          <div role="status" className="rounded-xl border border-emerald-800 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-200">
+            {operationMessage}
+          </div>
+        )}
+
+        {alertsError && (
+          <div role="alert" className="rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+            <span className="font-medium">Données d’alertes indisponibles.</span> {alertsError}
+          </div>
+        )}
+
         {/* Stats + actions */}
         <div className="flex items-center gap-4">
           <div className="flex gap-3">
             <div className="bg-red-900/20 border border-red-800 rounded-lg px-4 py-2 text-center">
-              <div className="text-2xl font-bold text-red-400">{critical}</div>
-              <div className="text-xs text-gray-400">Critical</div>
+              <div className="text-2xl font-bold text-red-400">{loading && alerts.length === 0 ? "—" : critical}</div>
+              <div className="text-xs text-gray-400">Critiques</div>
             </div>
             <div className="bg-yellow-900/20 border border-yellow-800 rounded-lg px-4 py-2 text-center">
-              <div className="text-2xl font-bold text-yellow-400">{warning}</div>
-              <div className="text-xs text-gray-400">Warning</div>
+              <div className="text-2xl font-bold text-yellow-400">{loading && alerts.length === 0 ? "—" : warning}</div>
+              <div className="text-xs text-gray-400">Avertissements</div>
             </div>
             <div className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-center">
-              <div className="text-2xl font-bold text-white">{alerts.length}</div>
+              <div className="text-2xl font-bold text-white">{loading && alerts.length === 0 ? "—" : alerts.length}</div>
               <div className="text-xs text-gray-400">Total</div>
             </div>
           </div>
@@ -278,15 +361,19 @@ export default function AlertsPage() {
         </div>
 
         {/* Alerts list */}
-        {loading ? (
+        {loading && alerts.length === 0 ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
+          </div>
+        ) : alertsError && alerts.length === 0 ? (
+          <div className="rounded-xl border border-red-900 bg-gray-900 px-6 py-12 text-center text-sm text-gray-300">
+            Le serveur n’a pas renvoyé les alertes. Relance la vérification après avoir corrigé l’erreur affichée ci-dessus.
           </div>
         ) : filtered.length === 0 ? (
           <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center">
             <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-4" />
-            <div className="text-lg font-medium text-green-400">Aucune alerte</div>
-            <div className="text-sm text-gray-500 mt-1">Tout va bien sur tes 16 sites</div>
+            <div className="text-lg font-medium text-green-400">Aucune alerte dans cette vue</div>
+            <div className="text-sm text-gray-500 mt-1">Ce résultat correspond aux données chargées et aux filtres actifs.</div>
           </div>
         ) : (
           <div className="space-y-3">
@@ -341,10 +428,11 @@ export default function AlertsPage() {
                   {!alert.is_read && (
                     <button
                       onClick={() => markRead(alert.id)}
+                      disabled={markingReadId === alert.id}
                       title="Marquer comme lu"
-                      className="absolute top-3 right-3 text-gray-500 hover:text-green-400 transition-colors"
+                      className="absolute top-2 right-2 grid min-h-11 min-w-11 place-items-center rounded-lg text-gray-500 transition-colors hover:bg-gray-800 hover:text-green-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-wait disabled:opacity-50"
                     >
-                      <CheckCircle className="w-5 h-5" />
+                      {markingReadId === alert.id ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle className="h-5 w-5" />}
                     </button>
                   )}
                 </div>
@@ -369,9 +457,18 @@ export default function AlertsPage() {
             </button>
           </div>
           <div className="p-4">
-            {mentionsLoading ? (
+            {mentionsError && (
+              <div role="alert" className="mb-4 rounded-lg border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+                <span className="font-medium">Mentions indisponibles.</span> {mentionsError}
+              </div>
+            )}
+            {mentionsLoading && mentions.length === 0 ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
+              </div>
+            ) : mentionsError && mentions.length === 0 ? (
+              <div className="py-6 text-center text-sm text-gray-500">
+                Aucun résultat fiable n’est affiché tant que le chargement échoue.
               </div>
             ) : mentions.length === 0 ? (
               <div className="text-sm text-gray-500 text-center py-6">

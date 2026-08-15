@@ -1,23 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Loader2, Globe, AlertTriangle, FileText, ExternalLink, CheckCircle, XCircle } from "lucide-react";
 import Link from "next/link";
 import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
 import { formatFixed } from "@/lib/safe-number";
+import { isRecord, readApiJson } from "@/lib/api-response";
 
-interface Site {
-  id: number;
-  name: string;
-  url: string;
-}
-
-interface CountryStat {
-  country: string;
-  clicks: number;
-  impressions: number;
-  queries: number;
-}
+interface Site { id: number; name: string }
+interface CountryStat { country: string; clicks: number; impressions: number; queries: number }
 
 interface CannibalPage {
   url: string;
@@ -45,14 +36,54 @@ interface ArticleRow {
 }
 
 interface CountriesData {
-  success: boolean;
+  success: true;
   countries: CountryStat[];
   cannibalization: CannibalGroup[];
   articles: ArticleRow[];
   filter: { country: string | null; language: string | null };
 }
+type SitesState = "loading" | "ready" | "empty" | "error";
+type DataState = "idle" | "loading" | "ready" | "error";
 
-// ISO-3 → flag + display name
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isSiteList(payload: unknown): payload is Site[] {
+  return Array.isArray(payload) && payload.every((site) =>
+    isRecord(site) && isFiniteNumber(site.id) && typeof site.name === "string"
+  );
+}
+
+function isCountriesData(payload: unknown): payload is CountriesData {
+  return isRecord(payload)
+    && payload.success === true
+    && Array.isArray(payload.countries)
+    && payload.countries.every((country) => isRecord(country)
+      && typeof country.country === "string"
+      && [country.clicks, country.impressions, country.queries].every(isFiniteNumber))
+    && Array.isArray(payload.cannibalization)
+    && payload.cannibalization.every((group) => isRecord(group)
+      && typeof group.query === "string"
+      && Array.isArray(group.pages)
+      && group.pages.every((page) => isRecord(page)
+        && typeof page.url === "string"
+        && [page.clicks, page.impressions, page.position].every(isFiniteNumber)))
+    && Array.isArray(payload.articles)
+    && payload.articles.every((article) => isRecord(article)
+      && isFiniteNumber(article.id) && isFiniteNumber(article.site_id)
+      && isNullableString(article.site_name) && isNullableString(article.github_url) && isNullableString(article.image_url)
+      && [article.keyword, article.article_title, article.language, article.status].every((value) => typeof value === "string")
+      && typeof article.created_at === "string" && !Number.isNaN(Date.parse(article.created_at)))
+    && isRecord(payload.filter)
+    && isNullableString(payload.filter.country)
+    && isNullableString(payload.filter.language);
+}
+
 const COUNTRY_INFO: Record<string, { flag: string; name: string }> = {
   FRA: { flag: "🇫🇷", name: "France" },
   BEL: { flag: "🇧🇪", name: "Belgique" },
@@ -76,12 +107,8 @@ const COUNTRY_INFO: Record<string, { flag: string; name: string }> = {
   BRA: { flag: "🇧🇷", name: "Brasil" },
 };
 
-const LANG_FLAG: Record<string, string> = {
-  fr: "🇫🇷", en: "🇬🇧", de: "🇩🇪", es: "🇪🇸", it: "🇮🇹", nl: "🇳🇱", pt: "🇵🇹",
-};
-
 function countryDisplay(iso: string): { flag: string; name: string } {
-  return COUNTRY_INFO[iso] ?? { flag: "🌍", name: iso };
+  return COUNTRY_INFO[iso] ?? { flag: "", name: iso };
 }
 
 export default function CountriesPage() {
@@ -89,45 +116,61 @@ export default function CountriesPage() {
   const [selectedSite, setSelectedSite] = useState<number | "all" | null>(null);
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [data, setData] = useState<CountriesData | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [sitesState, setSitesState] = useState<SitesState>("loading");
+  const [dataState, setDataState] = useState<DataState>("idle");
+  const [siteError, setSiteError] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void fetchSites();
-  }, []);
-
-  useEffect(() => {
-    if (selectedSite) void fetchCountries();
-  }, [selectedSite, selectedCountry]);
-
-  async function fetchSites() {
+  const fetchSites = useCallback(async () => {
     try {
       const res = await fetch("/api/sites");
-      const d = await res.json() as Site[] | { sites?: Site[] };
-      const list = Array.isArray(d) ? d : d.sites ?? [];
-      if (list.length > 0) {
-        setSites(list);
-        if (!selectedSite && list.length > 0) setSelectedSite(list[0].id);
+      const list = await readApiJson(res, isSiteList, "Impossible de charger les sites");
+      setSites(list);
+      if (list.length === 0) {
+        setSelectedSite(null);
+        setSitesState("empty");
+        return;
       }
-    } catch {
-      // ignore
+      setData(null);
+      setDataError(null);
+      setDataState("loading");
+      setSelectedSite(list[0].id);
+      setSitesState("ready");
+    } catch (caught) {
+      setSites([]);
+      setSelectedSite(null);
+      setData(null);
+      setSiteError(caught instanceof Error ? caught.message : "Impossible de charger les sites");
+      setSitesState("error");
     }
-  }
+  }, []);
 
-  async function fetchCountries() {
-    if (!selectedSite) return;
-    setLoading(true);
+  const fetchCountries = useCallback(async () => {
+    if (selectedSite === null) return;
     try {
       const url = selectedCountry
         ? `/api/countries?site_id=${selectedSite}&country=${selectedCountry}`
         : `/api/countries?site_id=${selectedSite}`;
       const res = await fetch(url);
-      const d = await res.json() as CountriesData;
+      const d = await readApiJson(res, isCountriesData, "Impossible de charger les données par pays");
       setData(d);
-    } catch {
-      setData(null);
-    } finally {
-      setLoading(false);
+      setDataState("ready");
+    } catch (caught) {
+      setDataError(caught instanceof Error ? caught.message : "Impossible de charger les données par pays");
+      setDataState("error");
     }
+  }, [selectedCountry, selectedSite]);
+
+  useEffect(() => { void Promise.resolve().then(fetchSites); }, [fetchSites]);
+  useEffect(() => { if (selectedSite !== null) void Promise.resolve().then(fetchCountries); }, [fetchCountries, selectedSite]);
+
+  function selectSite(nextSite: number | "all" | null) {
+    setData(null); setDataError(null); setDataState("loading");
+    setSelectedSite(nextSite); setSelectedCountry(null);
+  }
+
+  function selectCountry(nextCountry: string | null) {
+    setData(null); setDataError(null); setDataState("loading"); setSelectedCountry(nextCountry);
   }
 
   function formatDate(dateStr: string) {
@@ -150,7 +193,6 @@ export default function CountriesPage() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
-      {/* Header */}
       <div className="border-b border-gray-800 px-6 py-4 flex items-center gap-4">
         <Link
           href="/dashboard"
@@ -166,20 +208,19 @@ export default function CountriesPage() {
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
-        {/* Controls */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex flex-wrap gap-4 items-end">
           <div className="flex flex-col gap-2">
             <label className="text-xs text-gray-400 uppercase tracking-wide">Site</label>
             <select
               aria-label="Site à analyser"
               value={selectedSite ?? ""}
+              disabled={sitesState !== "ready"}
               onChange={(e) => {
-                setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null);
-                setSelectedCountry(null);
+                selectSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null);
               }}
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-cyan-500 w-64"
             >
-              <option value="all">🌐 Tous les sites</option>
+              <option value="all">Tous les sites</option>
               {sites.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -193,7 +234,8 @@ export default function CountriesPage() {
             <select
               aria-label="Filtrer par pays"
               value={selectedCountry ?? ""}
-              onChange={(e) => setSelectedCountry(e.target.value || null)}
+              disabled={dataState !== "ready"}
+              onChange={(e) => selectCountry(e.target.value || null)}
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-cyan-500 w-64"
             >
               <option value="">— Tous les pays —</option>
@@ -201,7 +243,7 @@ export default function CountriesPage() {
                 const info = countryDisplay(c.country);
                 return (
                   <option key={c.country} value={c.country}>
-                    {info.flag} {info.name} ({c.clicks.toLocaleString()} clics)
+                    {info.flag && `${info.flag} `}{info.name} ({c.clicks.toLocaleString()} clics)
                   </option>
                 );
               })}
@@ -209,22 +251,42 @@ export default function CountriesPage() {
           </div>
 
           <button
-            onClick={() => void fetchCountries()}
+            onClick={() => {
+              setData(null); setDataError(null); setDataState("loading"); void fetchCountries();
+            }}
+            disabled={selectedSite === null || dataState === "loading"}
             className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-medium transition-colors"
           >
             Actualiser
           </button>
         </div>
 
-        {loading && (
+        {(sitesState === "loading" || dataState === "loading") && (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
           </div>
         )}
 
-        {!loading && data && (
+        {sitesState === "error" && (
+          <div role="alert" className="rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+            <AlertTriangle className="mr-2 inline h-4 w-4" />
+            Erreur de chargement des sites : {siteError ?? "réponse indisponible"}
+          </div>
+        )}
+
+        {sitesState === "empty" && (
+          <div className="py-12 text-center text-sm text-gray-500">Aucun site actif disponible pour cette analyse.</div>
+        )}
+
+        {dataState === "error" && (
+          <div role="alert" className="rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+            <AlertTriangle className="mr-2 inline h-4 w-4" />
+            Erreur de chargement des données : {dataError ?? "réponse indisponible"}
+          </div>
+        )}
+
+        {dataState === "ready" && data && (
           <>
-            {/* Countries grid */}
             <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-800">
                 <h2 className="font-medium text-gray-200 flex items-center gap-2">
@@ -244,9 +306,7 @@ export default function CountriesPage() {
                     return (
                       <button
                         key={c.country}
-                        onClick={() =>
-                          setSelectedCountry(isSelected ? null : c.country)
-                        }
+                        onClick={() => selectCountry(isSelected ? null : c.country)}
                         className={`text-left p-3 rounded-lg border transition-colors ${
                           isSelected
                             ? "bg-cyan-900/30 border-cyan-700"
@@ -254,7 +314,11 @@ export default function CountriesPage() {
                         }`}
                       >
                         <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xl">{info.flag}</span>
+                          {info.flag ? (
+                            <span className="text-xl" aria-hidden="true">{info.flag}</span>
+                          ) : (
+                            <Globe className="h-5 w-5 text-gray-500" aria-hidden="true" />
+                          )}
                           <span className="text-sm font-medium text-white truncate">
                             {info.name}
                           </span>
@@ -272,7 +336,6 @@ export default function CountriesPage() {
               )}
             </div>
 
-            {/* Cannibalization */}
             <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-800">
                 <h2 className="font-medium text-gray-200 flex items-center gap-2">
@@ -287,7 +350,7 @@ export default function CountriesPage() {
               </div>
               {data.cannibalization.length === 0 ? (
                 <div className="py-12 text-center text-sm text-gray-500">
-                  ✅ Pas de cannibalisation détectée
+                  Pas de cannibalisation détectée
                 </div>
               ) : (
                 <div className="divide-y divide-gray-800">
@@ -329,7 +392,6 @@ export default function CountriesPage() {
               )}
             </div>
 
-            {/* Articles published */}
             <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-800">
                 <h2 className="font-medium text-gray-200 flex items-center gap-2">
@@ -337,7 +399,7 @@ export default function CountriesPage() {
                   Articles publiés ({data.articles.length})
                   {data.filter.language && (
                     <span className="text-xs text-gray-400 ml-2">
-                      · {LANG_FLAG[data.filter.language] ?? ""} {data.filter.language.toUpperCase()}
+                      · {data.filter.language.toUpperCase()}
                     </span>
                   )}
                 </h2>
@@ -370,7 +432,7 @@ export default function CountriesPage() {
                           className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
                         >
                           <td className="px-5 py-3 text-base">
-                            {LANG_FLAG[a.language] ?? a.language.toUpperCase()}
+                            {a.language.toUpperCase()}
                           </td>
                           <td className="px-5 py-3">
                             <div className="text-white font-medium">{a.keyword}</div>
@@ -384,10 +446,20 @@ export default function CountriesPage() {
                             {formatDate(a.created_at)}
                           </td>
                           <td className="px-5 py-3">
-                            {a.status === "published" ? (
+                            {a.status === "verified_live" ? (
                               <span className="flex items-center gap-1 text-green-400">
                                 <CheckCircle className="w-3.5 h-3.5" />
-                                Publié
+                                Live vérifié
+                              </span>
+                            ) : a.status === "published" ? (
+                              <span className="flex items-center gap-1 text-yellow-400">
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                Marqué publié — live non vérifié
+                              </span>
+                            ) : a.status === "indexed" ? (
+                              <span className="flex items-center gap-1 text-green-400">
+                                <CheckCircle className="w-3.5 h-3.5" />
+                                Indexé (statut explicite)
                               </span>
                             ) : (
                               <span className="flex items-center gap-1 text-red-400">

@@ -9,6 +9,7 @@ import { requireCronOrUser } from "@/lib/cron-auth";
 import { ensureSchema, getSQL, isDatabaseConfigured } from "@/lib/db";
 import { searchAcademicMentions, AcademicWork } from "@/lib/openalex";
 import { logError, logger } from "@/lib/logger";
+import { runOutcome } from "@/lib/run-outcome";
 
 interface SiteRow {
   id: number;
@@ -28,10 +29,11 @@ async function loadSites(siteId?: number): Promise<SiteRow[]> {
   `) as SiteRow[];
 }
 
-async function storeWorks(siteId: number, works: AcademicWork[]): Promise<number> {
-  if (works.length === 0) return 0;
+async function storeWorks(siteId: number, works: AcademicWork[]): Promise<{ inserted: number; failed: number }> {
+  if (works.length === 0) return { inserted: 0, failed: 0 };
   const sql = getSQL();
   let inserted = 0;
+  let failed = 0;
   for (const w of works) {
     try {
       const rows = (await sql`
@@ -50,10 +52,11 @@ async function storeWorks(siteId: number, works: AcademicWork[]): Promise<number
       `) as Array<{ id: number }>;
       if (rows.length > 0) inserted += 1;
     } catch (e) {
+      failed += 1;
       logError("eeat.academic-scan.store", e, { siteId, title: w.title.slice(0, 60) });
     }
   }
-  return inserted;
+  return { inserted, failed };
 }
 
 export async function POST(request: NextRequest) {
@@ -83,13 +86,15 @@ export async function POST(request: NextRequest) {
     works_found: number;
     inserted: number;
     edu_gov_count: number;
+    store_errors: number;
+    error?: string;
   }> = [];
 
   for (const s of sites) {
     const domain = s.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
     try {
       const { works } = await searchAcademicMentions(domain);
-      const inserted = await storeWorks(s.id, works);
+      const stored = await storeWorks(s.id, works);
       const eduGov = works.filter((w) =>
         /\.(edu|gov)(\.|$)/i.test(w.source_domain)
       ).length;
@@ -97,15 +102,17 @@ export async function POST(request: NextRequest) {
         site_id: s.id,
         site: s.name,
         works_found: works.length,
-        inserted,
+        inserted: stored.inserted,
         edu_gov_count: eduGov,
+        store_errors: stored.failed,
       });
       logger.info({
         ctx: "eeat.academic-scan",
         site: s.name,
         works_found: works.length,
-        inserted,
+        inserted: stored.inserted,
         edu_gov_count: eduGov,
+        store_errors: stored.failed,
       });
     } catch (e) {
       logError("eeat.academic-scan", e, { site: s.name });
@@ -115,11 +122,23 @@ export async function POST(request: NextRequest) {
         works_found: 0,
         inserted: 0,
         edu_gov_count: 0,
+        store_errors: 0,
+        error: e instanceof Error ? e.message : "Scan failed",
       });
     }
   }
 
-  return NextResponse.json({ success: true, summary });
+  const failedSites = summary.filter((result) => Boolean(result.error)).length;
+  const storeErrors = summary.reduce((total, result) => total + result.store_errors, 0);
+  const outcome = runOutcome(sites.length - failedSites, failedSites, sites.length);
+  const partial = outcome.partial || storeErrors > 0;
+  return NextResponse.json({
+    success: outcome.success,
+    partial,
+    failed_sites: failedSites,
+    store_errors: storeErrors,
+    summary,
+  }, { status: outcome.success ? (partial ? 207 : 200) : outcome.statusCode });
 }
 
 export const GET = POST;

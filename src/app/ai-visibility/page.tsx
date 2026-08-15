@@ -43,7 +43,7 @@ export default function AIVisibilityPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSite, setSelectedSite] = useState<number | null>(null);
   const [brand, setBrand] = useState("");
-  const [queries, setQueries] = useState<string[]>(["Quel est le meilleur outil pour ..."]);
+  const [queries, setQueries] = useState<string[]>([]);
   const [newQuery, setNewQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ScanResult[]>([]);
@@ -66,7 +66,9 @@ export default function AIVisibilityPage() {
           setSelectedSite(list[0].id);
           setBrand(list[0].name);
         }
-      } catch { /* ignore */ }
+      } catch (reason) {
+        setScanError(reason instanceof Error ? reason.message : "Les sites ne peuvent pas être chargés.");
+      }
     })();
   }, []);
 
@@ -81,13 +83,17 @@ export default function AIVisibilityPage() {
     if (!selectedSite) return;
     try {
       const res = await fetch(`/api/ai-visibility/history?siteId=${selectedSite}`);
-      const data = await res.json() as { success: boolean; history?: HistoryPoint[] };
-      if (data.success && data.history) setHistory(data.history.reverse());
-    } catch { /* ignore */ }
+      const data = await res.json() as { success: boolean; history?: HistoryPoint[]; error?: string };
+      if (!res.ok || !data.success) throw new Error(data.error ?? `Historique indisponible (HTTP ${res.status})`);
+      setHistory((data.history ?? []).reverse());
+    } catch (reason) {
+      setScanError(reason instanceof Error ? reason.message : "L’historique ne peut pas être chargé.");
+    }
   }
 
   async function runScan() {
-    if (!selectedSite || !brand || queries.length === 0) return;
+    const cleanQueries = queries.map((query) => query.trim()).filter(Boolean);
+    if (!selectedSite || !brand.trim() || cleanQueries.length === 0) return;
     setLoading(true);
     setResults([]);
     setScore(null);
@@ -97,7 +103,7 @@ export default function AIVisibilityPage() {
       const res = await fetch("/api/ai-visibility/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ siteId: selectedSite, brand, queries }),
+        body: JSON.stringify({ siteId: selectedSite, brand: brand.trim(), queries: cleanQueries }),
       });
       const data = await res.json() as { success: boolean; results?: ScanResult[]; score?: number | null; coverage?: { measured: number; requested: number; mentions: number }; error?: string };
       if (data.success && data.results) {
@@ -122,16 +128,20 @@ export default function AIVisibilityPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ siteId: selectedSite, score, results }),
       });
-      const data = await res.json() as { success: boolean };
-      setSaveMsg(data.success ? "Snapshot sauvegardé" : "Erreur sauvegarde");
+      const data = await res.json() as { success: boolean; error?: string };
+      if (!res.ok || !data.success) throw new Error(data.error ?? `Sauvegarde impossible (HTTP ${res.status})`);
+      setSaveMsg("Snapshot sauvegardé");
       setTimeout(() => setSaveMsg(null), 3000);
-    } catch { /* ignore */ }
+    } catch (reason) {
+      setSaveMsg(null);
+      setScanError(reason instanceof Error ? reason.message : "Le snapshot n'a pas été sauvegardé.");
+    }
     setSaving(false);
   }
 
   function addQuery() {
     const q = newQuery.trim();
-    if (!q || queries.length >= 10) return;
+    if (!q || queries.length >= 10 || queries.some((query) => query.toLocaleLowerCase("fr") === q.toLocaleLowerCase("fr"))) return;
     setQueries((prev) => [...prev, q]);
     setNewQuery("");
   }
@@ -153,7 +163,7 @@ export default function AIVisibilityPage() {
         <Link href="/dashboard" className="flex items-center gap-2 text-gray-400 hover:text-gray-100 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Dashboard
         </Link>
-        <h1 className="text-xl">AI Visibility</h1>
+        <h1 className="text-xl">Visibilité dans les réponses IA</h1>
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
@@ -162,7 +172,7 @@ export default function AIVisibilityPage() {
           {(["scan", "history"] as ActiveTab[]).map((t) => (
             <button key={t} type="button" role="tab" aria-selected={activeTab === t} onClick={() => { setActiveTab(t); if (t === "history") void loadHistory(); }}
               className={`min-h-11 px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === t ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
-              {t === "scan" ? "Scan LLMs" : "Historique"}
+              {t === "scan" ? "Tester les réponses" : "Historique"}
             </button>
           ))}
         </div>
@@ -216,10 +226,10 @@ export default function AIVisibilityPage() {
               </div>
 
               <div className="flex gap-3 items-center">
-                <button type="button" onClick={runScan} disabled={loading || !selectedSite || !brand}
+                <button type="button" onClick={runScan} disabled={loading || !selectedSite || !brand.trim() || queries.length === 0}
                   className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors">
                   {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />}
-                  {loading ? "Scan en cours... (30s max/LLM)" : "Lancer scan"}
+                  {loading ? "Analyse en cours... (30 s max/mode)" : "Lancer l’analyse"}
                 </button>
                 {results.length > 0 && (
                   <button type="button" onClick={saveSnapshot} disabled={saving}
@@ -231,7 +241,7 @@ export default function AIVisibilityPage() {
                 {saveMsg && <span role="status" className="text-sm text-green-400">{saveMsg}</span>}
               </div>
               <div className="rounded-lg border border-blue-800/60 bg-blue-950/30 p-3 text-xs text-blue-100">
-                Le scan compare quatre modes de réponse. Il n&apos;attribue pas un résultat à Perplexity, Claude, Gemini ou Mistral sans preuve du fournisseur réellement exécuté. Une panne est affichée comme indisponible et ne compte pas comme une non-mention.
+                L’analyse compare quatre modes du moteur configuré. Elle n&apos;attribue jamais un résultat à Perplexity, Claude, Gemini ou Mistral sans preuve du fournisseur réellement exécuté. Une panne est affichée comme indisponible et reste exclue du score.
               </div>
               {scanError && <div role="alert" className="rounded-lg border border-red-700 bg-red-950/30 p-3 text-sm text-red-200">{scanError}</div>}
             </div>
@@ -265,7 +275,7 @@ export default function AIVisibilityPage() {
             {queryList.length > 0 && (
               <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
                 <div className="px-5 py-3 border-b border-gray-800 text-sm font-medium text-gray-300">
-                  Résultats par mode d&apos;analyse
+                  Résultats par mode du moteur configuré
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -315,7 +325,7 @@ export default function AIVisibilityPage() {
 
             {!loading && results.length === 0 && (
               <div className="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center text-gray-500 text-sm">
-                Configure tes requêtes et clique &quot;Lancer scan&quot;
+                Ajoute au moins une requête réelle, vérifie la marque puis lance l’analyse.
               </div>
             )}
           </>

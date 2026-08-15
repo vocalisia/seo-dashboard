@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Code2, Loader2, X, CheckCircle2, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, Code2, Loader2, X, XCircle } from "lucide-react";
+import { isRecord, readApiJson } from "@/lib/api-response";
 
 interface Site {
   id: number;
@@ -26,24 +27,83 @@ interface SchemaResult {
 }
 
 interface AuditResponse {
-  success?: boolean;
+  success: true;
   results: SchemaResult[];
   score: number;
   total: number;
   withSchema: number;
-  googleVerifiedCount?: number;
-  verifiedWithGoogle?: boolean;
-  partial?: boolean;
-  duration_ms?: number;
-  error?: string;
+  googleVerifiedCount: number;
+  verifiedWithGoogle: boolean;
+  partial: boolean;
+  duration_ms: number;
+}
+type SitesState = "loading" | "ready" | "empty" | "error";
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
-const STATUS_ICON: Record<SchemaResult["status"], string> = {
-  ok: "✅",
-  warn: "⚠️",
-  error: "❌",
-  "no-schema": "—",
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isOptionalStringList(value: unknown): value is string[] | undefined {
+  return value === undefined || isStringList(value);
+}
+
+function isSiteList(payload: unknown): payload is Site[] {
+  return Array.isArray(payload) && payload.every((site) => isRecord(site)
+    && isFiniteNumber(site.id) && typeof site.name === "string" && typeof site.url === "string");
+}
+
+function isSchemaResult(value: unknown): value is SchemaResult {
+  return isRecord(value)
+    && typeof value.url === "string"
+    && isStringList(value.types) && isStringList(value.errors) && isStringList(value.warnings)
+    && (value.rawJson === null || typeof value.rawJson === "string")
+    && (value.status === "ok" || value.status === "warn" || value.status === "error" || value.status === "no-schema")
+    && (value.google_verified === undefined || typeof value.google_verified === "boolean")
+    && isOptionalStringList(value.google_types) && isOptionalStringList(value.google_errors)
+    && isOptionalStringList(value.google_warnings) && isOptionalStringList(value.google_discrepancies)
+    && (value.google_verdict === undefined || typeof value.google_verdict === "string");
+}
+
+function isAuditResponse(payload: unknown): payload is AuditResponse {
+  if (!isRecord(payload) || payload.success !== true || !Array.isArray(payload.results)
+    || !payload.results.every(isSchemaResult)
+    || !isFiniteNumber(payload.score) || !isFiniteNumber(payload.total) || !isFiniteNumber(payload.withSchema)
+    || !isFiniteNumber(payload.googleVerifiedCount) || !isFiniteNumber(payload.duration_ms)
+    || typeof payload.verifiedWithGoogle !== "boolean" || typeof payload.partial !== "boolean") return false;
+  const withSchema = payload.results.filter((result) => result.types.length > 0).length;
+  const googleVerified = payload.results.filter((result) => result.google_verified === true).length;
+  return payload.total === payload.results.length && payload.withSchema === withSchema
+    && payload.googleVerifiedCount === googleVerified
+    && payload.score === (payload.total > 0 ? Math.round((withSchema / payload.total) * 100) : 0)
+    && payload.duration_ms >= 0;
+}
+
+const STATUS_ICON = {
+  ok: CheckCircle2,
+  warn: AlertTriangle,
+  error: XCircle,
 };
+
+const STATUS_LABEL: Record<Exclude<SchemaResult["status"], "no-schema">, string> = {
+  ok: "Valide",
+  warn: "Avertissement",
+  error: "Erreur",
+};
+
+function SchemaStatusIcon({ status }: { status: SchemaResult["status"] }) {
+  if (status === "no-schema") return "—";
+  const Icon = STATUS_ICON[status];
+  return (
+    <>
+      <Icon className="inline h-4 w-4" aria-hidden="true" />
+      <span className="sr-only">{STATUS_LABEL[status]}</span>
+    </>
+  );
+}
 
 const STATUS_COLOR: Record<SchemaResult["status"], string> = {
   ok: "text-emerald-400",
@@ -60,15 +120,31 @@ export default function SchemaPage() {
   const [modal, setModal] = useState<SchemaResult | null>(null);
   const [verifyWithGoogle, setVerifyWithGoogle] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sitesState, setSitesState] = useState<SitesState>("loading");
 
-  useEffect(() => {
-    fetch("/api/sites")
-      .then((r) => r.json())
-      .then((d: unknown) => {
-        if (Array.isArray(d)) { setSites(d as Site[]); if ((d as Site[]).length > 0) setSelectedSite((d as Site[])[0].id); }
-      })
-      .catch(() => undefined);
+  const loadSites = useCallback(async () => {
+    setSitesState("loading");
+    setError(null);
+    try {
+      const response = await fetch("/api/sites");
+      const data = await readApiJson(response, isSiteList, "Impossible de charger les sites");
+      setSites(data);
+      if (data.length === 0) {
+        setSelectedSite(null);
+        setSitesState("empty");
+        return;
+      }
+      setSelectedSite(data[0].id);
+      setSitesState("ready");
+    } catch (caught) {
+      setSites([]);
+      setSelectedSite(null);
+      setError(caught instanceof Error ? caught.message : "Impossible de charger les sites");
+      setSitesState("error");
+    }
   }, []);
+
+  useEffect(() => { void loadSites(); }, [loadSites]);
 
   async function runAudit() {
     if (!selectedSite) return;
@@ -77,24 +153,25 @@ export default function SchemaPage() {
     setLoading(true);
     setAudit(null);
     setError(null);
+    let timeout: number | undefined;
     try {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), verifyWithGoogle ? 70000 : 45000);
+      timeout = window.setTimeout(() => controller.abort(), verifyWithGoogle ? 70000 : 45000);
       const res = await fetch("/api/schema-audit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ siteUrl: site.url, verifyWithGoogle, maxVerify: 6, maxUrls: 30 }),
         signal: controller.signal,
       });
-      window.clearTimeout(timeout);
-      const d = await res.json() as AuditResponse;
-      if (!res.ok || d.error) throw new Error(d.error ?? `HTTP ${res.status}`);
+      const d = await readApiJson(res, isAuditResponse, "Impossible de charger l’audit schema");
       setAudit(d);
     } catch (e) {
       setAudit(null);
       setError(e instanceof Error && e.name === "AbortError" ? "Audit trop long: limite atteinte" : e instanceof Error ? e.message : "Erreur inconnue");
+    } finally {
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   function formatRawJson(raw: string | null): string {
@@ -106,10 +183,14 @@ export default function SchemaPage() {
     }
   }
 
+  const failedUrlCount = audit?.results.filter((result) => result.errors.includes("Fetch failed")).length ?? 0;
+  const measuredResults = audit?.results.filter((result) => !result.errors.includes("Fetch failed")) ?? [];
+  const measuredWithSchema = measuredResults.filter((result) => result.types.length > 0).length;
+  const measuredScore = measuredResults.length > 0 ? Math.round((measuredWithSchema / measuredResults.length) * 100) : 0;
   const scoreColor =
-    audit && audit.score >= 70
+    measuredScore >= 70
       ? "text-emerald-400"
-      : audit && audit.score >= 40
+      : measuredScore >= 40
       ? "text-yellow-400"
       : "text-red-400";
 
@@ -128,6 +209,7 @@ export default function SchemaPage() {
           <select
             aria-label="Site à analyser"
             value={selectedSite ?? ""}
+            disabled={sitesState !== "ready"}
             onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
           >
@@ -138,7 +220,7 @@ export default function SchemaPage() {
           </select>
           <button
             onClick={runAudit}
-            disabled={!selectedSite || loading}
+            disabled={!selectedSite || loading || sitesState !== "ready"}
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Code2 className="w-4 h-4" />}
@@ -155,32 +237,43 @@ export default function SchemaPage() {
           </label>
         </div>
 
+        {sitesState === "loading" && (
+          <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-gray-500" /></div>
+        )}
+        {sitesState === "empty" && (
+          <div className="py-12 text-center text-sm text-gray-500">Aucun site actif disponible pour lancer l’audit schema.</div>
+        )}
+
         {audit && (
           <>
-            {/* Score */}
-            <div className={`grid ${audit.verifiedWithGoogle ? "grid-cols-4" : "grid-cols-3"} gap-4`}>
+            {measuredResults.length > 0 && <div className={`grid ${audit.verifiedWithGoogle ? "grid-cols-4" : "grid-cols-3"} gap-4`}>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                <div className={`text-3xl font-bold ${scoreColor}`}>{audit.score}%</div>
+                <div className={`text-3xl font-bold ${scoreColor}`}>{measuredScore}%</div>
                 <div className="text-xs text-gray-400 mt-1">Pages avec schema</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                <div className="text-3xl font-bold text-white">{audit.withSchema}</div>
+                <div className="text-3xl font-bold text-white">{measuredWithSchema}</div>
                 <div className="text-xs text-gray-400 mt-1">Pages schématisées</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                <div className="text-3xl font-bold text-gray-400">{audit.total - audit.withSchema}</div>
+                <div className="text-3xl font-bold text-gray-400">{measuredResults.length - measuredWithSchema}</div>
                 <div className="text-xs text-gray-400 mt-1">Pages sans schema</div>
               </div>
               {audit.verifiedWithGoogle && (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                  <div className="text-3xl font-bold text-emerald-400">{audit.googleVerifiedCount ?? 0}</div>
+                  <div className="text-3xl font-bold text-emerald-400">{audit.googleVerifiedCount}</div>
                   <div className="text-xs text-gray-400 mt-1">Vérifié par Google</div>
                 </div>
               )}
-            </div>
+            </div>}
             {audit.partial && (
               <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
                 Audit partiel: seules les premières URLs du sitemap ont été scannées pour garder la page rapide.
+              </div>
+            )}
+            {failedUrlCount > 0 && (
+              <div role="status" className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
+                Résultat partiel : {failedUrlCount} URL{failedUrlCount > 1 ? "s" : ""} n’ont pas pu être analysées et ne doivent pas être interprétées comme sans schema.
               </div>
             )}
 
@@ -189,7 +282,9 @@ export default function SchemaPage() {
               <div className="px-5 py-4 border-b border-gray-800">
                 <h2 className="font-medium text-gray-200">Résultats par URL</h2>
               </div>
-              <div className="overflow-x-auto">
+              {audit.results.length === 0 ? (
+                <div className="py-12 text-center text-sm text-gray-500">Aucune URL disponible dans cet audit.</div>
+              ) : <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-xs text-gray-400 border-b border-gray-800">
                     <tr>
@@ -212,7 +307,7 @@ export default function SchemaPage() {
                         <td className="px-4 py-2.5 text-red-400 text-xs">{r.errors.join("; ") || "—"}</td>
                         <td className="px-4 py-2.5 text-yellow-400 text-xs">{r.warnings.join("; ") || "—"}</td>
                         <td className={`px-4 py-2.5 text-center text-sm ${STATUS_COLOR[r.status]}`}>
-                          {STATUS_ICON[r.status]}
+                          <SchemaStatusIcon status={r.status} />
                         </td>
                         {audit.verifiedWithGoogle && (
                           <td className="px-4 py-2.5 text-center" title={r.google_verdict ?? "Non vérifié"}>
@@ -225,7 +320,8 @@ export default function SchemaPage() {
                             )}
                             {r.google_discrepancies && r.google_discrepancies.length > 0 && (
                               <div className="text-[10px] text-amber-400 mt-0.5 truncate max-w-[120px]" title={r.google_discrepancies.join("; ")}>
-                                ⚠ divergence
+                                <AlertTriangle className="mr-0.5 inline h-3 w-3" aria-hidden="true" />
+                                divergence
                               </div>
                             )}
                           </td>
@@ -246,13 +342,14 @@ export default function SchemaPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </div>}
             </div>
           </>
         )}
         {error && (
-          <div className="bg-red-900/30 border border-red-800 rounded-xl px-4 py-3 text-sm text-red-300">
-            {error}
+          <div role="alert" className="bg-red-900/30 border border-red-800 rounded-xl px-4 py-3 text-sm text-red-300">
+            <AlertTriangle className="mr-2 inline h-4 w-4" />
+            Erreur de chargement : {error}
           </div>
         )}
       </div>

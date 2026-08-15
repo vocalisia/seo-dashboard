@@ -1,3 +1,4 @@
+import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { isLocalDevDemoMode } from "@/lib/local-dev";
 import { NextRequest, NextResponse } from "next/server";
@@ -67,6 +68,9 @@ function updateSummary(map: Map<number, AioSummary>, row: {
 }
 
 export async function GET(request: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
+
   const siteId = request.nextUrl.searchParams.get("siteId");
   const days = clampDays(request.nextUrl.searchParams.get("days"));
   const limit = clampLimit(request.nextUrl.searchParams.get("limit"));
