@@ -178,7 +178,7 @@ export default function AuditPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center gap-4">
-        <Link href="/dashboard" className="text-gray-400 hover:text-white transition">
+        <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white transition">
           <ArrowLeft className="w-5 h-5" />
         </Link>
         <Zap className="w-6 h-6 text-yellow-400" />

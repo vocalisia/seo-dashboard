@@ -1,5 +1,6 @@
 import { getSQL } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,8 @@ interface TopicalAuthorityStats {
 }
 
 export async function GET(request: NextRequest) {
+  const auth = await requireApiSession();
+  if (auth.unauthorized) return auth.unauthorized;
   const siteId = request.nextUrl.searchParams.get("site_id");
 
   if (!siteId) {
@@ -59,10 +62,10 @@ export async function GET(request: NextRequest) {
     const gscRows = await sql`
       SELECT
         COUNT(DISTINCT query) as unique_queries,
-        COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position,
+        COALESCE(SUM(impressions * position)::float / NULLIF(SUM(impressions), 0), 0) as avg_position,
         COALESCE(SUM(clicks), 0) as total_clicks,
         COALESCE(SUM(impressions), 0) as total_impressions
-      FROM search_console_data
+      FROM search_console_query_data
       WHERE site_id = ${siteIdNum}
         AND date >= NOW() - INTERVAL '30 days'
         AND query IS NOT NULL
@@ -80,13 +83,14 @@ export async function GET(request: NextRequest) {
       SELECT COUNT(*) as article_count
       FROM autopilot_runs
       WHERE site_id = ${siteIdNum}
+        AND status IN ('published', 'verified_live')
     `;
 
     const articleCount = Number(articleRows[0]?.article_count ?? 0);
 
     // 5. Calculate scores
     const coverageScore = Math.min(100, (uniqueQueries / 200) * 100);
-    const authorityScore = Math.max(0, Math.min(100, 100 - avgPosition));
+    const authorityScore = totalImpressions > 0 ? Math.max(0, Math.min(100, 100 - avgPosition)) : 0;
     const contentScore = Math.min(100, (articleCount / 50) * 100);
     const overallScore =
       coverageScore * 0.3 + authorityScore * 0.4 + contentScore * 0.3;
@@ -112,6 +116,8 @@ export async function GET(request: NextRequest) {
       site,
       scores,
       stats,
+      score_kind: "heuristic",
+      methodology: "Indice interne heuristique : couverture des requêtes, position GSC pondérée par impressions et contenus marqués publiés. Ce score n'est ni une métrique Google ni une autorité de domaine externe.",
       // Backward-compatible aliases expected by the page UI.
       scores_ui: {
         coverage: scores.coverage_score,

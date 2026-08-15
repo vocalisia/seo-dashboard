@@ -79,7 +79,7 @@ export default function BacklinksPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center gap-4">
-        <Link href="/dashboard" className="text-gray-400 hover:text-white transition">
+        <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white transition">
           <ArrowLeft className="w-5 h-5" />
         </Link>
         <Link2 className="w-6 h-6 text-blue-400" />
@@ -94,6 +94,7 @@ export default function BacklinksPage() {
       <div className="px-6 py-6 max-w-5xl mx-auto">
         <div className="flex flex-wrap gap-3 mb-8">
           <select
+            aria-label="Site à analyser"
             value={selectedSiteId ?? ""}
             onChange={(e) => {
               setSelectedSiteId(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null);

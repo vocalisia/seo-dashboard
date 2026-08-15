@@ -110,6 +110,7 @@ export default function KeywordPlannerImportPage(): React.ReactElement {
           <div>
             <label className="block text-sm text-gray-300 mb-1">Site</label>
             <select
+              aria-label="Site destinataire"
               value={siteId}
               onChange={(e) => setSiteId(e.target.value)}
               className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm w-full"
@@ -126,6 +127,7 @@ export default function KeywordPlannerImportPage(): React.ReactElement {
           <div>
             <label className="block text-sm text-gray-300 mb-1">Marché du CSV</label>
             <select
+              aria-label="Marché du fichier CSV"
               value={market}
               onChange={(e) => setMarket(e.target.value)}
               className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm w-full"
@@ -143,6 +145,7 @@ export default function KeywordPlannerImportPage(): React.ReactElement {
           <div>
             <label className="block text-sm text-gray-300 mb-1">Fichier CSV</label>
             <input
+              aria-label="Fichier CSV Keyword Planner"
               type="file"
               accept=".csv,text/csv,text/plain"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}

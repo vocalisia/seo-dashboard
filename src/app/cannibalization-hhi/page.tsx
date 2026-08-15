@@ -86,11 +86,11 @@ export default function CannibalizationHHIPage() {
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/dashboard" className="text-gray-400 hover:text-white"><ChevronLeft className="w-5 h-5" /></Link>
+          <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white"><ChevronLeft className="w-5 h-5" /></Link>
           <AlertTriangle className="w-6 h-6 text-red-500" />
           <h1 className="text-xl font-bold">Cannibalisation (HHI score)</h1>
         </div>
-        <select value={siteId ?? ""} onChange={e => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value))}
+        <select aria-label="Site à analyser" value={siteId ?? ""} onChange={e => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value))}
           className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm">
           <option value="all">🌐 Tous les sites</option>
           {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}

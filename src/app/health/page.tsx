@@ -175,7 +175,7 @@ export default function HealthPage() {
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center gap-4">
-          <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
+          <select aria-label="Site à analyser" value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64">
             <option value="all">🌐 Tous les sites</option>
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
@@ -183,7 +183,7 @@ export default function HealthPage() {
           {(() => {
             const current = sites.find((s) => s.id === selectedSite);
             return current?.url ? (
-              <a href={current.url} target="_blank" rel="noopener noreferrer"
+              <a href={current.url} target="_blank" rel="noopener noreferrer" aria-label={`Ouvrir ${current.url} dans un nouvel onglet`}
                 className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-sm">
                 <ExternalLink className="w-4 h-4" />
               </a>

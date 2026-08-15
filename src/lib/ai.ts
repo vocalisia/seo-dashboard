@@ -1,5 +1,6 @@
 import { logError } from "./logger";
 import { google } from "googleapis";
+import { isPaidFallbackEnabled } from "./ai-cost-guard";
 
 // Unified AI client: Gemini/Vertex first for normal work, Perplexity first for
 // web-grounded search, then graceful cache/local fallbacks.
@@ -201,7 +202,8 @@ export async function askAI(
     }
   }
 
-  const openAIKey = getOpenAIKey();
+  const paidFallbackEnabled = isPaidFallbackEnabled();
+  const openAIKey = paidFallbackEnabled ? getOpenAIKey() : undefined;
   if (openAIKey) {
     try {
       return await callOpenAI(openAIKey, messages, maxTokens);
@@ -213,7 +215,7 @@ export async function askAI(
     }
   }
 
-  const anthropicKey = getAnthropicKey();
+  const anthropicKey = paidFallbackEnabled ? getAnthropicKey() : undefined;
   if (anthropicKey) {
     try {
       return await callAnthropic(anthropicKey, messages, maxTokens);
@@ -225,7 +227,7 @@ export async function askAI(
     }
   }
 
-  const mammouthKey = getMammouthKey();
+  const mammouthKey = paidFallbackEnabled ? getMammouthKey() : undefined;
   if (mammouthKey) {
     try {
       return await callMammouth(mammouthKey, messages, maxTokens);

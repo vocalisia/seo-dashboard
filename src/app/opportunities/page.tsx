@@ -253,7 +253,7 @@ export default function OpportunitiesPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center gap-4">
-        <Link href="/dashboard" className="text-gray-400 hover:text-white transition">
+        <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white transition">
           <ArrowLeft className="w-5 h-5" />
         </Link>
         <TrendingUp className="w-6 h-6 text-green-400" />
@@ -268,6 +268,7 @@ export default function OpportunitiesPage() {
         {/* Site selector */}
         <div className="mb-6">
           <select
+            aria-label="Site à analyser"
             value={selectedSite === "all" ? "all" : typeof selectedSite === "object" && selectedSite ? String(selectedSite.id) : ""}
             onChange={(e) => {
               if (e.target.value === "all") { setSelectedSite("all"); setCtrRows([]); setCannibRows([]); }

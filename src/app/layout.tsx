@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "./providers";
 import { DevExtensionErrorGuard } from "@/components/dev-extension-error-guard";
 import { AppAIAssistant } from "@/components/AppAIAssistant";
+import { AppWorkspaceShell } from "@/components/AppWorkspaceShell";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -39,7 +40,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <DevExtensionErrorGuard />
         <AuthProvider>
-          {children}
+          <AppWorkspaceShell>{children}</AppWorkspaceShell>
           <AppAIAssistant />
         </AuthProvider>
       </body>

@@ -126,6 +126,7 @@ export default function SchemaPage() {
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center gap-4">
           <select
+            aria-label="Site à analyser"
             value={selectedSite ?? ""}
             onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
@@ -179,7 +180,7 @@ export default function SchemaPage() {
             </div>
             {audit.partial && (
               <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
-                Audit partiel: seules les premiÃ¨res URLs du sitemap ont Ã©tÃ© scannÃ©es pour garder la page rapide.
+                Audit partiel: seules les premières URLs du sitemap ont été scannées pour garder la page rapide.
               </div>
             )}
 

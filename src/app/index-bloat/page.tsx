@@ -118,6 +118,7 @@ export default function IndexBloatPage() {
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center gap-4 flex-wrap">
           <select
+            aria-label="Site à analyser"
             value={selectedSite ?? ""}
             onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
@@ -165,7 +166,7 @@ export default function IndexBloatPage() {
             </div>
             {result.partial && (
               <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-xl p-3 text-sm text-yellow-200">
-                Analyse partielle: sitemap ou rÃ©sultats bornÃ©s pour garder la page rapide.
+                Analyse partielle: sitemap ou résultats bornés pour garder la page rapide.
               </div>
             )}
 
@@ -223,7 +224,7 @@ export default function IndexBloatPage() {
             )}
             {result.rows.length === 0 && (
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center text-sm text-gray-400">
-                Aucun bloat Ã©vident trouvÃ© sur ce site avec les rÃ¨gles actuelles.
+                Aucun bloat évident trouvé sur ce site avec les règles actuelles.
               </div>
             )}
           </>

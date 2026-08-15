@@ -149,7 +149,7 @@ export async function GET(req: NextRequest) {
     const siteUrl = sites[0].gsc_property as string | null;
     if (!siteUrl) return NextResponse.json({ error: "No GSC property configured" }, { status: 400 });
 
-    let source = "gsc_links_api";
+    const source = "gsc_links_api";
     let links: LinkRow[] = [];
     try {
       links = await loadGoogleLinks(siteUrl);

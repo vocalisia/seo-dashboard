@@ -5,18 +5,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { publishToGitHub } from "@/lib/github";
 import { requireApiSession } from "@/lib/api-auth";
+import { normalizeOpportunityDomain } from "@/lib/opportunity-deployment";
 
 /**
  * POST /api/opportunities/deploy
  * body: { opportunity_id: number, domain: string }
  *
- * Auto-creates a new site:
- * 1. Create GitHub repo
+ * Prepares a new site without claiming a live deployment:
+ * 1. Create a private GitHub repo
  * 2. Init with content/blog/ + README
  * 3. Add site to DB (sites table)
  * 4. Add to SITE_REPO_MAP (logged for manual update)
- * 5. Seed first articles via autopilot
- * 6. Mark opportunity as "deployed"
+ * 5. Keep the site inactive until a live deployment is verified
+ * 6. Mark opportunity as "repository_ready"
  */
 export async function POST(req: NextRequest) {
   const authState = await requireApiSession();
@@ -31,9 +32,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { opportunity_id, domain } = body;
-  if (!opportunity_id || !domain) {
-    return NextResponse.json({ success: false, error: "opportunity_id and domain required" }, { status: 400 });
+  const opportunityId = Number(body.opportunity_id);
+  const domain = normalizeOpportunityDomain(body.domain);
+  if (!Number.isInteger(opportunityId) || opportunityId <= 0 || !domain) {
+    return NextResponse.json({ success: false, error: "opportunity_id ou domaine invalide" }, { status: 400 });
   }
 
   const sql = getSQL();
@@ -44,14 +46,14 @@ export async function POST(req: NextRequest) {
 
   try {
     // 1. Get opportunity from DB
-    const rows = await sql`SELECT * FROM market_opportunities WHERE id = ${opportunity_id} LIMIT 1`;
+    const rows = await sql`SELECT * FROM market_opportunities WHERE id = ${opportunityId} LIMIT 1`;
     if (rows.length === 0) {
       return NextResponse.json({ success: false, error: "Opportunity not found" }, { status: 404 });
     }
     const opp = rows[0];
 
     // Slugify domain for repo name
-    const repoName = (domain as string)
+    const repoName = domain
       .replace(/\.(com|ch|fr|org|io|pro|blog|ai)$/i, "")
       .replace(/[^a-z0-9-]/gi, "-")
       .toLowerCase();
@@ -66,7 +68,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         name: repoName,
-        private: false,
+        private: true,
         auto_init: true,
         description: `${opp.niche} — Auto-generated SEO site via dashboard`,
       }),
@@ -91,6 +93,16 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: "Compte GitHub invalide" }, { status: 502 });
       }
       repoFullName = `${userData.login}/${repoName}`;
+      const existingRepoRes = await fetch(`https://api.github.com/repos/${repoFullName}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+      });
+      if (!existingRepoRes.ok) {
+        return NextResponse.json({ success: false, error: "Un dépôt du même nom existe mais n'est pas réutilisable" }, { status: 409 });
+      }
+      const existingRepo = (await existingRepoRes.json()) as { private?: boolean };
+      if (!existingRepo.private) {
+        return NextResponse.json({ success: false, error: "Le dépôt existant est public; il n'a pas été réutilisé" }, { status: 409 });
+      }
     } else {
       const err = await createRes.text();
       console.error("Repo creation failed:", err);
@@ -123,17 +135,17 @@ export async function POST(req: NextRequest) {
     } else {
       const newSite = await sql`
         INSERT INTO sites (name, url, is_active, target_languages)
-        VALUES (${siteName}, ${siteUrl}, true, ARRAY['fr', 'en'])
+        VALUES (${siteName}, ${siteUrl}, false, ARRAY['fr', 'en'])
         RETURNING id
       `;
       siteId = newSite[0].id as number;
     }
 
-    // 5. Mark opportunity as deployed
+    // 5. A repository is not a deployment. Keep this state explicit.
     await sql`
       UPDATE market_opportunities
-      SET status = 'deployed'
-      WHERE id = ${opportunity_id}
+      SET status = 'repository_ready'
+      WHERE id = ${opportunityId}
     `;
 
     // 6. Log repo mapping (needs manual addition to SITE_REPO_MAP)
@@ -149,9 +161,11 @@ export async function POST(req: NextRequest) {
       site_id: siteId,
       repo: repoFullName,
       domain,
+      deployment_status: "repository_ready",
+      published: false,
       niche: opp.niche,
       seed_articles: opp.seed_articles,
-      message: `Site créé: ${repoFullName} → ${siteUrl}. Ajoute le domaine sur Vercel et connecte-le au repo.`,
+      message: `Dépôt privé prêt : ${repoFullName}. Le site reste inactif et n'est pas publié; un déploiement Vercel contrôlé est encore requis.`,
     });
   } catch (err) {
     return NextResponse.json({ success: false, error: err instanceof Error ? err.message : "Unknown" }, { status: 500 });

@@ -38,21 +38,24 @@ export default function AIPromptsPage() {
   const [loading, setLoading] = useState(false);
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [sourceNotice, setSourceNotice] = useState<string | null>(null);
 
   async function generate() {
     if (!topic.trim()) return;
     setLoading(true);
     setError(null);
     setPrompts([]);
+    setSourceNotice(null);
     try {
       const res = await fetch("/api/ai-prompts/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic: topic.trim(), lang }),
       });
-      const data = await res.json() as { success: boolean; prompts?: PromptItem[]; error?: string };
+      const data = await res.json() as { success: boolean; prompts?: PromptItem[]; notice?: string; error?: string };
       if (data.success && data.prompts) {
         setPrompts(data.prompts);
+        setSourceNotice(data.notice ?? null);
       } else {
         setError(data.error ?? "Erreur inconnue");
       }
@@ -90,7 +93,7 @@ export default function AIPromptsPage() {
         <Link href="/dashboard" className="flex items-center gap-2 text-gray-400 hover:text-gray-100 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Dashboard
         </Link>
-        <span className="text-xl">AI Prompts</span>
+        <h1 className="text-xl">AI Prompts</h1>
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
@@ -98,14 +101,14 @@ export default function AIPromptsPage() {
           <div className="grid grid-cols-3 gap-4">
             <div className="col-span-2">
               <label className="text-xs text-gray-400 uppercase block mb-1">Thème / Mot-clé</label>
-              <input value={topic} onChange={(e) => setTopic(e.target.value)}
+              <input id="ai-prompt-topic" aria-label="Thème ou mot-clé" value={topic} onChange={(e) => setTopic(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") void generate(); }}
                 placeholder="ex: logiciel comptabilité PME"
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
             <div>
               <label className="text-xs text-gray-400 uppercase block mb-1">Langue</label>
-              <select value={lang} onChange={(e) => setLang(e.target.value as typeof lang)}
+              <select id="ai-prompt-language" aria-label="Langue" value={lang} onChange={(e) => setLang(e.target.value as typeof lang)}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
                 {LANG_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
@@ -127,8 +130,10 @@ export default function AIPromptsPage() {
         </div>
 
         {error && (
-          <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-300">{error}</div>
+          <div role="alert" className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 text-sm text-red-300">{error}</div>
         )}
+
+        {sourceNotice && <div role="status" className="rounded-lg border border-blue-800 bg-blue-950/30 px-4 py-3 text-sm text-blue-100">{sourceNotice}</div>}
 
         {prompts.length > 0 && (
           <div className="space-y-6">
@@ -145,7 +150,7 @@ export default function AIPromptsPage() {
                   </div>
                   <div className="divide-y divide-gray-800/50">
                     {items.map((p, i) => (
-                      <div key={i} className="px-5 py-3 flex items-start gap-3 hover:bg-gray-800/20 group">
+                      <div key={i} data-testid="prompt-item" className="px-5 py-3 flex items-start gap-3 hover:bg-gray-800/20 group">
                         <div className="flex-1">
                           <div className="text-sm text-gray-200">{p.prompt}</div>
                           {p.reasoning && (

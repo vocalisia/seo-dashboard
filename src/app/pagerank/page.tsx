@@ -89,6 +89,7 @@ export default function PageRankPage() {
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center gap-4 flex-wrap">
           <select
+            aria-label="Site à analyser"
             value={selectedSite ?? ""}
             onChange={(e) => setSelectedSite(e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"

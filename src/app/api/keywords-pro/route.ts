@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
 import { ensureSchemaOnce, getSQL } from "@/lib/db";
+import { isVerifiedKeywordVolumeSource, resolveVerifiedKeywordVolume } from "@/lib/keyword-volume";
 
 function classifyIntent(keyword: string): string {
   const kw = keyword.toLowerCase();
@@ -101,14 +102,16 @@ export async function GET(req: NextRequest) {
     `) as { keyword: string; clicks: number; impressions: number; position: number; site_name?: string; volume_market?: number | null; volume_fr?: number | null; volume_ch?: number | null; volume_source?: string | null }[];
 
     const enriched = rows.map((r) => {
-      const rawVolume = Number(r.volume_market ?? r.volume_ch ?? r.volume_fr ?? 0);
       const source = r.volume_source ?? null;
-      const volume = source?.includes("niche_skip") || rawVolume <= 1 ? 0 : rawVolume;
+      const volumeVerified = isVerifiedKeywordVolumeSource(source);
+      const volume = resolveVerifiedKeywordVolume(source, r.volume_market, r.volume_ch, r.volume_fr);
       const intent = classifyIntent(r.keyword);
       return {
         ...r,
         volume,
-        volume_source: source,
+        volume_source: volumeVerified ? source : null,
+        volume_source_raw: source,
+        volume_verified: volumeVerified,
         difficulty: "unknown" as const,
         difficulty_source: null,
         difficulty_notice: "Le volume publicitaire ne permet pas de calculer une difficulté SEO fiable.",

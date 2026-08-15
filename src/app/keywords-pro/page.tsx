@@ -169,7 +169,7 @@ export default function KeywordsProPage() {
         <Link href="/dashboard" className="flex items-center gap-2 text-gray-400 hover:text-gray-100 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Dashboard
         </Link>
-        <span className="text-xl">Keywords Pro</span>
+        <h1 className="text-xl">Keywords Pro</h1>
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
@@ -178,7 +178,7 @@ export default function KeywordsProPage() {
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div className="col-span-2 md:col-span-1">
               <label className="text-xs text-gray-400 uppercase block mb-1">Site</label>
-              <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
+              <select aria-label="Site à analyser" value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
                 <option value="all">🌐 Tous les sites</option>
                 {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -186,22 +186,22 @@ export default function KeywordsProPage() {
             </div>
             <div>
               <label className="text-xs text-gray-400 uppercase block mb-1">Min clics/mois</label>
-              <input type="number" value={minClicks} onChange={(e) => setMinClicks(parseInt(e.target.value, 10) || 0)}
+              <input aria-label="Nombre minimal de clics mensuels" type="number" value={minClicks} onChange={(e) => setMinClicks(parseInt(e.target.value, 10) || 0)}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
             <div>
               <label className="text-xs text-gray-400 uppercase block mb-1">Min mots ({minWords})</label>
-              <input type="range" min={1} max={10} value={minWords} onChange={(e) => setMinWords(parseInt(e.target.value, 10))}
+              <input aria-label="Nombre minimal de mots" type="range" min={1} max={10} value={minWords} onChange={(e) => setMinWords(parseInt(e.target.value, 10))}
                 className="w-full mt-2" />
             </div>
             <div>
               <label className="text-xs text-gray-400 uppercase block mb-1">Pos min</label>
-              <input type="number" value={posMin} min={1} max={100} onChange={(e) => setPosMin(parseFloat(e.target.value) || 1)}
+              <input aria-label="Position minimale" type="number" value={posMin} min={1} max={100} onChange={(e) => setPosMin(parseFloat(e.target.value) || 1)}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
             <div>
               <label className="text-xs text-gray-400 uppercase block mb-1">Pos max</label>
-              <input type="number" value={posMax} min={1} max={100} onChange={(e) => setPosMax(parseFloat(e.target.value) || 100)}
+              <input aria-label="Position maximale" type="number" value={posMax} min={1} max={100} onChange={(e) => setPosMax(parseFloat(e.target.value) || 100)}
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
             </div>
           </div>
@@ -272,7 +272,7 @@ export default function KeywordsProPage() {
                       <th key={col} onClick={() => toggleSort(col)}
                         className="px-4 py-3 text-right cursor-pointer select-none hover:text-gray-200">
                         <span className="inline-flex items-center gap-1">
-                          {col === "clicks" ? "Clics" : col === "impressions" ? "Impressions" : col === "position" ? "Position GSC" : "Volume réel"}
+                          {col === "clicks" ? "Clics" : col === "impressions" ? "Impressions" : col === "position" ? "Position GSC" : "Volume sourcé"}
                           {sortCol === col && <span>{sortDir === "desc" ? "↓" : "↑"}</span>}
                         </span>
                       </th>

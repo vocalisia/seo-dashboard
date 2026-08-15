@@ -155,8 +155,9 @@ export default function LogsPage() {
 
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         {/* Upload */}
-        <div
-          className="border-2 border-dashed border-gray-700 rounded-xl p-8 text-center cursor-pointer hover:border-cyan-600 transition-colors"
+        <button
+          type="button"
+          className="w-full border-2 border-dashed border-gray-700 rounded-xl p-8 text-center cursor-pointer hover:border-cyan-600 transition-colors"
           onClick={() => inputRef.current?.click()}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
@@ -169,17 +170,18 @@ export default function LogsPage() {
           <p className="text-gray-400 text-sm">
             {fileName ?? "Glisser un fichier access.log ou cliquer pour choisir"}
           </p>
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".log,.txt"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleFile(f);
-            }}
-          />
-        </div>
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".log,.txt"
+          aria-label="Importer un fichier de logs"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleFile(f);
+          }}
+        />
 
         {loading && (
           <div className="text-center text-gray-400 text-sm py-4">Parsing en cours...</div>

@@ -125,7 +125,7 @@ export default function AIODetectorPage() {
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
-          <Link href="/dashboard" className="text-gray-400 hover:text-white">
+          <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white">
             <ChevronLeft className="w-5 h-5" />
           </Link>
           <Sparkles className="w-6 h-6 text-cyan-400 shrink-0" />
@@ -135,6 +135,7 @@ export default function AIODetectorPage() {
 
         <div className="flex items-center gap-2">
           <select
+            aria-label="Période d'analyse"
             value={days}
             onChange={(e) => {
               const next = Number(e.target.value) as 28 | 90;
@@ -147,6 +148,7 @@ export default function AIODetectorPage() {
             <option value={90}>90j</option>
           </select>
           <select
+            aria-label="Site à analyser"
             value={siteId}
             onChange={(e) => setSiteId(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
             className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm min-w-56"

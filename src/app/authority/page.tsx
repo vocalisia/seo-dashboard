@@ -24,6 +24,8 @@ interface AcademicStats { total: number; edu_gov: number; total_citations: numbe
 
 interface AuthorityData {
   success: boolean;
+  score_kind?: "heuristic";
+  methodology?: string;
   scores_ui?: { coverage: number; authority: number; content: number; overall: number };
   stats_ui?: { queries: number; avg_position: number; clicks: number; articles: number; clusters: number };
   scores?: {
@@ -201,6 +203,7 @@ export default function AuthorityPage() {
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center gap-4">
           <select
+            aria-label="Site à analyser"
             value={selectedSite ?? ""}
             onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-64"
@@ -211,7 +214,7 @@ export default function AuthorityPage() {
           {(() => {
             const current = sites.find((s) => s.id === selectedSite);
             return current?.url ? (
-              <a href={current.url} target="_blank" rel="noopener noreferrer"
+              <a href={current.url} target="_blank" rel="noopener noreferrer" aria-label={`Ouvrir ${current.url} dans un nouvel onglet`}
                 className="text-blue-400 hover:text-blue-300 flex items-center gap-1 text-sm">
                 <ExternalLink className="w-4 h-4" />
               </a>
@@ -232,23 +235,24 @@ export default function AuthorityPage() {
           <>
             {/* Score rings */}
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-8">
-              <div className="flex justify-center gap-12">
-                <ScoreRing score={data.scores_ui?.overall ?? 0} label="Score Global" color={scoreColor(data.scores_ui?.overall ?? 0)} />
+              <div className="flex flex-wrap justify-center gap-8 lg:gap-12">
+                <ScoreRing score={data.scores_ui?.overall ?? 0} label="Indice interne" color={scoreColor(data.scores_ui?.overall ?? 0)} />
                 <ScoreRing score={data.scores_ui?.coverage ?? 0} label="Couverture" color={scoreColor(data.scores_ui?.coverage ?? 0)} />
-                <ScoreRing score={data.scores_ui?.authority ?? 0} label="Autorité" color={scoreColor(data.scores_ui?.authority ?? 0)} />
+                <ScoreRing score={data.scores_ui?.authority ?? 0} label="Visibilité GSC" color={scoreColor(data.scores_ui?.authority ?? 0)} />
                 <ScoreRing score={data.scores_ui?.content ?? 0} label="Contenu" color={scoreColor(data.scores_ui?.content ?? 0)} />
               </div>
+              <p className="mx-auto mt-6 max-w-4xl rounded-lg border border-amber-700/40 bg-amber-950/20 p-3 text-center text-xs text-amber-100">{data.methodology ?? "Indice interne heuristique; il ne représente ni une métrique Google ni une autorité de domaine externe."}</p>
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
                 <div className="text-2xl font-bold text-white">{data.stats_ui?.queries ?? 0}</div>
                 <div className="text-xs text-gray-400">Requêtes uniques</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
                 <div className="text-2xl font-bold text-white">{(data.stats_ui?.avg_position ?? 0).toFixed(1)}</div>
-                <div className="text-xs text-gray-400">Position moy.</div>
+                <div className="text-xs text-gray-400">Position GSC pondérée</div>
               </div>
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
                 <div className="text-2xl font-bold text-blue-400">{data.stats_ui?.clicks ?? 0}</div>

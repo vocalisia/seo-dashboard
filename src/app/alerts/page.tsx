@@ -227,6 +227,7 @@ export default function AlertsPage() {
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-3 bg-gray-900 border border-gray-800 rounded-xl p-4">
           <select
+            aria-label="Filtrer les alertes par site"
             value={filterSite}
             onChange={(e) => setFilterSite(e.target.value)}
             className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-gray-600"
@@ -238,6 +239,7 @@ export default function AlertsPage() {
           </select>
 
           <select
+            aria-label="Filtrer les alertes par sévérité"
             value={filterSeverity}
             onChange={(e) => setFilterSeverity(e.target.value)}
             className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-gray-600"
@@ -249,6 +251,7 @@ export default function AlertsPage() {
           </select>
 
           <select
+            aria-label="Filtrer les alertes par type"
             value={filterType}
             onChange={(e) => setFilterType(e.target.value)}
             className="bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-gray-600"

@@ -2,14 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, Activity, CheckCircle, XCircle, AlertCircle, RefreshCw, Loader2 } from "lucide-react";
+import { ChevronLeft, Activity, CheckCircle, CircleDashed, AlertCircle, RefreshCw, Loader2 } from "lucide-react";
 
 interface SiteGA4Status {
   id: number;
   name: string;
   url: string;
   ga_property_id: string | null;
-  status: "ok" | "broken" | "not_configured";
+  status: "ok" | "no_data" | "not_configured";
   last_data_date: string | null;
   sessions_7d: number;
   sessions_30d: number;
@@ -23,12 +23,12 @@ const STATUS_META = {
     bg: "bg-green-500/10 border-green-500/30",
     badge: "bg-green-500/20 text-green-400",
   },
-  broken: {
-    label: "Tag cassé",
-    icon: XCircle,
-    color: "text-red-400",
-    bg: "bg-red-500/10 border-red-500/30",
-    badge: "bg-red-500/20 text-red-400",
+  no_data: {
+    label: "Aucune donnée observée",
+    icon: CircleDashed,
+    color: "text-amber-300",
+    bg: "bg-amber-500/10 border-amber-500/30",
+    badge: "bg-amber-500/20 text-amber-200",
   },
   not_configured: {
     label: "Non configuré",
@@ -71,14 +71,14 @@ export default function GA4AuditPage() {
   }, []);
 
   const ok = sites.filter(s => s.status === "ok").length;
-  const broken = sites.filter(s => s.status === "broken").length;
+  const noData = sites.filter(s => s.status === "no_data").length;
   const notConfigured = sites.filter(s => s.status === "not_configured").length;
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/dashboard" className="text-gray-400 hover:text-white"><ChevronLeft className="w-5 h-5" /></Link>
+          <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white"><ChevronLeft className="w-5 h-5" /></Link>
           <Activity className="w-6 h-6 text-blue-400" />
           <h1 className="text-xl font-bold">Audit balises GA4</h1>
           <span className="text-xs text-gray-500">Détection problèmes analytics par site</span>
@@ -96,8 +96,8 @@ export default function GA4AuditPage() {
           <div className="text-2xl font-bold text-green-400">{ok}</div>
         </div>
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400">Tags cassés</div>
-          <div className="text-2xl font-bold text-red-400">{broken}</div>
+          <div className="text-xs text-gray-400">Sans donnée observée</div>
+          <div className="text-2xl font-bold text-amber-300">{noData}</div>
         </div>
         <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
           <div className="text-xs text-gray-400">Non configurés</div>
@@ -112,7 +112,7 @@ export default function GA4AuditPage() {
           <div className="py-12 text-center text-gray-500">Aucun site trouvé</div>
         ) : (
           <div className="space-y-2">
-            {(["broken", "not_configured", "ok"] as const).map(status =>
+            {(["no_data", "not_configured", "ok"] as const).map(status =>
               sites.filter(s => s.status === status).map(site => {
                 const meta = STATUS_META[site.status];
                 const Icon = meta.icon;
@@ -164,21 +164,21 @@ export default function GA4AuditPage() {
         )}
       </div>
 
-      {!loading && broken + notConfigured > 0 && (
+      {!loading && noData + notConfigured > 0 && (
         <div className="px-6 pb-8">
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-5">
             <h2 className="font-semibold text-sm text-gray-300 mb-3">Comment réparer</h2>
             <div className="space-y-2 text-xs text-gray-400">
-              {broken > 0 && (
+              {noData > 0 && (
                 <div className="flex gap-2">
-                  <XCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-                  <span><span className="text-red-400 font-semibold">Tag cassé</span> — Property ID configuré mais aucune donnée reçue depuis 30 jours. Vérifier que le tag GA4 est bien présent dans le HTML et que la property ID correspond.</span>
+                  <CircleDashed className="w-4 h-4 text-amber-300 flex-shrink-0 mt-0.5" />
+                  <span><span className="text-amber-300 font-semibold">Aucune donnée observée</span> — La propriété est renseignée, mais la base ne contient aucune session récente. Cela ne prouve pas que le tag est cassé : vérifier séparément l&apos;accès Data API, l&apos;ID numérique de propriété, la période, le consentement et la présence du tag sur le site.</span>
                 </div>
               )}
               {notConfigured > 0 && (
                 <div className="flex gap-2">
                   <AlertCircle className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
-                  <span><span className="text-yellow-400 font-semibold">Non configuré</span> — Aucun GA4 property ID saisi pour ce site. Aller dans Paramètres → Sites pour ajouter l&apos;ID (format G-XXXXXXXX).</span>
+                  <span><span className="text-yellow-400 font-semibold">Non configuré</span> — Aucun identifiant numérique de propriété GA4 n&apos;est saisi pour ce site. Le Measurement ID au format G-XXXXXXXX n&apos;est pas le Property ID utilisé par la Data API.</span>
                 </div>
               )}
             </div>

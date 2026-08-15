@@ -93,7 +93,7 @@ export default function ContentDecayPage() {
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/dashboard" className="text-gray-400 hover:text-white">
+          <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white">
             <ChevronLeft className="w-5 h-5" />
           </Link>
           <TrendingDown className="w-6 h-6 text-red-500" />
@@ -101,6 +101,7 @@ export default function ContentDecayPage() {
           <span className="text-xs text-gray-500">pages SEO qui perdent des clics GSC</span>
         </div>
         <select
+          aria-label="Site à analyser"
           value={siteId ?? ""}
           onChange={(e) => {
             setLoading(true);

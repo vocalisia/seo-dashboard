@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { ArrowLeft, Loader2, Radar, Rocket, TrendingUp, DollarSign, Globe, Zap, ChevronDown, ChevronRight, Sparkles, Clock } from "lucide-react";
 import Link from "next/link";
+import { canCreateOpportunityRepository, opportunityDeploymentState } from "@/lib/opportunity-deployment";
 
 interface Opportunity {
   id: number;
@@ -527,7 +528,7 @@ export default function ScannerPage() {
         body: JSON.stringify({ opportunity_id: opp.id, domain }),
       });
       const d = await res.json() as { success: boolean; message?: string; error?: string };
-      setDeployMsg(d.success ? d.message ?? "Déployé!" : d.error ?? "Erreur");
+      setDeployMsg(d.success ? d.message ?? "Dépôt privé préparé." : d.error ?? "Erreur");
     } catch { setDeployMsg("Erreur réseau"); }
     try {
       await fetchCached();
@@ -1369,7 +1370,7 @@ export default function ScannerPage() {
                   <button
                     type="button"
                     onClick={() => launchNiche(opp)}
-                    disabled={launching === opp.id || opp.status === "deployed"}
+                    disabled={launching === opp.id || opp.status === "deployed" || opp.status === "repository_ready"}
                     className="px-4 py-2 bg-violet-600/20 hover:bg-violet-600/40 border border-violet-700 text-violet-300 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
                     title="Crée un stub site + content_plan + tracked_keywords (pas de GitHub repo)"
                   >
@@ -1393,17 +1394,18 @@ export default function ScannerPage() {
                   )}
 
                   {/* Deploy button */}
-                  {opp.status === "pending" ? (
+                  {canCreateOpportunityRepository(opp.status) ? (
                     <button
+                      type="button"
                       onClick={() => deploySite(opp)}
                       disabled={deploying === opp.id}
                       className="px-5 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium flex items-center gap-2"
                     >
                       {deploying === opp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
-                      {deploying === opp.id ? "Création en cours..." : "Créer ce site"}
+                      {deploying === opp.id ? "Création en cours..." : "Créer le dépôt privé"}
                     </button>
                   ) : (
-                    <span className="text-xs text-green-400 bg-green-900/20 rounded px-3 py-1.5">✅ Déployé</span>
+                    <span className={`inline-flex min-h-10 items-center rounded border px-3 text-xs ${opportunityDeploymentState(opp.status).tone === "warning" ? "border-amber-700 bg-amber-900/20 text-amber-300" : opportunityDeploymentState(opp.status).tone === "info" ? "border-blue-700 bg-blue-900/20 text-blue-300" : "border-gray-700 bg-gray-800 text-gray-300"}`}>{opportunityDeploymentState(opp.status).label}</span>
                   )}
                 </div>
               </div>

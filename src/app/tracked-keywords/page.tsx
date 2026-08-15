@@ -148,6 +148,7 @@ export default function TrackedKeywordsPage() {
         <div className="bg-gray-900 rounded-lg p-4 mb-4 flex flex-wrap items-center gap-3">
           <Filter className="w-4 h-4 text-gray-400" />
           <select
+            aria-label="Filtrer les mots-clés suivis par site"
             value={siteId}
             onChange={(e) => setSiteId(e.target.value)}
             className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm"

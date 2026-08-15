@@ -2,6 +2,8 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { askAICached } from "@/lib/ai-cache";
+import { requireApiSession } from "@/lib/api-auth";
+import { calculateVisibilityScore } from "@/lib/ai-visibility-score";
 import { z } from "zod";
 
 const BodySchema = z.object({
@@ -19,6 +21,9 @@ interface ScanResultItem {
   indirect: boolean;
   position: number | null;
   competitors: { name: string; rank: number }[];
+  measured: boolean;
+  measurement_status: "live" | "cache" | "unavailable";
+  error?: string;
 }
 
 function detectBrand(
@@ -91,10 +96,10 @@ function extractCompetitors(
 }
 
 const LLM_LABELS: Record<LLMKey, string> = {
-  search: "Perplexity",
-  smart: "Claude",
-  fast: "Gemini",
-  creative: "Mistral",
+  search: "Recherche web",
+  smart: "Analyse",
+  fast: "Rapide",
+  creative: "Créatif",
 };
 
 async function scanWithTimeout(
@@ -112,16 +117,43 @@ async function scanWithTimeout(
   let text = "";
   try {
     const today = new Date().toISOString().slice(0, 10);
-    text = await Promise.race([
+    const answer = await Promise.race([
       askAICached({
         cacheKey: `aivis:${siteId}:${model}:${query}:${today}`,
         messages: [{ role: "user", content: prompt }],
         model,
         maxTokens: 600,
-      }).then((r) => r.reply),
-      timeoutPromise,
+        fallback: "",
+      }),
+      timeoutPromise.then((reply) => ({ reply, cached: false, ai_unavailable: true, error_detail: "timeout" })),
     ]);
-  } catch {
+    if (answer.ai_unavailable) {
+      return {
+        query,
+        llm: LLM_LABELS[model],
+        mentioned: false,
+        indirect: false,
+        position: null,
+        competitors: [],
+        measured: false,
+        measurement_status: "unavailable",
+        error: answer.error_detail || "Fournisseur indisponible",
+      };
+    }
+    text = answer.reply;
+    const { mentioned, indirect, position } = detectBrand(text, brand);
+    const competitors = extractCompetitors(text, brand);
+    return {
+      query,
+      llm: LLM_LABELS[model],
+      mentioned,
+      indirect,
+      position,
+      competitors,
+      measured: true,
+      measurement_status: answer.cached ? "cache" : "live",
+    };
+  } catch (error) {
     return {
       query,
       llm: LLM_LABELS[model],
@@ -129,23 +161,16 @@ async function scanWithTimeout(
       indirect: false,
       position: null,
       competitors: [],
+      measured: false,
+      measurement_status: "unavailable",
+      error: error instanceof Error ? error.message : "Fournisseur indisponible",
     };
   }
-
-  const { mentioned, indirect, position } = detectBrand(text, brand);
-  const competitors = extractCompetitors(text, brand);
-
-  return {
-    query,
-    llm: LLM_LABELS[model],
-    mentioned,
-    indirect,
-    position,
-    competitors,
-  };
 }
 
 export async function POST(req: NextRequest) {
+  const authState = await requireApiSession();
+  if (authState.unauthorized) return authState.unauthorized;
   let body: unknown;
   try {
     body = await req.json();
@@ -178,13 +203,15 @@ export async function POST(req: NextRequest) {
 
     const results = await Promise.all(tasks);
 
-    const mentionedCount = results.filter((r) => r.mentioned).length;
-    const score =
-      results.length > 0
-        ? Math.round((mentionedCount / results.length) * 100)
-        : 0;
+    const coverage = calculateVisibilityScore(results);
 
-    return NextResponse.json({ success: true, results, score });
+    return NextResponse.json({
+      success: true,
+      results,
+      score: coverage.score,
+      coverage,
+      methodology: "Quatre modes de génération sont demandés. Le fournisseur réellement disponible peut être commun à plusieurs modes; aucun nom de plateforme n'est attribué sans preuve. Les indisponibilités sont exclues du score.",
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(

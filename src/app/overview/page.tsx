@@ -270,7 +270,7 @@ export default function OverviewPage() {
       {/* ── HEADER ── */}
       <header className="border-b border-gray-800 px-6 py-3 flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
-          <Link href="/dashboard" className="text-gray-400 hover:text-white"><ArrowLeft className="w-5 h-5" /></Link>
+          <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white"><ArrowLeft className="w-5 h-5" /></Link>
           <BarChart3 className="w-5 h-5 text-blue-400" />
           <h1 className="text-lg font-bold">Vue Globale</h1>
           <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full">{summary.length} sites</span>
@@ -328,7 +328,7 @@ export default function OverviewPage() {
             )}
           </div>
           {/* Sort */}
-          <select value={sortMetric} onChange={e => setSortMetric(e.target.value as typeof sortMetric)}
+          <select aria-label="Trier les sites" value={sortMetric} onChange={e => setSortMetric(e.target.value as typeof sortMetric)}
             className="bg-gray-800 border border-gray-700 text-gray-300 text-xs rounded-lg px-3 py-2">
             <option value="clicks">Trier: Clics Google (GSC)</option>
             <option value="impressions">Trier: Impressions Google (GSC)</option>

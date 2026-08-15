@@ -48,12 +48,12 @@ export default function CTRAnomalyPage() {
     <div className="min-h-screen bg-gray-950 text-white">
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/dashboard" className="text-gray-400 hover:text-white"><ChevronLeft className="w-5 h-5" /></Link>
+          <Link href="/dashboard" aria-label="Retour au dashboard" className="text-gray-400 hover:text-white"><ChevronLeft className="w-5 h-5" /></Link>
           <MousePointerClick className="w-6 h-6 text-purple-500" />
           <h1 className="text-xl font-bold">CTR Anomaly Detector</h1>
           <span className="text-xs text-gray-500">vs benchmark AWR 2026</span>
         </div>
-        <select value={siteId || ""} onChange={e => {
+        <select aria-label="Site à analyser" value={siteId || ""} onChange={e => {
           setLoading(true);
           setSiteId(parseInt(e.target.value));
         }}

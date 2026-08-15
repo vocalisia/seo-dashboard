@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowLeft, Loader2, Plus, X, Save, BarChart3 } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, X, Save, BarChart3, CheckCircle2, CircleDashed, XCircle } from "lucide-react";
 import Link from "next/link";
 import {
   LineChart,
@@ -25,6 +25,9 @@ interface ScanResult {
   indirect: boolean;
   position: number | null;
   competitors: { name: string; rank: number }[];
+  measured: boolean;
+  measurement_status: "live" | "cache" | "unavailable";
+  error?: string;
 }
 
 interface HistoryPoint {
@@ -32,7 +35,7 @@ interface HistoryPoint {
   created_at: string;
 }
 
-const LLM_ORDER = ["Perplexity", "Claude", "Gemini", "Mistral"];
+const MODE_ORDER = ["Recherche web", "Analyse", "Rapide", "Créatif"];
 
 type ActiveTab = "scan" | "history";
 
@@ -45,6 +48,8 @@ export default function AIVisibilityPage() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ScanResult[]>([]);
   const [score, setScore] = useState<number | null>(null);
+  const [coverage, setCoverage] = useState<{ measured: number; requested: number; mentions: number } | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
@@ -65,6 +70,13 @@ export default function AIVisibilityPage() {
     })();
   }, []);
 
+  useEffect(() => {
+    const initialQuery = new URLSearchParams(window.location.search).get("query")?.trim();
+    if (!initialQuery) return;
+    const frame = window.requestAnimationFrame(() => setQueries([initialQuery.slice(0, 500)]));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
   async function loadHistory() {
     if (!selectedSite) return;
     try {
@@ -79,18 +91,25 @@ export default function AIVisibilityPage() {
     setLoading(true);
     setResults([]);
     setScore(null);
+    setCoverage(null);
+    setScanError(null);
     try {
       const res = await fetch("/api/ai-visibility/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ siteId: selectedSite, brand, queries }),
       });
-      const data = await res.json() as { success: boolean; results?: ScanResult[]; score?: number; error?: string };
+      const data = await res.json() as { success: boolean; results?: ScanResult[]; score?: number | null; coverage?: { measured: number; requested: number; mentions: number }; error?: string };
       if (data.success && data.results) {
         setResults(data.results);
-        setScore(data.score ?? 0);
+        setScore(data.score ?? null);
+        setCoverage(data.coverage ?? null);
+      } else {
+        setScanError(data.error ?? "Le scan n'a pas pu être exécuté.");
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : "Erreur réseau pendant le scan.");
+    }
     setLoading(false);
   }
 
@@ -134,15 +153,15 @@ export default function AIVisibilityPage() {
         <Link href="/dashboard" className="flex items-center gap-2 text-gray-400 hover:text-gray-100 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Dashboard
         </Link>
-        <span className="text-xl">AI Visibility</span>
+        <h1 className="text-xl">AI Visibility</h1>
       </div>
 
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         {/* Tabs */}
-        <div className="flex gap-2">
+        <div className="flex gap-2" role="tablist" aria-label="Visibilité IA">
           {(["scan", "history"] as ActiveTab[]).map((t) => (
-            <button key={t} onClick={() => { setActiveTab(t); if (t === "history") void loadHistory(); }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === t ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
+            <button key={t} type="button" role="tab" aria-selected={activeTab === t} onClick={() => { setActiveTab(t); if (t === "history") void loadHistory(); }}
+              className={`min-h-11 px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === t ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
               {t === "scan" ? "Scan LLMs" : "Historique"}
             </button>
           ))}
@@ -154,8 +173,8 @@ export default function AIVisibilityPage() {
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-gray-400 uppercase block mb-1">Site</label>
-                  <select value={selectedSite ?? ""} onChange={(e) => {
+                  <label htmlFor="ai-visibility-site" className="text-xs text-gray-400 uppercase block mb-1">Site</label>
+                  <select id="ai-visibility-site" value={selectedSite ?? ""} onChange={(e) => {
                     const id = parseInt(e.target.value, 10);
                     setSelectedSite(id);
                     const site = sites.find((s) => s.id === id);
@@ -165,8 +184,8 @@ export default function AIVisibilityPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-gray-400 uppercase block mb-1">Marque / Brand</label>
-                  <input value={brand} onChange={(e) => setBrand(e.target.value)}
+                  <label htmlFor="ai-visibility-brand" className="text-xs text-gray-400 uppercase block mb-1">Marque / Brand</label>
+                  <input id="ai-visibility-brand" value={brand} onChange={(e) => setBrand(e.target.value)}
                     className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
                     placeholder="vocalis.pro" />
                 </div>
@@ -177,19 +196,19 @@ export default function AIVisibilityPage() {
                 <div className="space-y-2">
                   {queries.map((q, i) => (
                     <div key={i} className="flex items-center gap-2">
-                      <input value={q} onChange={(e) => setQueries((prev) => prev.map((x, idx) => idx === i ? e.target.value : x))}
+                      <input aria-label={`Requête ${i + 1}`} value={q} onChange={(e) => setQueries((prev) => prev.map((x, idx) => idx === i ? e.target.value : x))}
                         className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                      <button onClick={() => removeQuery(i)} className="text-gray-500 hover:text-red-400"><X className="w-4 h-4" /></button>
+                      <button type="button" onClick={() => removeQuery(i)} className="grid h-11 w-11 place-items-center rounded-lg text-gray-500 hover:bg-gray-800 hover:text-red-400" aria-label={`Supprimer la requête ${i + 1}`}><X className="w-4 h-4" /></button>
                     </div>
                   ))}
                 </div>
                 {queries.length < 10 && (
                   <div className="flex gap-2 mt-2">
-                    <input value={newQuery} onChange={(e) => setNewQuery(e.target.value)}
+                    <input aria-label="Ajouter une requête" value={newQuery} onChange={(e) => setNewQuery(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") addQuery(); }}
                       placeholder="Ajouter une requête..."
                       className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                    <button onClick={addQuery} className="flex items-center gap-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">
+                    <button type="button" onClick={addQuery} className="flex min-h-11 items-center gap-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">
                       <Plus className="w-4 h-4" /> Ajouter
                     </button>
                   </div>
@@ -197,27 +216,31 @@ export default function AIVisibilityPage() {
               </div>
 
               <div className="flex gap-3 items-center">
-                <button onClick={runScan} disabled={loading || !selectedSite || !brand}
+                <button type="button" onClick={runScan} disabled={loading || !selectedSite || !brand}
                   className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm font-medium transition-colors">
                   {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <BarChart3 className="w-4 h-4" />}
                   {loading ? "Scan en cours... (30s max/LLM)" : "Lancer scan"}
                 </button>
                 {results.length > 0 && (
-                  <button onClick={saveSnapshot} disabled={saving}
+                  <button type="button" onClick={saveSnapshot} disabled={saving}
                     className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-600 disabled:opacity-50 rounded-lg text-sm transition-colors">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                     Sauvegarder snapshot
                   </button>
                 )}
-                {saveMsg && <span className="text-sm text-green-400">{saveMsg}</span>}
+                {saveMsg && <span role="status" className="text-sm text-green-400">{saveMsg}</span>}
               </div>
+              <div className="rounded-lg border border-blue-800/60 bg-blue-950/30 p-3 text-xs text-blue-100">
+                Le scan compare quatre modes de réponse. Il n&apos;attribue pas un résultat à Perplexity, Claude, Gemini ou Mistral sans preuve du fournisseur réellement exécuté. Une panne est affichée comme indisponible et ne compte pas comme une non-mention.
+              </div>
+              {scanError && <div role="alert" className="rounded-lg border border-red-700 bg-red-950/30 p-3 text-sm text-red-200">{scanError}</div>}
             </div>
 
             {/* Score */}
             {score !== null && (
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex items-center gap-6">
                 <div>
-                  <div className="text-xs text-gray-400 mb-1">Score visibilité IA global</div>
+                  <div className="text-xs text-gray-400 mb-1">Score des réponses mesurées</div>
                   <div className={`text-4xl font-bold ${score >= 60 ? "text-green-400" : score >= 30 ? "text-yellow-400" : "text-red-400"}`}>
                     {score}%
                   </div>
@@ -227,8 +250,14 @@ export default function AIVisibilityPage() {
                     style={{ width: `${score}%` }} />
                 </div>
                 <div className="text-xs text-gray-500">
-                  {results.filter((r) => r.mentioned).length}/{results.length} mentions directes
+                  {coverage?.mentions ?? results.filter((r) => r.measured && r.mentioned).length}/{coverage?.measured ?? results.filter((r) => r.measured).length} mentions directes mesurées
                 </div>
+              </div>
+            )}
+
+            {coverage && coverage.measured < coverage.requested && (
+              <div role="status" className="rounded-xl border border-amber-700/50 bg-amber-950/25 px-5 py-3 text-sm text-amber-100">
+                Couverture partielle : {coverage.measured}/{coverage.requested} réponses exploitables. Les {coverage.requested - coverage.measured} indisponibilités sont exclues du score.
               </div>
             )}
 
@@ -236,14 +265,14 @@ export default function AIVisibilityPage() {
             {queryList.length > 0 && (
               <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
                 <div className="px-5 py-3 border-b border-gray-800 text-sm font-medium text-gray-300">
-                  Résultats par LLM
+                  Résultats par mode d&apos;analyse
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-xs text-gray-400 border-b border-gray-800 bg-gray-800/40">
                         <th className="px-5 py-3 text-left">Requête</th>
-                        {LLM_ORDER.map((llm) => (
+                        {MODE_ORDER.map((llm) => (
                           <th key={llm} className="px-4 py-3 text-center">{llm}</th>
                         ))}
                       </tr>
@@ -252,21 +281,22 @@ export default function AIVisibilityPage() {
                       {queryList.map((query) => (
                         <tr key={query} className="border-b border-gray-800/50 hover:bg-gray-800/20">
                           <td className="px-5 py-3 text-gray-200 max-w-xs truncate">{query}</td>
-                          {LLM_ORDER.map((llm) => {
+                          {MODE_ORDER.map((llm) => {
                             const cell = getCell(query, llm);
                             if (!cell) return <td key={llm} className="px-4 py-3 text-center text-gray-600">—</td>;
+                            if (!cell.measured) return <td key={llm} className="px-4 py-3 text-center"><span className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300" title={cell.error}>Indisponible</span></td>;
                             return (
                               <td key={llm} className="px-4 py-3 text-center">
                                 {cell.mentioned ? (
                                   <div className="inline-flex flex-col items-center gap-0.5">
-                                    <span className="text-green-400 text-base">✅</span>
+                                    <CheckCircle2 className="h-5 w-5 text-green-400" aria-label="Mention directe" />
                                     {cell.position && <span className="text-xs text-green-400">#{cell.position}</span>}
                                   </div>
                                 ) : cell.indirect ? (
-                                  <span className="text-yellow-400 text-base" title="Mention indirecte">🟡</span>
+                                  <CircleDashed className="mx-auto h-5 w-5 text-yellow-400" aria-label="Mention indirecte" />
                                 ) : (
                                   <div className="inline-flex flex-col items-center gap-0.5">
-                                    <span className="text-red-400 text-base">❌</span>
+                                    <XCircle className="h-5 w-5 text-red-400" aria-label="Aucune mention dans la réponse mesurée" />
                                     {cell.competitors[0] && (
                                       <span className="text-xs text-gray-500 truncate max-w-20">{cell.competitors[0].name}</span>
                                     )}

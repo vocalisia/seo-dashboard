@@ -21,6 +21,7 @@ interface CompareData {
   success: boolean;
   site_a: SiteStats;
   site_b: SiteStats;
+  methodology?: string;
 }
 
 function DeltaCell({ a, b, inverted = false }: { a: number; b: number; inverted?: boolean }) {
@@ -120,12 +121,12 @@ export default function ComparePage() {
         )}
         {/* Selectors */}
         <div className="flex items-center gap-4 justify-center">
-          <select value={siteA ?? ""} onChange={(e) => setSiteA(parseInt(e.target.value, 10))}
+          <select aria-label="Premier site à comparer" value={siteA ?? ""} onChange={(e) => setSiteA(parseInt(e.target.value, 10))}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-52">
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
           <ArrowLeftRight className="w-5 h-5 text-gray-500" />
-          <select value={siteB ?? ""} onChange={(e) => setSiteB(parseInt(e.target.value, 10))}
+          <select aria-label="Second site à comparer" value={siteB ?? ""} onChange={(e) => setSiteB(parseInt(e.target.value, 10))}
             className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm w-52">
             {sites.map((s) => (<option key={s.id} value={s.id}>{s.name}</option>))}
           </select>
@@ -138,6 +139,7 @@ export default function ComparePage() {
 
         {data && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <p className="mb-4 rounded-lg border border-blue-800/50 bg-blue-950/20 p-3 text-xs text-blue-100">{data.methodology ?? "Positions Google Search Console pondérées par impressions sur 30 jours."}</p>
             {/* Headers */}
             <div className="grid grid-cols-[1fr_100px_80px_100px_1fr] items-center pb-4 border-b border-gray-700 mb-2">
               <div className="text-right text-lg font-bold text-white">{data.site_a.name}</div>
@@ -149,7 +151,7 @@ export default function ComparePage() {
 
             <StatRow label="Clics" valA={data.site_a.clicks} valB={data.site_b.clicks} />
             <StatRow label="Impr." valA={data.site_a.impressions} valB={data.site_b.impressions} />
-            <StatRow label="Position" valA={data.site_a.avg_position} valB={data.site_b.avg_position} inverted format="decimal" />
+            <StatRow label="Position GSC pondérée" valA={data.site_a.avg_position} valB={data.site_b.avg_position} inverted format="decimal" />
             <StatRow label="Sessions" valA={data.site_a.sessions} valB={data.site_b.sessions} />
             <StatRow label="Users" valA={data.site_a.users} valB={data.site_b.users} />
             <StatRow label="Articles" valA={data.site_a.articles} valB={data.site_b.articles} />

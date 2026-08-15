@@ -1,5 +1,6 @@
 import { getSQL } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiSession } from "@/lib/api-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -57,8 +58,8 @@ async function getSiteStats(siteId: number): Promise<SiteStats | null> {
     SELECT
       COALESCE(SUM(clicks), 0) as total_clicks,
       COALESCE(SUM(impressions), 0) as total_impressions,
-      COALESCE(AVG(NULLIF(position, 0)), 0) as avg_position
-    FROM search_console_data
+      COALESCE(SUM(impressions * position)::float / NULLIF(SUM(impressions), 0), 0) as avg_position
+    FROM search_console_query_data
     WHERE site_id = ${siteId}
       AND date >= NOW() - INTERVAL '30 days'
   `;
@@ -88,8 +89,8 @@ async function getSiteStats(siteId: number): Promise<SiteStats | null> {
       query,
       SUM(clicks) as clicks,
       SUM(impressions) as impressions,
-      AVG(position) as avg_position
-    FROM search_console_data
+      SUM(impressions * position)::float / NULLIF(SUM(impressions), 0) as avg_position
+    FROM search_console_query_data
     WHERE site_id = ${siteId}
       AND date >= NOW() - INTERVAL '30 days'
       AND query IS NOT NULL
@@ -120,6 +121,8 @@ async function getSiteStats(siteId: number): Promise<SiteStats | null> {
 }
 
 export async function GET(request: NextRequest) {
+  const auth = await requireApiSession();
+  if (auth.unauthorized) return auth.unauthorized;
   const siteA = request.nextUrl.searchParams.get("site_a");
   const siteB = request.nextUrl.searchParams.get("site_b");
 
@@ -201,6 +204,7 @@ export async function GET(request: NextRequest) {
         site_b: statsB,
       },
       delta,
+      methodology: "Positions GSC query-level pondérées par impressions sur 30 jours.",
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";

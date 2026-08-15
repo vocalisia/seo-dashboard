@@ -721,7 +721,7 @@ export default function CompetitorsPage() {
                   {gapsRefreshing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                   {gapsRefreshing ? "Recherche en cours..." : "Actualiser par le web"}
                 </button>
-                <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
+                <select aria-label="Site pour l'analyse des gaps" value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
                   className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none w-48">
                   <option value="all">Tous les sites</option>
                   {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -838,6 +838,7 @@ export default function CompetitorsPage() {
               <div className="flex flex-col gap-2">
                 <label className="text-xs text-gray-400 uppercase">Site à analyser</label>
                 <select
+                  aria-label="Site à analyser"
                   value={selectedSite ?? ""}
                   onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
                   className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-purple-500 w-64"
@@ -1294,6 +1295,7 @@ export default function CompetitorsPage() {
                 ))}
               </div>
               <textarea
+                aria-label="Demande d'analyse concurrentielle"
                 className="w-full bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-white resize-none focus:outline-none focus:border-purple-500 h-28"
                 value={aiWidget.prompt}
                 onChange={(e) => setAiWidget((s) => ({ ...s, prompt: e.target.value }))}

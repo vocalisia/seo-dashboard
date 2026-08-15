@@ -9,6 +9,7 @@ export function getSQL() {
 }
 
 let schemaReady: Promise<void> | null = null;
+let opportunitySchemaReady: Promise<void> | null = null;
 
 export function ensureSchemaOnce(): Promise<void> {
   schemaReady ??= ensureSchema().catch((error) => {
@@ -16,6 +17,14 @@ export function ensureSchemaOnce(): Promise<void> {
     throw error;
   });
   return schemaReady;
+}
+
+export function ensureOpportunitySchemaOnce(): Promise<void> {
+  opportunitySchemaReady ??= ensureOpportunitySchema().catch((error) => {
+    opportunitySchemaReady = null;
+    throw error;
+  });
+  return opportunitySchemaReady;
 }
 
 export async function initDB() {

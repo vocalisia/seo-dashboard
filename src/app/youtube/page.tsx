@@ -286,6 +286,7 @@ export default function YouTubeScannerPage() {
             <span className="text-xs text-gray-500">(1 par ligne, max 10)</span>
           </div>
           <textarea
+            aria-label="Niches YouTube à analyser"
             value={keywords}
             onChange={e => setKeywords(e.target.value)}
             rows={6}

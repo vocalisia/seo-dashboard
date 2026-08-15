@@ -1,33 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Globe, Search, MousePointerClick,
-  BarChart3, RefreshCw, Loader2, ChevronDown, ChevronRight,
-  PlaySquare, TrendingUp, TrendingDown, X, Smartphone, ChevronsDownUp, ChevronsUpDown, ExternalLink, Activity
+  BarChart3, Loader2, ChevronDown, ChevronRight,
+  TrendingUp, TrendingDown, X, Smartphone, ChevronsDownUp, ChevronsUpDown,
+  ExternalLink, AlertTriangle, CheckCircle2, Copy
 } from "lucide-react";
 import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { CopyKeywordsButton } from "@/components/CopyKeywordsButton";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
+import { DashboardControlBar, type DashboardPeriod } from "@/components/dashboard/DashboardControlBar";
+import { DashboardHealthOverview } from "@/components/dashboard/DashboardHealthOverview";
+import {
+  dashboardSiteStatusClass,
+  dashboardSiteStatusLabel,
+  weightedDashboardPosition,
+  type DashboardQualitySite,
+} from "@/lib/dashboard-quality";
 
 interface Site {
   id: number; name: string; url: string;
   gsc_clicks_30d: number; gsc_impressions_30d: number; avg_position_30d: number;
-}
-
-interface DashboardQualitySite {
-  id: number;
-  name: string;
-  latest_gsc_date: string | null;
-  positioned_keywords_30d: number;
-  top10_keywords_7d: number;
-  tracked_keywords: number;
-  kp_volumes_imported: number;
-  kp_volumes_missing: number;
-  gain_candidates: number;
-  latest_ga4_date: string | null;
-  users_30d: number;
-  status: "ok" | "gsc_not_configured" | "gsc_no_query_data" | "gsc_stale" | "kp_missing" | "ga4_no_daily_data" | string;
 }
 
 interface QueryData {
@@ -55,7 +49,7 @@ interface GainLabels { w0: string; w1: string; w2: string; w3: string; w4: strin
 
 const COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#ec4899","#f97316","#14b8a6","#6366f1","#84cc16","#f43f5e","#a855f7","#0ea5e9","#22c55e","#eab308"];
 
-type Period = "3" | "7" | "30" | "90";
+type Period = DashboardPeriod;
 type TabType = "keywords" | "gains" | "analytics" | "device";
 type KwTypeFilter = "all" | "important" | "highvolume" | "longtail" | "questions";
 const KEYWORD_LOAD_LIMIT = 500;
@@ -210,22 +204,6 @@ function keywordSolution(kw: QueryData): string {
   return sourceVolume >= 100 ? "Creer contenu dedie" : "Faible priorite";
 }
 
-function qualityStatusLabel(status: string): string {
-  if (status === "ok") return "donnees OK";
-  if (status === "gsc_stale") return "GSC en retard";
-  if (status === "gsc_no_query_data") return "GSC sans requetes";
-  if (status === "gsc_not_configured") return "GSC non configure";
-  if (status === "kp_missing") return "Volumes KP manquants";
-  if (status === "ga4_no_daily_data") return "GA4 sans donnees";
-  return status;
-}
-
-function qualityStatusClass(status: string): string {
-  if (status === "ok") return "border-green-500/30 bg-green-500/10 text-green-300";
-  if (status === "gsc_stale") return "border-blue-500/30 bg-blue-500/10 text-blue-200";
-  return "border-yellow-500/30 bg-yellow-500/10 text-yellow-200";
-}
-
 function formatMs(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "-";
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
@@ -282,7 +260,7 @@ export default function DashboardPage() {
   const [gainLabels, setGainLabels] = useState<GainLabels | null>(null);
   const [kwLoadingIds, setKwLoadingIds] = useState<Set<number>>(new Set());
   const [highVolLoading, setHighVolLoading] = useState<Set<number>>(new Set());
-  const [highVolResult, setHighVolResult] = useState<Record<number, {added: number; total: number}>>({});
+  const [highVolFeedback, setHighVolFeedback] = useState<Record<number, { type: "ok" | "error"; text: string }>>({});
   const [highVolPanel, setHighVolPanel] = useState<number | null>(null); // siteId with open panel
   const [highVolKws, setHighVolKws] = useState<{keyword: string; impressions: number; avg_position: number; clicks: number; source: string; already_tracked: boolean}[]>([]);
   const [highVolPanelLoading, setHighVolPanelLoading] = useState(false);
@@ -321,6 +299,17 @@ export default function DashboardPage() {
   const [aiModal, setAiModal] = useState<{
     siteId: number; query: string; actionType: string; loading: boolean; response?: string; error?: string;
   } | null>(null);
+  const aiDialogRef = useRef<HTMLDivElement>(null);
+  const aiCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const closeAiModal = useCallback(() => setAiModal(null), []);
+
+  useDialogFocus({
+    open: aiModal !== null,
+    onClose: closeAiModal,
+    containerRef: aiDialogRef,
+    initialFocusRef: aiCloseButtonRef,
+    lockScroll: true,
+  });
 
   function recordTiming(timing: ServiceTiming) {
     setServiceTimings((prev) => [timing, ...prev].slice(0, 12));
@@ -559,6 +548,7 @@ export default function DashboardPage() {
     setHighVolPanel(siteId);
     setHighVolKws([]);
     setHighVolSelected(new Set());
+    setHighVolFeedback(prev => { const next = { ...prev }; delete next[siteId]; return next; });
     setHighVolPanelLoading(true);
     try {
       const res = await timedFetch("High volume", `/api/keywords/high-volume?site_id=${siteId}&min_imp=30`);
@@ -568,8 +558,12 @@ export default function DashboardPage() {
         setHighVolKws(untracked);
         // Keep discovery read-only by default. The user chooses what to track.
         setHighVolSelected(new Set());
+      } else {
+        setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: "La découverte GSC n'a retourné aucune donnée exploitable." } }));
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: error instanceof Error ? error.message : "La découverte GSC a échoué." } }));
+    }
     setHighVolPanelLoading(false);
   }
 
@@ -585,11 +579,15 @@ export default function DashboardPage() {
       });
       const d = await res.json() as { success: boolean; added: number };
       if (d.success) {
-        setHighVolResult(prev => ({ ...prev, [siteId]: { added: d.added, total: toAdd.length } }));
+        setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "ok", text: `${d.added} mot(s)-clé(s) ajouté(s) au suivi sur ${toAdd.length} sélectionné(s).` } }));
         setHighVolPanel(null);
         if (d.added > 0) await loadKeywords(siteId, period);
+      } else {
+        setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: "Aucun mot-clé n'a été ajouté au suivi." } }));
       }
-    } catch { /* ignore */ }
+    } catch (error) {
+      setHighVolFeedback(prev => ({ ...prev, [siteId]: { type: "error", text: error instanceof Error ? error.message : "L'ajout au suivi a échoué." } }));
+    }
     setHighVolLoading(prev => { const n = new Set(prev); n.delete(siteId); return n; });
   }
 
@@ -645,16 +643,8 @@ export default function DashboardPage() {
   const totalClicks = sites.reduce((s, site) => s + (Number(site.gsc_clicks_30d) || 0), 0);
   const totalImpressions = sites.reduce((s, site) => s + (Number(site.gsc_impressions_30d) || 0), 0);
   const activeSites = sites.filter(s => Number(s.avg_position_30d) > 0);
-  const avgPosition = activeSites.length > 0
-    ? activeSites.reduce((s, site) => s + Number(site.avg_position_30d), 0) / activeSites.length
-    : 0;
+  const avgPosition = weightedDashboardPosition(sites);
   const qualityById = new Map(qualitySites.map((site) => [site.id, site]));
-  const qualityOkCount = qualitySites.filter((site) => site.status === "ok").length;
-  const qualityStaleCount = qualitySites.filter((site) => site.status === "gsc_stale" || site.status === "gsc_no_query_data").length;
-  const totalImportedVolumes = qualitySites.reduce((sum, site) => sum + Number(site.kp_volumes_imported || 0), 0);
-  const totalMissingVolumes = qualitySites.reduce((sum, site) => sum + Number(site.kp_volumes_missing || 0), 0);
-  const totalGainCandidates = qualitySites.reduce((sum, site) => sum + Number(site.gain_candidates || 0), 0);
-  const totalTop10Keywords = qualitySites.reduce((sum, site) => sum + Number(site.top10_keywords_7d || 0), 0);
   const latestTiming = serviceTimings[0];
   const avgServiceMs = serviceTimings.length
     ? serviceTimings.reduce((sum, item) => sum + item.ms, 0) / serviceTimings.length
@@ -708,33 +698,38 @@ export default function DashboardPage() {
       {aiModal && (
         <div
           className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => setAiModal(null)}
+          onMouseDown={closeAiModal}
         >
           <div
+            ref={aiDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dashboard-ai-dialog-title"
             className="bg-gray-900 border border-blue-500/30 rounded-xl max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col"
-            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
               <div>
-                <div className="text-xs uppercase tracking-wider text-blue-400 font-semibold">🤖 Agent IA SEO — {aiModal.actionType}</div>
-                <div className="text-lg font-bold mt-1 text-white">&ldquo;{aiModal.query}&rdquo;</div>
+                <div className="text-xs uppercase tracking-wider text-blue-400 font-semibold">Agent IA SEO · {aiModal.actionType}</div>
+                <h2 id="dashboard-ai-dialog-title" className="text-lg font-bold mt-1 text-white">&ldquo;{aiModal.query}&rdquo;</h2>
               </div>
               <button
+                ref={aiCloseButtonRef}
                 type="button"
-                onClick={() => setAiModal(null)}
-                className="text-gray-400 hover:text-white text-2xl px-2"
-                title="Fermer"
-              >×</button>
+                onClick={closeAiModal}
+                className="grid h-11 w-11 place-items-center rounded-lg text-gray-400 hover:bg-gray-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                aria-label="Fermer"
+              ><X className="h-5 w-5" aria-hidden="true" /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {aiModal.loading && (
-                <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-400">
+                <div role="status" className="flex flex-col items-center justify-center py-12 gap-3 text-gray-400">
                   <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
                   <div className="text-sm">L&apos;IA analyse ton mot-clé et génère un plan d&apos;action...</div>
                 </div>
               )}
               {aiModal.error && (
-                <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-4 text-red-300 text-sm">
+                <div role="alert" className="bg-red-900/30 border border-red-700/50 rounded-lg p-4 text-red-300 text-sm">
                   Erreur : {aiModal.error}
                 </div>
               )}
@@ -749,12 +744,12 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={() => navigator.clipboard.writeText(aiModal.response!)}
-                  className="px-3 py-1.5 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition"
-                >📋 Copier</button>
+                  className="inline-flex min-h-11 items-center gap-2 rounded bg-gray-800 px-3 text-xs text-gray-300 transition hover:bg-gray-700"
+                ><Copy className="h-4 w-4" aria-hidden="true" />Copier</button>
                 <button
                   type="button"
-                  onClick={() => setAiModal(null)}
-                  className="px-3 py-1.5 text-xs rounded bg-blue-600 hover:bg-blue-700 text-white transition"
+                  onClick={closeAiModal}
+                  className="min-h-11 rounded bg-blue-600 px-4 text-xs text-white transition hover:bg-blue-700"
                 >Fermer</button>
               </div>
             )}
@@ -762,272 +757,47 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Header */}
-      <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <BarChart3 className="w-7 h-7 text-blue-500" />
-          <h1 className="text-xl font-bold">SEO Dashboard</h1>
-          <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-1 rounded-full">{sites.length} sites</span>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <input
-            type="text" placeholder="Filtrer mots clés..." value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm w-48 focus:outline-none focus:border-blue-500"
-          />
-          <div className="flex bg-gray-800 border border-gray-700 rounded-lg overflow-hidden text-sm">
-            {(["3","7","30","90"] as Period[]).map(p => (
-              <button key={p} onClick={() => changePeriod(p)}
-                className={`px-3 py-2 transition ${period === p ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"}`}>
-                {p}j
-              </button>
-            ))}
-          </div>
-          <select
-            value={langFilter}
-            onChange={(e) => changeLangFilter(e.target.value)}
-            className="bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-cyan-500"
-            title="Filtrer les mots-clés par langue/pays"
-          >
-            <option value="">🌍 Tous pays</option>
-            <option value="fr">🇫🇷 France (FR)</option>
-            <option value="ch">🇨🇭 Suisse (CH uniquement)</option>
-            <option value="en">🇬🇧 UK/US (EN)</option>
-            <option value="de">🇩🇪 DE/AT/CH (DE)</option>
-            <option value="es">🇪🇸 Espagne (ES)</option>
-            <option value="it">🇮🇹 Italie (IT)</option>
-            <option value="nl">🇳🇱 Pays-Bas (NL)</option>
-            <option value="pt">🇵🇹 Portugal/BR (PT)</option>
-          </select>
-          <Link href="/overview" className="bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            <Globe className="w-4 h-4" /> Vue globale
-          </Link>
-          <Link href="/reports" className="bg-green-600/20 hover:bg-green-600/40 text-green-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            <TrendingUp className="w-4 h-4" /> Rapports IA
-          </Link>
-          <Link href="/youtube" className="bg-red-600/20 hover:bg-red-600/40 text-red-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            <PlaySquare className="w-4 h-4" /> YouTube
-          </Link>
-          <Link href="/opportunities" className="bg-green-600/20 hover:bg-green-600/40 text-green-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            <TrendingUp className="w-4 h-4" /> Opportunités
-          </Link>
-          <Link href="/audit" className="bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            <Search className="w-4 h-4" /> Audit
-          </Link>
-          <Link href="/backlinks" className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            <Globe className="w-4 h-4" /> Backlinks
-          </Link>
-          <Link href="/autopilot" className="bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
-            ⚡ Autopilot
-          </Link>
-          <Link href="/countries" className="bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
-            🌍 Pays
-          </Link>
-          <Link href="/competitors" className="bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
-            🎯 Concurrents
-          </Link>
-          <Link href="/tracker" className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            📊 Tracker
-          </Link>
-          <Link href="/calendar" className="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            📅 Calendrier
-          </Link>
-          <Link href="/alerts" className="bg-red-600/20 hover:bg-red-600/40 text-red-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            🚨 Alertes
-          </Link>
-          <Link href="/refresh" className="bg-amber-600/20 hover:bg-amber-600/40 text-amber-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            🔄 Refresh
-          </Link>
-          <Link href="/clusters" className="bg-violet-600/20 hover:bg-violet-600/40 text-violet-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            🧩 Clusters
-          </Link>
-          <Link href="/internal-links" className="bg-teal-600/20 hover:bg-teal-600/40 text-teal-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            🔗 Maillage
-          </Link>
-          <Link href="/authority" className="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            🛡 Autorité
-          </Link>
-          <Link href="/compare" className="bg-pink-600/20 hover:bg-pink-600/40 text-pink-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            ⚖ Comparer
-          </Link>
-          <Link href="/health" className="bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            💊 Santé SEO
-          </Link>
-          <Link href="/scanner" className="bg-gradient-to-r from-cyan-600/20 to-blue-600/20 hover:from-cyan-600/40 hover:to-blue-600/40 text-cyan-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-cyan-800/50">
-            🔮 Scanner
-          </Link>
-          <Link href="/striking-distance" className="bg-orange-600/20 hover:bg-orange-600/40 text-orange-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
-            🎯 Striking
-          </Link>
-          <Link href="/cannibalization-hhi" className="bg-red-600/20 hover:bg-red-600/40 text-red-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            ⚔️ Cannibal HHI
-          </Link>
-          <Link href="/cross-domain-cannibal" className="bg-pink-600/20 hover:bg-pink-600/40 text-pink-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold">
-            🌐 Cross-domain
-          </Link>
-          <Link href="/ctr-anomaly" className="bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            📉 CTR anomaly
-          </Link>
-          <Link href="/content-decay" className="bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
-            📊 Decay
-          </Link>
-          <Link href="/aio-detector" className="bg-gradient-to-r from-cyan-600/20 to-purple-600/20 hover:from-cyan-600/40 hover:to-purple-600/40 text-cyan-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-cyan-800/30">
-            ✨ AIO
-          </Link>
-          <Link href="/ai-visibility" className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-blue-800/40">
-            🤖 AI Visibility
-          </Link>
-          <Link href="/ai-prompts" className="bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-yellow-800/40">
-            💡 AI Prompts
-          </Link>
-          <Link href="/keywords-pro" className="bg-green-600/20 hover:bg-green-600/40 text-green-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-green-800/40">
-            🎯 Keywords Pro
-          </Link>
-          <Link href="/content-plan" className="bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-indigo-800/40">
-            📅 Content Plan
-          </Link>
-          <Link href="/logs" className="bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-cyan-800/40">
-            📋 Logs
-          </Link>
-          <Link href="/schema" className="bg-violet-600/20 hover:bg-violet-600/40 text-violet-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-violet-800/40">
-            🔣 Schema
-          </Link>
-          <Link href="/index-bloat" className="bg-orange-600/20 hover:bg-orange-600/40 text-orange-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-orange-800/40">
-            🗑 Index Bloat
-          </Link>
-          <Link href="/pagerank" className="bg-teal-600/20 hover:bg-teal-600/40 text-teal-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-teal-800/40">
-            🔗 PageRank
-          </Link>
-          <Link href="/ga4-audit" className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-blue-800/40">
-            📊 Audit GA4
-          </Link>
-          <Link href="/traffic-by-country" className="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 px-3 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold border border-emerald-800/40">
-            🌍 Traffic by country
-          </Link>
-          <button onClick={handleSync} disabled={syncing}
-            className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all ${
-              syncing
-                ? "bg-yellow-600 animate-pulse text-white"
-                : "bg-blue-600 hover:bg-blue-700 text-white"
-            } disabled:cursor-wait`}>
-            {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            {syncing ? "Sync en cours..." : "Synchroniser"}
-          </button>
-        </div>
-      </header>
+      <DashboardControlBar
+        siteCount={sites.length}
+        search={search}
+        onSearchChange={setSearch}
+        period={period}
+        onPeriodChange={(nextPeriod) => void changePeriod(nextPeriod)}
+        country={langFilter}
+        onCountryChange={(country) => void changeLangFilter(country)}
+        syncing={syncing}
+        onSync={() => void handleSync()}
+      />
 
       {/* Sync feedback */}
       {syncMsg && (
-        <div className={`mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center gap-2 animate-in ${
+        <div role={syncMsg.type === "ok" ? "status" : "alert"} className={`mx-4 mt-2 px-4 py-2 rounded-lg text-sm flex items-center gap-2 animate-in sm:mx-6 ${
           syncMsg.type === "ok"
             ? "bg-green-900/40 border border-green-700 text-green-300"
             : "bg-red-900/40 border border-red-700 text-red-300"
         }`}>
-          {syncMsg.type === "ok" ? "✅" : "❌"} {syncMsg.text}
+          {syncMsg.type === "ok" ? <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" /> : <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />} {syncMsg.text}
         </div>
       )}
 
       {statsRefreshing && (
-        <div className="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center gap-2 bg-cyan-950/30 border border-cyan-800/50 text-cyan-200">
+        <div role="status" className="mx-4 mt-2 px-4 py-2 rounded-lg text-sm flex items-center gap-2 bg-cyan-950/30 border border-cyan-800/50 text-cyan-200 sm:mx-6">
           <Loader2 className="w-4 h-4 animate-spin" />
           Stats SEO en chargement en arriere-plan. La page reste utilisable.
         </div>
       )}
 
-      <section className="px-6 pt-4">
-        <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-4">
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500">Pilotage SEO</div>
-                <h2 className="text-lg font-semibold mt-1">Positions GSC, volumes KP, gains et alertes</h2>
-              </div>
-              <Link href="/keyword-planner-import" className="text-xs px-3 py-1.5 rounded border border-blue-500/40 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20">
-                Importer volumes
-              </Link>
-            </div>
-            <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
-              <div className="rounded border border-green-500/25 bg-green-500/10 p-3">
-                <div className="text-xs text-green-200">Sites OK</div>
-                <div className="text-2xl font-bold text-green-300 mt-1">{qualitySites.length ? `${qualityOkCount}/${qualitySites.length}` : "-"}</div>
-                <div className="text-[11px] text-green-200/70 mt-1">GSC + KP exploitables</div>
-              </div>
-              <div className="rounded border border-yellow-500/25 bg-yellow-500/10 p-3">
-                <div className="text-xs text-yellow-200">A verifier</div>
-                <div className="text-2xl font-bold text-yellow-300 mt-1">{qualityStaleCount}</div>
-                <div className="text-[11px] text-yellow-200/70 mt-1">GSC stale ou absent</div>
-              </div>
-              <div className="rounded border border-blue-500/25 bg-blue-500/10 p-3">
-                <div className="text-xs text-blue-200">Volumes KP</div>
-                <div className="text-2xl font-bold text-blue-300 mt-1">{totalImportedVolumes.toLocaleString()}</div>
-                <div className="text-[11px] text-blue-200/70 mt-1">{totalMissingVolumes.toLocaleString()} manquants</div>
-              </div>
-              <div className="rounded border border-purple-500/25 bg-purple-500/10 p-3">
-                <div className="text-xs text-purple-200">Gains / Top 10</div>
-                <div className="text-2xl font-bold text-purple-300 mt-1">{totalGainCandidates.toLocaleString()}</div>
-                <div className="text-[11px] text-purple-200/70 mt-1">{totalTop10Keywords.toLocaleString()} mots-cles top 10</div>
-              </div>
-            </div>
-          </div>
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500">Autocontrole</div>
-                <div className="text-sm text-gray-300 mt-1">Source positions: GSC query-level. Source volumes: Keyword Planner importe.</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => void fetchQuality()}
-                className="p-2 rounded border border-gray-700 bg-gray-800 text-gray-300 hover:text-white"
-                title="Rafraichir l'autocontrole"
-              >
-                <RefreshCw className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="mt-4 space-y-2 text-xs">
-              {qualitySites.slice(0, 4).map((site) => (
-                <div key={site.id} className="flex items-center justify-between gap-3 rounded bg-gray-950/60 border border-gray-800 px-3 py-2">
-                  <span className="font-medium text-gray-200 truncate">{site.name}</span>
-                  <span className={`shrink-0 px-2 py-0.5 rounded border ${qualityStatusClass(site.status)}`}>
-                    {qualityStatusLabel(site.status)}
-                  </span>
-                </div>
-              ))}
-              {qualitySites.length === 0 && <div className="text-gray-500">Autocontrole en chargement.</div>}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* KPIs globaux */}
-      <div className="px-6 py-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><MousePointerClick className="w-3 h-3" /> Clics GSC ({period}j)</div>
-          <div className="text-2xl font-bold text-blue-400">{totalClicks.toLocaleString()}</div>
-          <div className="text-xs text-gray-400 mt-1">~{Math.round(totalClicks / parseInt(period))}/jour</div>
-        </div>
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Search className="w-3 h-3" /> Impressions ({period}j)</div>
-          <div className="text-2xl font-bold text-purple-400">{totalImpressions.toLocaleString()}</div>
-          <div className="text-xs text-gray-400 mt-1">~{Math.round(totalImpressions / parseInt(period))}/jour</div>
-        </div>
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Globe className="w-3 h-3" /> Position moy. globale</div>
-          <div className="text-2xl font-bold text-green-400">{avgPosition > 0 ? avgPosition.toFixed(1) : "—"}</div>
-          <div className="text-xs text-gray-400 mt-1">{activeSites.length} sites avec données</div>
-        </div>
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <div className="text-xs text-gray-400 mb-1 flex items-center gap-1"><Activity className="w-3 h-3" /> Vitesse services</div>
-          <div className={`text-2xl font-bold ${avgServiceMs && avgServiceMs > 1500 ? "text-yellow-400" : "text-cyan-400"}`}>
-            {latestTiming ? formatMs(latestTiming.ms) : formatMs(pageLoadMs ?? 0)}
-          </div>
-          <div className="text-xs text-gray-400 mt-1 truncate">
-            {latestTiming
-              ? `${latestTiming.label}${latestTiming.cache ? ` - ${latestTiming.cache}` : ""} - moy. ${formatMs(avgServiceMs)}`
-              : `page ${formatMs(pageLoadMs ?? 0)}`}
-          </div>
-        </div>
-      </div>
+      <DashboardHealthOverview
+        sites={qualitySites}
+        period={period}
+        totalClicks={totalClicks}
+        totalImpressions={totalImpressions}
+        weightedPosition={avgPosition}
+        positionedSites={activeSites.length}
+        serviceTiming={latestTiming ? `${formatMs(latestTiming.ms)} · moy. ${formatMs(avgServiceMs)}` : formatMs(pageLoadMs ?? 0)}
+        serviceWarning={avgServiceMs > 1500}
+        onRefresh={() => void fetchQuality()}
+      />
 
       {/* Sort bar sites */}
       <div className="px-6 pb-2 flex items-center gap-2 flex-wrap">
@@ -1147,27 +917,26 @@ export default function DashboardPage() {
           return (
             <div key={site.id} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
               {/* Site header */}
-              <div onClick={() => toggleSite(site.id)}
-                className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-gray-800/50 transition">
-                <div className="flex items-center gap-3">
-                  {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                  <span className="font-semibold">{site.name}</span>
-                  <a href={site.url} target="_blank" rel="noopener noreferrer"
-                    className="hidden md:block text-xs text-gray-400 hover:text-blue-400"
-                    onClick={(e) => e.stopPropagation()}>
-                    {site.url}
+              <div className="flex flex-col gap-3 px-3 py-3 transition hover:bg-gray-800/50 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => toggleSite(site.id)}
+                    aria-expanded={isOpen}
+                    aria-controls={`site-panel-${site.id}`}
+                    className="flex min-h-11 min-w-0 items-center gap-3 rounded-lg px-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                  >
+                    {isOpen ? <ChevronDown className="w-4 h-4 shrink-0 text-gray-400" aria-hidden="true" /> : <ChevronRight className="w-4 h-4 shrink-0 text-gray-400" aria-hidden="true" />}
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} aria-hidden="true" />
+                    <span className="truncate font-semibold">{site.name}</span>
+                    {top10 > 0 && isOpen && <span className="hidden rounded-full bg-green-500/20 px-2 py-0.5 text-xs text-green-400 sm:inline">{top10} top 10</span>}
+                    {quality && <span className={`hidden rounded-full border px-2 py-0.5 text-xs sm:inline ${dashboardSiteStatusClass(quality)}`}>{dashboardSiteStatusLabel(quality)}</span>}
+                  </button>
+                  <a href={site.url} target="_blank" rel="noopener noreferrer" className="hidden min-h-11 max-w-64 items-center truncate rounded-lg px-2 text-xs text-gray-400 hover:text-blue-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 md:flex">
+                    {site.url}<ExternalLink className="ml-1 h-3 w-3 shrink-0" aria-hidden="true" />
                   </a>
-                  {top10 > 0 && isOpen && (
-                    <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">{top10} top10</span>
-                  )}
-                  {quality && (
-                    <span className={`text-xs px-2 py-0.5 rounded-full border ${qualityStatusClass(quality.status)}`}>
-                      {qualityStatusLabel(quality.status)}
-                    </span>
-                  )}
                 </div>
-                <div className="flex items-center gap-6 text-sm">
+                <div className="flex items-center gap-4 overflow-x-auto text-sm lg:gap-6">
                   {quality && (
                     <div className="hidden lg:block text-right">
                       <div className="text-cyan-300 font-bold">{quality.kp_volumes_imported}</div>
@@ -1205,35 +974,38 @@ export default function DashboardPage() {
 
               {/* Content */}
               {isOpen && (
-                <div className="border-t border-gray-800">
+                <div id={`site-panel-${site.id}`} className="border-t border-gray-800">
                   {/* Tabs */}
-                  <div className="flex gap-1 px-4 pt-3 pb-0">
-                    <button onClick={() => switchTab(site.id, "keywords")}
-                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition ${tab === "keywords" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
+                  <div className="flex gap-1 overflow-x-auto px-4 pt-3 pb-0" role="tablist" aria-label={`Données de ${site.name}`}>
+                    <button type="button" role="tab" aria-selected={tab === "keywords"} onClick={() => switchTab(site.id, "keywords")}
+                      className={`min-h-11 whitespace-nowrap px-3 py-1.5 rounded-t text-xs font-medium transition ${tab === "keywords" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       Mots clés ({period}j)
                     </button>
-                    <button onClick={() => switchTab(site.id, "gains")}
-                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "gains" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
+                    <button type="button" role="tab" aria-selected={tab === "gains"} onClick={() => switchTab(site.id, "gains")}
+                      className={`min-h-11 whitespace-nowrap px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "gains" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <TrendingUp className="w-3 h-3" /> Gains / semaine
                     </button>
-                    <button onClick={() => switchTab(site.id, "analytics")}
-                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "analytics" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
+                    <button type="button" role="tab" aria-selected={tab === "analytics"} onClick={() => switchTab(site.id, "analytics")}
+                      className={`min-h-11 whitespace-nowrap px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "analytics" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <BarChart3 className="w-3 h-3" /> Analytics GA4
                     </button>
-                    <button onClick={() => switchTab(site.id, "device")}
-                      className={`px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "device" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
+                    <button type="button" role="tab" aria-selected={tab === "device"} onClick={() => switchTab(site.id, "device")}
+                      className={`min-h-11 whitespace-nowrap px-3 py-1.5 rounded-t text-xs font-medium transition flex items-center gap-1 ${tab === "device" ? "bg-gray-800 text-white" : "text-gray-400 hover:text-gray-300"}`}>
                       <Smartphone className="w-3 h-3" /> Devices
                     </button>
                   </div>
 
                   {tab === "keywords" && (
-                    <div className="flex items-center flex-wrap gap-1 px-4 py-2">
+                    <div className="flex items-center flex-wrap gap-2 px-4 py-2">
                       {(["all","important","highvolume","longtail","questions"] as const).map(f => (
                         <button key={f} type="button" onClick={() => setKwTypeFilter(f)}
                           className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${kwTypeFilter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-white"}`}>
                           {f === "important" ? "Important" : f === "highvolume" ? "Fort volume 3000+" : f === "all" ? "Tous" : f === "longtail" ? "Long tail (4+ mots)" : "Questions"}
                         </button>
                       ))}
+                      <button type="button" onClick={() => void openHighVolPanel(site.id)} aria-expanded={highVolPanel === site.id} className="ml-auto min-h-10 rounded-lg border border-cyan-700 bg-cyan-950/40 px-3 text-xs font-medium text-cyan-200 hover:bg-cyan-900/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400">
+                        {highVolPanel === site.id ? "Fermer la découverte" : "Découvrir les requêtes GSC"}
+                      </button>
                       {emptyActiveFilter && (
                         <span className="ml-2 text-[11px] text-yellow-300">
                           Filtre actif sans resultat. Clique Tous pour revoir tous les mots-cles charges.
@@ -1241,6 +1013,7 @@ export default function DashboardPage() {
                       )}
                     </div>
                   )}
+                  {highVolFeedback[site.id] && <div role={highVolFeedback[site.id].type === "error" ? "alert" : "status"} className={`mx-4 my-2 rounded-lg border px-3 py-2 text-xs ${highVolFeedback[site.id].type === "ok" ? "border-emerald-700 bg-emerald-950/30 text-emerald-200" : "border-red-700 bg-red-950/30 text-red-200"}`}>{highVolFeedback[site.id].text}</div>}
 
                   {(tab === "keywords" || tab === "gains") && (
                     <div className="px-4 py-2 border-t border-gray-800 bg-gray-950/40">
@@ -1312,11 +1085,15 @@ export default function DashboardPage() {
                               });
                               const d = await res.json() as { success: boolean; added: number };
                               if (d.success) {
-                                setHighVolResult(prev => ({ ...prev, [site.id]: { added: d.added, total: highVolKws.length } }));
+                                setHighVolFeedback(prev => ({ ...prev, [site.id]: { type: "ok", text: `${d.added} mot(s)-clé(s) ajouté(s) au suivi sur ${highVolKws.length}.` } }));
                                 setHighVolPanel(null);
                                 await loadKeywords(site.id, period);
+                              } else {
+                                setHighVolFeedback(prev => ({ ...prev, [site.id]: { type: "error", text: "Aucun mot-clé n'a été ajouté au suivi." } }));
                               }
-                            } catch { /* ignore */ }
+                            } catch (error) {
+                              setHighVolFeedback(prev => ({ ...prev, [site.id]: { type: "error", text: error instanceof Error ? error.message : "L'ajout au suivi a échoué." } }));
+                            }
                             setHighVolLoading(prev => { const n = new Set(prev); n.delete(site.id); return n; });
                           }}
                           className="text-[10px] px-2 py-1 rounded bg-yellow-600/40 text-yellow-100 font-semibold hover:bg-yellow-600/60 border border-yellow-500/50 transition"
@@ -1362,22 +1139,18 @@ export default function DashboardPage() {
                             {/* Rows */}
                             <div className="max-h-72 overflow-y-auto">
                               {highVolKws.map((kw) => (
-                                <div key={kw.keyword}
-                                  className={`flex items-center px-3 py-2 border-b border-gray-800/30 cursor-pointer transition ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/12 hover:bg-yellow-500/20" : "hover:bg-yellow-500/5"}`}
-                                  onClick={() => setHighVolSelected(prev => {
-                                    const n = new Set(prev);
-                                    if (n.has(kw.keyword)) {
-                                      n.delete(kw.keyword);
-                                    } else {
-                                      n.add(kw.keyword);
-                                    }
-                                    return n;
-                                  })}>
+                                <label key={kw.keyword}
+                                  className={`flex min-h-11 cursor-pointer items-center border-b border-gray-800/30 px-3 py-2 transition ${highVolSelected.has(kw.keyword) ? "bg-yellow-500/12 hover:bg-yellow-500/20" : "hover:bg-yellow-500/5"}`}>
                                   <span className="w-5 shrink-0 flex items-center">
-                                    <input type="checkbox" readOnly checked={highVolSelected.has(kw.keyword)}
-                                      title={`Sélectionner ${kw.keyword}`}
+                                    <input type="checkbox" checked={highVolSelected.has(kw.keyword)}
+                                      onChange={() => setHighVolSelected(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(kw.keyword)) next.delete(kw.keyword);
+                                        else next.add(kw.keyword);
+                                        return next;
+                                      })}
                                       aria-label={`Sélectionner ${kw.keyword}`}
-                                      className="accent-yellow-400 w-3 h-3" />
+                                      className="h-4 w-4 accent-yellow-400" />
                                   </span>
                                   <span className="flex-1 min-w-[160px] text-xs text-white font-medium truncate pr-2">{kw.keyword}</span>
                                   <span className="w-20 text-right text-xs text-blue-400 shrink-0">{kw.impressions.toLocaleString()}</span>
@@ -1385,7 +1158,7 @@ export default function DashboardPage() {
                                     {kw.avg_position > 0 ? kw.avg_position.toFixed(1) : "—"}
                                   </span>
                                   <span className="w-20 text-right text-xs text-gray-400 shrink-0">{kw.clicks > 0 ? kw.clicks.toLocaleString() : "0"}</span>
-                                </div>
+                                </label>
                               ))}
                             </div>
                           </div>
@@ -1437,7 +1210,8 @@ export default function DashboardPage() {
                             : "Aucun mot-cle ne correspond au filtre actif."}
                       </div>
                     ) : (
-                      <table className="w-full text-sm">
+                      <div className="overflow-x-auto">
+                      <table className="w-full min-w-[880px] text-sm">
                         <thead>
                           <tr className="text-gray-400 text-xs bg-gray-800/50">
                             <th className="text-left py-2 px-5">#</th>
@@ -1451,15 +1225,14 @@ export default function DashboardPage() {
                               const labels = { priority: "Priorite", clicks: "Clics", impressions: "Impressions", ctr: "CTR", position: "Position" };
                               const active = sortCol === col;
                               return (
-                                <th key={col} className="text-right py-2 px-3 cursor-pointer select-none"
-                                  onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir(col === "position" ? "asc" : "desc"); } }}>
-                                  <span className={`inline-flex items-center justify-end gap-1 ${active ? "text-white" : "hover:text-gray-300"}`}>
+                                <th key={col} className="px-1 py-1 text-right" aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                                  <button type="button" onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir(col === "position" ? "asc" : "desc"); } }} className={`inline-flex min-h-10 w-full select-none items-center justify-end gap-1 rounded px-2 ${active ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>
                                     {labels[col]}
                                     <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
                                       <span className={active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}>▲</span>
                                       <span className={active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}>▼</span>
                                     </span>
-                                  </span>
+                                  </button>
                                 </th>
                               );
                             })}
@@ -1467,15 +1240,14 @@ export default function DashboardPage() {
                               const col = "volume" as const;
                               const active = sortCol === col;
                               return (
-                                <th className="text-right py-2 px-3 cursor-pointer select-none"
-                                  onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir("desc"); } }}>
-                                  <span className={`inline-flex items-center justify-end gap-1 ${active ? "text-white" : "hover:text-gray-300"}`}>
+                                <th className="px-1 py-1 text-right" aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+                                  <button type="button" onClick={() => { if (active) setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortCol(col); setSortDir("desc"); } }} className={`inline-flex min-h-10 w-full select-none items-center justify-end gap-1 rounded px-2 ${active ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>
                                     Volume source
                                     <span className="flex flex-col leading-none" style={{fontSize:"8px"}}>
                                       <span className={active && sortDir === "asc" ? "text-blue-400" : "opacity-30"}>▲</span>
                                       <span className={active && sortDir === "desc" ? "text-blue-400" : "opacity-30"}>▼</span>
                                     </span>
-                                  </span>
+                                  </button>
                                 </th>
                               );
                             })()}
@@ -1484,8 +1256,7 @@ export default function DashboardPage() {
                         </thead>
                         <tbody>
                           {kws.slice(0, KEYWORD_RENDER_LIMIT).map((kw, j) => (
-                            <tr key={j} className={`border-b border-gray-800/40 hover:bg-gray-800/20 cursor-pointer ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "bg-blue-900/10" : ""}`}
-                              onClick={() => openKwHistory(site.id, kw.query)}>
+                            <tr key={j} className={`border-b border-gray-800/40 hover:bg-gray-800/20 ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "bg-blue-900/10" : ""}`}>
                               <td className="py-2 px-5 text-gray-600 text-xs">{j + 1}</td>
                               <td className="py-2 px-3 font-medium text-gray-200">
                                 <div className="flex items-center gap-1.5">
@@ -1510,7 +1281,9 @@ export default function DashboardPage() {
                                   >
                                     <ExternalLink className="w-3 h-3" />
                                   </a>
-                                  <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "rotate-180" : ""}`} />
+                                  <button type="button" onClick={() => openKwHistory(site.id, kw.query)} aria-expanded={activeKw?.query === kw.query && activeKw?.siteId === site.id} className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-gray-400 hover:bg-gray-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400" aria-label={`Afficher l'historique de ${kw.query}`}>
+                                    <ChevronDown className={`w-3 h-3 transition-transform ${activeKw?.query === kw.query && activeKw?.siteId === site.id ? "rotate-180" : ""}`} aria-hidden="true" />
+                                  </button>
                                 </div>
                               </td>
                               <td className="text-right py-2 px-3">
@@ -1559,6 +1332,7 @@ export default function DashboardPage() {
                           ))}
                         </tbody>
                       </table>
+                      </div>
                     )
                   ) : (
                     gainList.length === 0 ? (
@@ -1566,7 +1340,8 @@ export default function DashboardPage() {
                         Aucune variation hebdo comparable dans la derniere fenetre GSC importee.
                       </div>
                     ) : (
-                      <table className="w-full text-sm">
+                      <div className="overflow-x-auto">
+                      <table className="w-full min-w-[1100px] text-sm">
                         <thead>
                           <tr className="text-gray-400 text-xs bg-gray-800/50">
                             <th className="text-left py-2 px-5">
@@ -1575,19 +1350,17 @@ export default function DashboardPage() {
                                 <CopyKeywordsButton keywords={gainList.map((kw) => kw.query)} />
                               </span>
                             </th>
-                            <th className="text-right py-2 px-2 cursor-pointer select-none"
-                              onClick={() => { if (gainSortCol === "position_now") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("position_now"); setGainSortDir("asc"); } }}>
-                              <div className={`inline-flex flex-col items-end ${gainSortCol === "position_now" ? "text-white" : "hover:text-gray-300"}`}>
+                            <th className="px-1 py-1 text-right" aria-sort={gainSortCol === "position_now" ? (gainSortDir === "asc" ? "ascending" : "descending") : "none"}>
+                              <button type="button" onClick={() => { if (gainSortCol === "position_now") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("position_now"); setGainSortDir("asc"); } }} className={`inline-flex min-h-10 w-full flex-col items-end justify-center rounded px-1 ${gainSortCol === "position_now" ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>
                                 <span>Cette sem. {gainSortCol === "position_now" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
                                 <span className="text-[9px] text-gray-600">{gainLabels?.w0 || ""}</span>
-                              </div>
+                              </button>
                             </th>
-                            <th className="text-right py-2 px-2 cursor-pointer select-none"
-                              onClick={() => { if (gainSortCol === "gain") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("gain"); setGainSortDir("desc"); } }}>
-                              <div className={`inline-flex flex-col items-end ${gainSortCol === "gain" ? "text-white" : "hover:text-gray-300"}`}>
+                            <th className="px-1 py-1 text-right" aria-sort={gainSortCol === "gain" ? (gainSortDir === "asc" ? "ascending" : "descending") : "none"}>
+                              <button type="button" onClick={() => { if (gainSortCol === "gain") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("gain"); setGainSortDir("desc"); } }} className={`inline-flex min-h-10 w-full flex-col items-end justify-center rounded px-1 ${gainSortCol === "gain" ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>
                                 <span>S-1 {gainSortCol === "gain" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
                                 <span className="text-[9px] text-gray-600">{gainLabels?.w1 || ""}</span>
-                              </div>
+                              </button>
                             </th>
                             <th className="text-right py-2 px-2">
                               <div className="inline-flex flex-col items-end text-gray-400">
@@ -1607,23 +1380,22 @@ export default function DashboardPage() {
                                 <span className="text-[9px] text-gray-600">{gainLabels?.w4 || ""}</span>
                               </div>
                             </th>
-                            <th className="text-right py-2 px-3 cursor-pointer select-none"
-                              onClick={() => { if (gainSortCol === "clicks_gain") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("clicks_gain"); setGainSortDir("desc"); } }}>
-                              <span className={gainSortCol === "clicks_gain" ? "text-white" : "hover:text-gray-300"}>Clics +/- {gainSortCol === "clicks_gain" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</span>
+                            <th className="px-1 py-1 text-right" aria-sort={gainSortCol === "clicks_gain" ? (gainSortDir === "asc" ? "ascending" : "descending") : "none"}>
+                              <button type="button" onClick={() => { if (gainSortCol === "clicks_gain") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("clicks_gain"); setGainSortDir("desc"); } }} className={`min-h-10 w-full rounded px-2 text-right ${gainSortCol === "clicks_gain" ? "text-white" : "hover:bg-gray-800 hover:text-gray-300"}`}>Clics +/- {gainSortCol === "clicks_gain" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}</button>
                             </th>
-                            <th className="text-right py-2 px-3 cursor-pointer select-none"
+                            <th className="px-1 py-1 text-right"
                               title="Tri sur volume source uniquement. Le signal GSC reste informatif."
-                              onClick={() => { if (gainSortCol === "volume") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("volume"); setGainSortDir("desc"); } }}>
-                              <span className={gainSortCol === "volume" ? "text-white" : "text-gray-400 hover:text-gray-300"}>
+                              aria-sort={gainSortCol === "volume" ? (gainSortDir === "asc" ? "ascending" : "descending") : "none"}>
+                              <button type="button" onClick={() => { if (gainSortCol === "volume") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("volume"); setGainSortDir("desc"); } }} className={`min-h-10 w-full rounded px-2 text-right ${gainSortCol === "volume" ? "text-white" : "text-gray-400 hover:bg-gray-800 hover:text-gray-300"}`}>
                                 Volume source {gainSortCol === "volume" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
-                              </span>
+                              </button>
                             </th>
-                            <th className="text-right py-2 px-3 cursor-pointer select-none"
+                            <th className="px-1 py-1 text-right"
                               title="Score = clics gagnables si tu passes top 3. Tri = quick wins prioritaires."
-                              onClick={() => { if (gainSortCol === "opportunity") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("opportunity"); setGainSortDir("desc"); } }}>
-                              <span className={gainSortCol === "opportunity" ? "text-white" : "text-gray-400 hover:text-gray-300"}>
+                              aria-sort={gainSortCol === "opportunity" ? (gainSortDir === "asc" ? "ascending" : "descending") : "none"}>
+                              <button type="button" onClick={() => { if (gainSortCol === "opportunity") setGainSortDir(d => d === "desc" ? "asc" : "desc"); else { setGainSortCol("opportunity"); setGainSortDir("desc"); } }} className={`min-h-10 w-full rounded px-2 text-right ${gainSortCol === "opportunity" ? "text-white" : "text-gray-400 hover:bg-gray-800 hover:text-gray-300"}`}>
                                 Opportunité {gainSortCol === "opportunity" ? (gainSortDir === "desc" ? "↓" : "↑") : ""}
-                              </span>
+                              </button>
                             </th>
                             <th className="text-left py-2 px-3" title="Action recommandée + IA agent disponible">
                               <span className="text-gray-400">Action</span>
@@ -1755,6 +1527,7 @@ export default function DashboardPage() {
                           })}
                         </tbody>
                       </table>
+                      </div>
                     )
                   )}
                   {tab === "analytics" && (() => {

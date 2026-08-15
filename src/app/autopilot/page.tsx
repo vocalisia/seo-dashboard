@@ -458,6 +458,7 @@ export default function AutopilotPage() {
             <div className="flex flex-col gap-2">
               <label className="text-sm text-gray-400">Site cible</label>
               <select
+                aria-label="Site cible"
                 value={selectedSite ?? ""}
                 onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : e.target.value ? parseInt(e.target.value, 10) : null)}
                 className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 w-64"
@@ -477,6 +478,7 @@ export default function AutopilotPage() {
                 <Globe className="w-3.5 h-3.5" /> Langue de l&apos;article
               </label>
               <select
+                aria-label="Langue de l'article"
                 value={selectedLanguage}
                 onChange={(e) => setSelectedLanguage(e.target.value)}
                 className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-500 w-52"

@@ -129,7 +129,7 @@ export default function ContentPlanPage() {
         <Link href="/dashboard" className="flex items-center gap-2 text-gray-400 hover:text-gray-100 transition-colors">
           <ArrowLeft className="w-4 h-4" /> Dashboard
         </Link>
-        <span className="text-xl">Content Plan</span>
+        <h1 className="text-xl">Content Plan</h1>
       </div>
 
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
@@ -137,7 +137,7 @@ export default function ContentPlanPage() {
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 flex flex-wrap items-end gap-4">
           <div>
             <label className="text-xs text-gray-400 uppercase block mb-1">Site</label>
-            <select value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
+            <select aria-label="Site à planifier" value={selectedSite ?? ""} onChange={(e) => setSelectedSite(e.target.value === "all" ? "all" : parseInt(e.target.value, 10))}
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 w-56">
               <option value="all">🌐 Tous les sites</option>
               {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
