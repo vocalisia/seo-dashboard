@@ -4,22 +4,19 @@
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireCronOrUser } from "@/lib/cron-auth";
-import { internalDashboardUrl } from "@/lib/internal-api-origin";
+import { POST as scanBrandMentions } from "@/app/api/brand-mentions/scan/route";
 
 export async function GET(request: Request) {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
   try {
-    const res = await fetch(internalDashboardUrl(request, "/api/brand-mentions/scan"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-cron-secret": process.env.CRON_SECRET || "",
-      },
-    });
+    const res = await scanBrandMentions(new NextRequest(
+      new URL("/api/brand-mentions/scan", request.url),
+      { method: "POST", headers: request.headers },
+    ));
     const data = await res.json().catch(() => ({}));
     const success = res.ok && data?.success !== false;
     return NextResponse.json(

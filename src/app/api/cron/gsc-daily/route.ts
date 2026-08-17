@@ -4,26 +4,23 @@
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireCronOrUser } from "@/lib/cron-auth";
-import { internalDashboardUrl } from "@/lib/internal-api-origin";
+import { POST as syncDashboardData } from "@/app/api/sync/route";
 
 export async function GET(request: Request) {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
-  // Delegate to the existing /api/sync endpoint (uses same Google auth + DB writes)
+  // Reuse the sync route handler directly. An HTTP self-call can wait in the
+  // same Vercel concurrency queue and make both functions time out.
   // Pull last 7 days so we cover the GSC 2-3d finalisation lag + a safety buffer.
   // ON CONFLICT DO UPDATE makes re-ingesting prior dates idempotent.
   try {
-    const targetUrl = internalDashboardUrl(request, "/api/sync?days=7&source=gsc");
-    const res = await fetch(targetUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-cron-secret": process.env.CRON_SECRET || "",
-      },
-    });
+    const res = await syncDashboardData(new NextRequest(
+      new URL("/api/sync?days=7&source=gsc", request.url),
+      { method: "POST", headers: request.headers },
+    ));
     const data = await res.json().catch(() => ({}));
     const success = res.ok && data?.success !== false;
     return NextResponse.json({ success, upstream_status: res.status, daily_sync: data }, { status: success ? 200 : 502 });
