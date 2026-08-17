@@ -3,6 +3,7 @@ import { google } from "googleapis";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { getGoogleAuthWithWriteScope } from "@/lib/google-auth";
 import { getSQL } from "@/lib/db";
+import { resendFromAddress } from "@/lib/resend-email";
 
 // ── Vault 369 LTD — 12 monitored sites ──────────────────────────────────────
 const INDEXNOW_KEY =
@@ -288,7 +289,7 @@ async function sendEmailResend(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: `SEO Dashboard <${ALERT_EMAIL}>`,
+      from: resendFromAddress(),
       to: [ALERT_EMAIL],
       subject,
       html: htmlBody,

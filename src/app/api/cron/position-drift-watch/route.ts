@@ -25,6 +25,7 @@ import { requireCronOrUser } from "@/lib/cron-auth";
 import { logError } from "@/lib/logger";
 import { escapeHtml } from "@/lib/safe-output";
 import { chunkItems } from "@/lib/position-crawl";
+import { resendFromAddress } from "@/lib/resend-email";
 
 const DRIFT_THRESHOLD = 5; // positions worse to fire alert
 const COMPARE_WINDOW_DAYS = 7;
@@ -154,7 +155,7 @@ async function sendDigestEmail(alerts: DriftAlert[]): Promise<boolean> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "SEO Dashboard <onboarding@resend.dev>",
+        from: resendFromAddress(),
         to: [ALERT_EMAIL],
         subject: `Position drift: ${alerts.length} keyword${alerts.length > 1 ? "s" : ""} dropped (>${DRIFT_THRESHOLD})`,
         html: buildEmailHtml(alerts),

@@ -4,6 +4,7 @@ export const maxDuration = 300; // 5 min max (Vercel Pro)
 import { NextResponse } from "next/server";
 import { getSQL } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { resendFromAddress } from "@/lib/resend-email";
 
 interface Site {
   id: number;
@@ -138,7 +139,7 @@ ${
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "SEO Dashboard <onboarding@resend.dev>",
+        from: resendFromAddress(),
         to: [alertEmail],
         subject: `SEO Autopilot — ${published.length} article(s) publié(s) cette semaine`,
         html,

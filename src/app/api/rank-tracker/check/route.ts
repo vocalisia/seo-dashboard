@@ -88,14 +88,21 @@ export async function POST(request: Request) {
   const sql = getSQL();
   await ensureRankTable(sql);
 
-  const sites = (await sql`
-    SELECT id, name, url, gsc_property,
-      (SELECT market FROM tracked_keywords WHERE site_id = sites.id AND market IS NOT NULL LIMIT 1) AS market
-    FROM sites
-    WHERE is_active = true
-      AND (${requestedSiteId} IS NULL OR id = ${requestedSiteId})
-    ORDER BY id ASC
-  `) as SiteRow[];
+  const sites = (requestedSiteId == null
+    ? await sql`
+        SELECT id, name, url, gsc_property,
+          (SELECT market FROM tracked_keywords WHERE site_id = sites.id AND market IS NOT NULL LIMIT 1) AS market
+        FROM sites
+        WHERE is_active = true
+        ORDER BY id ASC
+      `
+    : await sql`
+        SELECT id, name, url, gsc_property,
+          (SELECT market FROM tracked_keywords WHERE site_id = sites.id AND market IS NOT NULL LIMIT 1) AS market
+        FROM sites
+        WHERE is_active = true AND id = ${requestedSiteId}
+        ORDER BY id ASC
+      `) as SiteRow[];
 
   type SiteSummary = {
     site_id: number;

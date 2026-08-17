@@ -15,6 +15,7 @@ import { getSQL } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { checkSiteHealth, type HealthReport } from "@/lib/site-health-check";
 import { logAutopilot } from "@/lib/autopilot-log";
+import { resendFromAddress } from "@/lib/resend-email";
 
 interface SiteRow {
   id: number;
@@ -144,7 +145,7 @@ async function runHealthCheck() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: "SEO Dashboard <onboarding@resend.dev>",
+          from: resendFromAddress(),
           to: [alertEmail],
           subject: `🩺 Health Check — ${totalCritical} critical, ${totalHigh} high`,
           html:

@@ -9,6 +9,7 @@ import { getGoogleAuth } from "@/lib/google-auth";
 import { logAutopilot } from "@/lib/autopilot-log";
 import { isPublishBlockedByDomain } from "@/lib/autopilot-config";
 import { escapeHtml, safeHttpHref } from "@/lib/safe-output";
+import { resendFromAddress } from "@/lib/resend-email";
 
 interface PublishedRun {
   id: number;
@@ -228,7 +229,7 @@ async function runVerification() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: "SEO Dashboard <onboarding@resend.dev>",
+          from: resendFromAddress(),
           to: [alertEmail],
           subject: `🧹 Auto-cleanup 404 — ${cleaned.length} article(s) nettoyé(s)`,
           html: `

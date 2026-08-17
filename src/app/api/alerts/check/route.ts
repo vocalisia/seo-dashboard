@@ -6,6 +6,7 @@ import { getSQL } from "@/lib/db";
 import { askAICached } from "@/lib/ai-cache";
 import { resolvePublishedArticleLiveUrl } from "@/lib/autopilot-published-url";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { resendFromAddress } from "@/lib/resend-email";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -409,7 +410,7 @@ ${aiBlock}
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "SEO Dashboard <onboarding@resend.dev>",
+        from: resendFromAddress(),
         to: [alertEmail],
         subject: `🚨 SEO Alerts — ${alerts.length} issue(s) detected`,
         html,
