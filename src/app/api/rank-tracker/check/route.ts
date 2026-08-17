@@ -1,6 +1,5 @@
-// Daily rank tracking via Brave Search API.
-// Loops top 30 tracked_keywords per active site, calls Brave, stores our position
-// plus full top-10 SERP snapshot. Idempotent on (site_id, keyword, search_engine, checked_at::date).
+// Daily rank snapshots via Brave when configured, otherwise the transparent
+// no-key public web engine. Stores the observed top 10 and rotates keywords.
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -16,6 +15,8 @@ import {
 } from "@/lib/brave-search";
 import { logError, logger } from "@/lib/logger";
 import { runOutcome } from "@/lib/run-outcome";
+import { publicWebRankSearch } from "@/lib/public-rank-search";
+import { mapWithConcurrency } from "@/lib/data-sync";
 
 interface SiteRow {
   id: number;
@@ -69,28 +70,18 @@ export async function POST(request: Request) {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
-  if (!isBraveConfigured()) {
-    return NextResponse.json(
-      {
-        success: false,
-        skipped: true,
-        reason: "BRAVE_SEARCH_API_KEY missing — set it in Vercel env, then re-run.",
-      },
-      { status: 200 }
-    );
-  }
-
   const url = new URL(request.url);
   const siteIdRaw = url.searchParams.get("siteId");
   const limitRaw = url.searchParams.get("limit");
   const siteId = siteIdRaw ? Number(siteIdRaw) : null;
-  const limitPerSite = limitRaw ? Number(limitRaw) : 30;
+  const limitPerSite = limitRaw ? Number(limitRaw) : 2;
+  const engine = isBraveConfigured() ? "brave" : "public_web";
 
   if (siteIdRaw && (!Number.isInteger(siteId) || (siteId ?? 0) <= 0)) {
     return NextResponse.json({ success: false, error: "siteId must be a positive integer" }, { status: 400 });
   }
-  if (!Number.isInteger(limitPerSite) || limitPerSite < 1 || limitPerSite > 30) {
-    return NextResponse.json({ success: false, error: "limit must be an integer between 1 and 30" }, { status: 400 });
+  if (!Number.isInteger(limitPerSite) || limitPerSite < 1 || limitPerSite > 5) {
+    return NextResponse.json({ success: false, error: "limit must be an integer between 1 and 5" }, { status: 400 });
   }
 
   const requestedSiteId = siteId ?? null;
@@ -106,35 +97,55 @@ export async function POST(request: Request) {
     ORDER BY id ASC
   `) as SiteRow[];
 
-  const summary: Array<{
+  type SiteSummary = {
     site_id: number;
     site_name: string;
     checked: number;
     ranked: number;
     errors: number;
-  }> = [];
+  };
 
-  let totalChecks = 0;
-  let totalErrors = 0;
-
-  for (const site of sites) {
+  const processSite = async (site: SiteRow): Promise<SiteSummary> => {
     const targetDomain = siteRootDomain(site.gsc_property || site.url);
-    if (!targetDomain) continue;
+    if (!targetDomain) {
+      return {
+        site_id: site.id,
+        site_name: site.name,
+        checked: 0,
+        ranked: 0,
+        errors: 1,
+      };
+    }
 
     const kws = (await sql`
-      SELECT id, keyword FROM tracked_keywords
-      WHERE site_id = ${site.id} AND is_active = true
-      ORDER BY COALESCE(volume_market, volume_fr, 0) DESC, id ASC
+      SELECT tk.id, tk.keyword
+      FROM tracked_keywords tk
+      LEFT JOIN LATERAL (
+        SELECT MAX(rt.checked_at) AS checked_at
+        FROM rank_tracking rt
+        WHERE rt.site_id = tk.site_id
+          AND LOWER(rt.keyword) = LOWER(tk.keyword)
+          AND rt.search_engine = ${engine}
+      ) latest ON TRUE
+      WHERE tk.site_id = ${site.id} AND tk.is_active = true
+      ORDER BY
+        CASE WHEN tk.volume_source LIKE 'google_kp_real_%' THEN 0 ELSE 1 END,
+        latest.checked_at ASC NULLS FIRST,
+        COALESCE(tk.volume_market, tk.volume_ch, tk.volume_fr, 0) DESC,
+        tk.id ASC
       LIMIT ${limitPerSite}
     `) as KwRow[];
 
     let ranked = 0;
     let errors = 0;
+    let checked = 0;
     const country = pickCountry(site.market, site.gsc_property);
 
     for (const kw of kws) {
       try {
-        const results = await braveSearch(kw.keyword, country, 10);
+        const results = engine === "brave"
+          ? await braveSearch(kw.keyword, country, 10)
+          : await publicWebRankSearch(kw.keyword, country);
         const ourPos = findDomainPosition(results, targetDomain);
         const top10 = results.slice(0, 10).map((r) => ({
           position: r.position,
@@ -144,29 +155,40 @@ export async function POST(request: Request) {
         }));
         await sql`
           INSERT INTO rank_tracking (site_id, keyword, our_position, top_10_results, search_engine)
-          VALUES (${site.id}, ${kw.keyword}, ${ourPos}, ${JSON.stringify(top10)}::jsonb, 'brave')
+          VALUES (${site.id}, ${kw.keyword}, ${ourPos}, ${JSON.stringify(top10)}::jsonb, ${engine})
           ON CONFLICT (site_id, LOWER(keyword), search_engine, (checked_at::date))
           DO UPDATE SET our_position = EXCLUDED.our_position, top_10_results = EXCLUDED.top_10_results
         `;
         if (ourPos != null) ranked += 1;
-        totalChecks += 1;
-        // Brave free tier ~1 req/sec; small sleep to stay safe
-        await new Promise((r) => setTimeout(r, 1100));
+        checked += 1;
+        // Brave is rate-limited. The no-key public search already performs two
+        // bounded provider requests and only needs a short courtesy gap.
+        await new Promise((r) => setTimeout(r, engine === "brave" ? 1100 : 250));
       } catch (err) {
         errors += 1;
-        totalErrors += 1;
         logError("rank-tracker.check.keyword", err, { site_id: site.id, keyword: kw.keyword });
       }
     }
 
-    summary.push({
+    return {
       site_id: site.id,
       site_name: site.name,
-      checked: Math.max(0, kws.length - errors),
+      checked,
       ranked,
       errors,
-    });
-  }
+    };
+  };
+
+  // Brave free-tier calls stay strictly sequential. The no-key engine runs a
+  // small, bounded number of sites in parallel so the daily portfolio sweep
+  // stays below the serverless execution window without hammering providers.
+  const summary = await mapWithConcurrency(
+    sites,
+    engine === "brave" ? 1 : 3,
+    processSite,
+  );
+  const totalChecks = summary.reduce((total, site) => total + site.checked, 0);
+  const totalErrors = summary.reduce((total, site) => total + site.errors, 0);
 
   logger.info(
     { ctx: "rank-tracker.check", totalChecks, totalErrors, sites: sites.length },
@@ -180,7 +202,10 @@ export async function POST(request: Request) {
     success: outcome.success,
     partial: outcome.partial,
     skipped: outcome.skipped,
-    engine: "brave",
+    engine,
+    source_notice: engine === "brave"
+      ? "Brave Search snapshot; not a Google rank."
+      : "No-key Bing RSS + DuckDuckGo snapshot; not a Google rank.",
     limit_per_site: limitPerSite,
     sites: sites.length,
     total_checks: totalChecks,

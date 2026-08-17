@@ -6,11 +6,20 @@ import { ensureSyncStatusTable, saveSyncStatus, type SyncSource } from "@/lib/sy
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { aggregateGa4Daily } from "@/lib/ga4-daily-aggregation";
 import {
+  normalizePageLevelGscRows,
+  normalizeQueryLevelGscRows,
+  type PageLevelGscRow,
+  type QueryLevelGscRow,
+  type RawGscSyncRow,
+} from "@/lib/gsc-sync-batch";
+import {
+  chunkItems,
   PositionCrawlInProgressError,
   runPositionCrawl,
 } from "@/lib/position-crawl";
 
 const GSC_PAGE_SIZE = 25000;
+const GSC_UPSERT_BATCH_SIZE = 1000;
 
 export const maxDuration = 300;
 
@@ -18,14 +27,8 @@ async function fetchAllSearchAnalyticsRows(
   searchConsole: ReturnType<typeof getSearchConsoleClient>,
   siteUrl: string,
   requestBody: Record<string, unknown>
-) {
-  const rows: Array<{
-    keys?: string[] | null;
-    clicks?: number | null;
-    impressions?: number | null;
-    ctr?: number | null;
-    position?: number | null;
-  }> = [];
+): Promise<RawGscSyncRow[]> {
+  const rows: RawGscSyncRow[] = [];
   for (let startRow = 0; ; startRow += GSC_PAGE_SIZE) {
     const response = await searchConsole.searchanalytics.query({
       siteUrl,
@@ -40,6 +43,74 @@ async function fetchAllSearchAnalyticsRows(
     if (pageRows.length < GSC_PAGE_SIZE) break;
   }
   return rows;
+}
+
+async function upsertPageLevelRows(
+  sql: ReturnType<typeof getSQL>,
+  siteId: number,
+  rows: PageLevelGscRow[],
+): Promise<void> {
+  for (const batch of chunkItems(rows, GSC_UPSERT_BATCH_SIZE)) {
+    const payload = JSON.stringify(batch);
+    await sql`
+      INSERT INTO search_console_data
+        (site_id, date, query, page, clicks, impressions, ctr, position, country, device)
+      SELECT
+        ${siteId}, x.date::date, x.query, x.page, x.clicks, x.impressions,
+        x.ctr, x.position, x.country, x.device
+      FROM jsonb_to_recordset(${payload}::jsonb) AS x(
+        date text,
+        query text,
+        page text,
+        clicks integer,
+        impressions integer,
+        ctr real,
+        position real,
+        country text,
+        device text
+      )
+      ON CONFLICT (site_id, date, (COALESCE(query,'')), (COALESCE(page,'')), (COALESCE(country,'')), (COALESCE(device,'')))
+      DO UPDATE SET
+        clicks = EXCLUDED.clicks,
+        impressions = EXCLUDED.impressions,
+        ctr = EXCLUDED.ctr,
+        position = EXCLUDED.position
+    `;
+  }
+}
+
+async function upsertQueryLevelRows(
+  sql: ReturnType<typeof getSQL>,
+  siteId: number,
+  rows: QueryLevelGscRow[],
+): Promise<void> {
+  for (const batch of chunkItems(rows, GSC_UPSERT_BATCH_SIZE)) {
+    const payload = JSON.stringify(batch);
+    await sql`
+      INSERT INTO search_console_query_data
+        (site_id, date, query, country, device, clicks, impressions, ctr, position)
+      SELECT
+        ${siteId}, x.date::date, x.query, x.country, x.device,
+        x.clicks, x.impressions, x.ctr, x.position
+      FROM jsonb_to_recordset(${payload}::jsonb) AS x(
+        date text,
+        query text,
+        country text,
+        device text,
+        clicks integer,
+        impressions integer,
+        ctr real,
+        position real
+      )
+      ON CONFLICT (site_id, date, query, country, device)
+      DO UPDATE SET
+        clicks = EXCLUDED.clicks,
+        impressions = EXCLUDED.impressions,
+        ctr = EXCLUDED.ctr,
+        position = EXCLUDED.position,
+        synced_at = NOW()
+    `;
+  }
 }
 
 function isoDateDaysAgo(daysAgo: number): string {
@@ -119,25 +190,9 @@ async function syncSearchConsole(siteId: number, siteUrl: string, days = 45) {
       dimensions: ["query", "page", "date"],
       dataState: "final", // exclude fresh/lag dates
   });
-  let totalInserted = 0;
-
-  for (const row of rows) {
-    if ((row.position || 0) > 200) continue;
-    await sql`
-      INSERT INTO search_console_data
-      (site_id, date, query, page, clicks, impressions, ctr, position, country, device)
-      VALUES (${siteId}, ${row.keys?.[2] || ""}, ${row.keys?.[0] || ""}, ${row.keys?.[1] || ""},
-              ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0},
-              '', '')
-      ON CONFLICT (site_id, date, (COALESCE(query,'')), (COALESCE(page,'')), (COALESCE(country,'')), (COALESCE(device,'')))
-      DO UPDATE SET
-        clicks      = EXCLUDED.clicks,
-        impressions = EXCLUDED.impressions,
-        ctr         = EXCLUDED.ctr,
-        position    = EXCLUDED.position
-    `;
-    totalInserted++;
-  }
+  const pageRows = normalizePageLevelGscRows(rows, { date: 2 });
+  await upsertPageLevelRows(sql, siteId, pageRows);
+  let totalInserted = pageRows.length;
 
   // Query 2: by country WITH date dimension so each row has its real date
   // (previously collapsed all dates to endDate → 45× row inflation per query/page/country)
@@ -147,25 +202,9 @@ async function syncSearchConsole(siteId: number, siteUrl: string, days = 45) {
         dimensions: ["query", "page", "country", "date"],
         dataState: "final",
     });
-    for (const row of countryRows) {
-      if ((row.position || 0) > 200) continue;
-      const country = (row.keys?.[2] || "").toUpperCase();
-      const realDate = row.keys?.[3] || endDate;
-      await sql`
-        INSERT INTO search_console_data
-        (site_id, date, query, page, clicks, impressions, ctr, position, country, device)
-        VALUES (${siteId}, ${realDate}, ${row.keys?.[0] || ""}, ${row.keys?.[1] || ""},
-                ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0},
-                ${country}, '')
-        ON CONFLICT (site_id, date, (COALESCE(query,'')), (COALESCE(page,'')), (COALESCE(country,'')), (COALESCE(device,'')))
-        DO UPDATE SET
-          clicks      = EXCLUDED.clicks,
-          impressions = EXCLUDED.impressions,
-          ctr         = EXCLUDED.ctr,
-          position    = EXCLUDED.position
-      `;
-      totalInserted++;
-    }
+    const normalizedCountryRows = normalizePageLevelGscRows(countryRows, { date: 3, country: 2 });
+    await upsertPageLevelRows(sql, siteId, normalizedCountryRows);
+    totalInserted += normalizedCountryRows.length;
   } catch (err) {
     // GSC sometimes refuses 4 dims — fail soft, query 1 already covers date totals
     console.error(`Country sync failed for site ${siteId}:`, err instanceof Error ? err.message : err);
@@ -180,25 +219,9 @@ async function syncSearchConsole(siteId: number, siteUrl: string, days = 45) {
       dimensions: ["query", "country", "date"],
       dataState: "final",
     });
-    for (const row of queryRows) {
-      if ((row.position || 0) > 200) continue;
-      const country = (row.keys?.[1] || "").toUpperCase();
-      const realDate = row.keys?.[2] || endDate;
-      await sql`
-        INSERT INTO search_console_query_data
-        (site_id, date, query, country, device, clicks, impressions, ctr, position)
-        VALUES (${siteId}, ${realDate}, ${row.keys?.[0] || ""}, ${country}, '',
-                ${row.clicks || 0}, ${row.impressions || 0}, ${row.ctr || 0}, ${row.position || 0})
-        ON CONFLICT (site_id, date, query, country, device)
-        DO UPDATE SET
-          clicks = EXCLUDED.clicks,
-          impressions = EXCLUDED.impressions,
-          ctr = EXCLUDED.ctr,
-          position = EXCLUDED.position,
-          synced_at = NOW()
-      `;
-      totalInserted++;
-    }
+    const normalizedQueryRows = normalizeQueryLevelGscRows(queryRows);
+    await upsertQueryLevelRows(sql, siteId, normalizedQueryRows);
+    totalInserted += normalizedQueryRows.length;
     queryLevelSynced = true;
   } catch (err) {
     console.error(`Query-level sync failed for site ${siteId}:`, err instanceof Error ? err.message : err);
@@ -288,6 +311,10 @@ export async function POST(request: NextRequest) {
       ? await sql`SELECT * FROM sites WHERE is_active = true AND id = ${siteId}`
       : await sql`SELECT * FROM sites WHERE is_active = true`;
     const days = parseSyncDays(request.nextUrl.searchParams.get("days"));
+    const requestedSource = request.nextUrl.searchParams.get("source") ?? "all";
+    if (!["all", "gsc", "ga4"].includes(requestedSource)) {
+      return NextResponse.json({ success: false, error: "Invalid sync source" }, { status: 400 });
+    }
     const syncSource = async (
       site: Record<string, unknown>,
       source: SyncSource,
@@ -320,16 +347,21 @@ export async function POST(request: NextRequest) {
     };
 
     const results = await mapWithConcurrency(sites, 3, async (site) => {
+      const notRequested = { rows: 0, latest_date: null, status: "not_requested" as const, error: null };
       const [analytics, gsc] = await Promise.all([
-        syncSource(site, "ga4", Boolean(site.ga_property_id), () => syncAnalytics(site.id, site.ga_property_id), "analytics_daily"),
-        syncSource(site, "gsc", Boolean(site.gsc_property), () => syncSearchConsole(site.id, site.gsc_property, days), "search_console_query_data"),
+        requestedSource === "gsc"
+          ? Promise.resolve(notRequested)
+          : syncSource(site, "ga4", Boolean(site.ga_property_id), () => syncAnalytics(site.id, site.ga_property_id), "analytics_daily"),
+        requestedSource === "ga4"
+          ? Promise.resolve(notRequested)
+          : syncSource(site, "gsc", Boolean(site.gsc_property), () => syncSearchConsole(site.id, site.gsc_property, days), "search_console_query_data"),
       ]);
       return { site_id: site.id, site: site.name, analytics, gsc };
     });
 
     const errors = results.reduce((count, result) =>
       count + Number(result.analytics.status === "error") + Number(result.gsc.status === "error"), 0);
-    return NextResponse.json({ success: errors === 0, results, errors, days, auth: "service_account" });
+    return NextResponse.json({ success: errors === 0, results, errors, days, source: requestedSource, auth: "service_account" });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

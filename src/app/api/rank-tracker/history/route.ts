@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { logError } from "@/lib/logger";
+import { isBraveConfigured } from "@/lib/brave-search";
 
 interface HistoryRow {
   checked_at: string;
@@ -19,7 +20,9 @@ export async function GET(req: NextRequest) {
 
   const siteIdRaw = req.nextUrl.searchParams.get("site_id");
   const keyword = req.nextUrl.searchParams.get("keyword");
-  const engine = (req.nextUrl.searchParams.get("engine") || "brave").toLowerCase();
+  const engine = (
+    req.nextUrl.searchParams.get("engine") || (isBraveConfigured() ? "brave" : "public_web")
+  ).toLowerCase();
 
   if (!siteIdRaw || isNaN(Number(siteIdRaw))) {
     return NextResponse.json(

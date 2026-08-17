@@ -6,14 +6,14 @@ export const maxDuration = 120;
 
 import { NextResponse } from "next/server";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { internalDashboardUrl } from "@/lib/internal-api-origin";
 
 export async function GET(request: Request) {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
   try {
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.AUTH_URL || "http://localhost:3000";
-    const res = await fetch(`${baseUrl}/api/alerts/check`, {
+    const res = await fetch(internalDashboardUrl(request, "/api/alerts/check"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -21,7 +21,11 @@ export async function GET(request: Request) {
       },
     });
     const data = await res.json().catch(() => ({}));
-    return NextResponse.json({ success: res.ok, alerts: data });
+    const success = res.ok && data?.success !== false;
+    return NextResponse.json(
+      { success, upstream_status: res.status, alerts: data },
+      { status: success ? 200 : 502 },
+    );
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : "Unknown" }, { status: 500 });
   }

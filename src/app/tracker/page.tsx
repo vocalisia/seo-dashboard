@@ -106,6 +106,12 @@ function isTrackerStatus(value: unknown): value is TrackerStatus {
       && typeof site.site_name === "string");
 }
 
+function trackerEngineLabel(engine: string): string {
+  if (engine === "public_web") return "web public (Bing + DuckDuckGo)";
+  if (engine === "brave") return "Brave Search";
+  return engine;
+}
+
 export default function TrackerPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [sitesError, setSitesError] = useState<string | null>(null);
@@ -153,7 +159,7 @@ export default function TrackerPage() {
       setStatusError(null);
       try {
         const response = await fetch(
-          `/api/rank-tracker/status?site_id=${requestedScope}&cycle_days=4&engine=brave`,
+          `/api/rank-tracker/status?site_id=${requestedScope}&cycle_days=14`,
           { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
         );
         const payload = await readApiJson(
@@ -221,7 +227,7 @@ export default function TrackerPage() {
   const FRESHNESS_COPY: Record<FreshnessLevel, { label: string; hint: string; dot: string; ping: string; border: string }> = {
     fresh: {
       label: "Tracker a jour",
-      hint: "Cycle 4 jours couvert.",
+      hint: "Cycle de suivi couvert.",
       dot: "bg-emerald-400",
       ping: "bg-emerald-400",
       border: "border-emerald-800/50",
@@ -382,7 +388,7 @@ export default function TrackerPage() {
                   <div>
                     <div className="text-sm font-medium text-gray-100">{copy.label}</div>
                     <div className="text-xs text-gray-500">
-                      {copy.hint} Moteur {displayedStatus.engine}, top {displayedStatus.limit_per_site} mots-cles/site.
+                      {copy.hint} Moteur {trackerEngineLabel(displayedStatus.engine)}, top {displayedStatus.limit_per_site} mots-cles/site.
                     </div>
                   </div>
                 </div>

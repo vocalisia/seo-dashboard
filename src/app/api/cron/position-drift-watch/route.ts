@@ -24,6 +24,7 @@ import { getSQL } from "@/lib/db";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { logError } from "@/lib/logger";
 import { escapeHtml } from "@/lib/safe-output";
+import { chunkItems } from "@/lib/position-crawl";
 
 const DRIFT_THRESHOLD = 5; // positions worse to fire alert
 const COMPARE_WINDOW_DAYS = 7;
@@ -186,6 +187,7 @@ async function runWatchdog() {
   `) as KeywordRow[];
 
   const alerts: DriftAlert[] = [];
+  const historyUpdates: Array<{ id: number; position_history: HistoryEntry[] }> = [];
   let updated = 0;
   let skipped = 0;
 
@@ -222,14 +224,24 @@ async function runWatchdog() {
       }
     }
 
-    // Persist updated history (append today's snapshot, prune > 30d)
+    // Build the update plan in memory. Persisting each keyword in a separate
+    // Neon round-trip made the daily job exceed Vercel's 120-second limit.
     const next = appendTodaySnapshot(pruned, posNow);
+    historyUpdates.push({ id: row.id, position_history: next });
+  }
+
+  for (const batch of chunkItems(historyUpdates, 500)) {
+    const payload = JSON.stringify(batch);
     await sql`
-      UPDATE tracked_keywords
-      SET position_history = ${JSON.stringify(next)}::jsonb
-      WHERE id = ${row.id}
+      UPDATE tracked_keywords AS tk
+      SET position_history = x.position_history
+      FROM jsonb_to_recordset(${payload}::jsonb) AS x(
+        id integer,
+        position_history jsonb
+      )
+      WHERE tk.id = x.id
     `;
-    updated++;
+    updated += batch.length;
   }
 
   // Sort alerts by site then drift severity

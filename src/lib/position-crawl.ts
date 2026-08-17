@@ -111,7 +111,9 @@ export function positionFreshness(latestDate: string | null, now = new Date()): 
   const timestamp = new Date(`${latestDate.slice(0, 10)}T00:00:00Z`).getTime();
   if (!Number.isFinite(timestamp)) return "empty";
   const ageDays = Math.floor((now.getTime() - timestamp) / 86_400_000);
-  return ageDays <= 5 ? "fresh" : "stale";
+  // GSC final data normally trails by two days. One extra day is tolerated;
+  // anything older must be visible as stale instead of masking a broken cron.
+  return ageDays <= 3 ? "fresh" : "stale";
 }
 
 export function ensurePositionCrawlSchema(): Promise<void> {

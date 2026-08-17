@@ -47,6 +47,7 @@ describe("position crawl helpers", () => {
   it("labels GSC freshness without treating an empty property as fresh", () => {
     const now = new Date("2026-08-08T12:00:00Z");
     expect(positionFreshness("2026-08-05", now)).toBe("fresh");
+    expect(positionFreshness("2026-08-04", now)).toBe("stale");
     expect(positionFreshness("2026-07-20", now)).toBe("stale");
     expect(positionFreshness(null, now)).toBe("empty");
   });

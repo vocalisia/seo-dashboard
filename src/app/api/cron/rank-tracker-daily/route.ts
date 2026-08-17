@@ -6,14 +6,14 @@ export const maxDuration = 300;
 import { NextResponse } from "next/server";
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { logError } from "@/lib/logger";
+import { internalDashboardUrl } from "@/lib/internal-api-origin";
 
 export async function GET(request: Request) {
   const unauthorized = await requireCronOrUser(request);
   if (unauthorized) return unauthorized;
 
   try {
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.AUTH_URL || "http://localhost:3000";
-    const res = await fetch(`${baseUrl}/api/rank-tracker/check`, {
+    const res = await fetch(internalDashboardUrl(request, "/api/rank-tracker/check?limit=2"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -21,7 +21,11 @@ export async function GET(request: Request) {
       },
     });
     const data = await res.json().catch(() => ({}));
-    return NextResponse.json({ success: res.ok, rank_tracker: data });
+    const success = res.ok && data?.success !== false;
+    return NextResponse.json(
+      { success, upstream_status: res.status, rank_tracker: data },
+      { status: success ? 200 : 502 },
+    );
   } catch (e) {
     logError("cron.rank-tracker-daily", e);
     return NextResponse.json(

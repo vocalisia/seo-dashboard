@@ -6,6 +6,7 @@ export const maxDuration = 300;
 
 import { NextResponse } from "next/server";
 import { requireCronOrUser } from "@/lib/cron-auth";
+import { internalDashboardUrl } from "@/lib/internal-api-origin";
 
 export async function GET(request: Request) {
   const unauthorized = await requireCronOrUser(request);
@@ -15,8 +16,8 @@ export async function GET(request: Request) {
   // Pull last 7 days so we cover the GSC 2-3d finalisation lag + a safety buffer.
   // ON CONFLICT DO UPDATE makes re-ingesting prior dates idempotent.
   try {
-    const baseUrl = process.env.NEXTAUTH_URL || process.env.AUTH_URL || "http://localhost:3000";
-    const res = await fetch(`${baseUrl}/api/sync?days=7`, {
+    const targetUrl = internalDashboardUrl(request, "/api/sync?days=7&source=gsc");
+    const res = await fetch(targetUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
     });
     const data = await res.json().catch(() => ({}));
     const success = res.ok && data?.success !== false;
-    return NextResponse.json({ success, daily_sync: data }, { status: success ? 200 : 502 });
+    return NextResponse.json({ success, upstream_status: res.status, daily_sync: data }, { status: success ? 200 : 502 });
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : "Unknown" }, { status: 500 });
   }

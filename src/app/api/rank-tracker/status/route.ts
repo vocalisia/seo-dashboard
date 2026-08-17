@@ -4,9 +4,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireApiSession } from "@/lib/api-auth";
 import { getSQL } from "@/lib/db";
 import { logError } from "@/lib/logger";
+import { isBraveConfigured } from "@/lib/brave-search";
 
-const DEFAULT_ENGINE = "brave";
-const DEFAULT_CYCLE_DAYS = 4;
+const DEFAULT_CYCLE_DAYS = 14;
 const TRACKED_PER_SITE_LIMIT = 30;
 
 interface StatusRow {
@@ -54,15 +54,17 @@ export async function GET(req: NextRequest) {
   if (authState.unauthorized) return authState.unauthorized;
 
   const siteIdRaw = req.nextUrl.searchParams.get("site_id");
-  const engine = (req.nextUrl.searchParams.get("engine") || DEFAULT_ENGINE).toLowerCase();
+  const engine = (
+    req.nextUrl.searchParams.get("engine") || (isBraveConfigured() ? "brave" : "public_web")
+  ).toLowerCase();
   const cycleDaysRaw = req.nextUrl.searchParams.get("cycle_days");
   const cycleDays = cycleDaysRaw == null ? DEFAULT_CYCLE_DAYS : Number(cycleDaysRaw);
   const siteId = siteIdRaw && siteIdRaw !== "all" ? Number(siteIdRaw) : null;
 
-  if (!Number.isInteger(cycleDays) || cycleDays < 1 || cycleDays > 14) {
-    return NextResponse.json({ success: false, error: "cycle_days invalid (1..14)" }, { status: 400 });
+  if (!Number.isInteger(cycleDays) || cycleDays < 1 || cycleDays > 30) {
+    return NextResponse.json({ success: false, error: "cycle_days invalid (1..30)" }, { status: 400 });
   }
-  if (!/^(brave|duckduckgo|google|bing)$/i.test(engine)) {
+  if (!/^(brave|public_web|duckduckgo|google|bing)$/i.test(engine)) {
     return NextResponse.json({ success: false, error: "engine invalid" }, { status: 400 });
   }
   if (siteIdRaw && siteIdRaw !== "all" && (!Number.isInteger(siteId) || Number(siteId) <= 0)) {

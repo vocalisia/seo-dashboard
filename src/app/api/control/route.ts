@@ -428,7 +428,7 @@ async function runEndpointProbes(
     probes.push(["GET /api/competitor gaps", `/api/competitors/gaps?siteId=${sampleSiteId}`]);
     probes.push(["GET /api/LLM readiness cache", `/api/competitors/llm-scan?site_id=${sampleSiteId}`]);
     probes.push(["GET /api/backlinks", `/api/gsc-links?site_id=${sampleSiteId}`]);
-    probes.push(["GET /api/rank tracker status", `/api/rank-tracker/status?site_id=${sampleSiteId}&cycle_days=4&engine=brave`]);
+    probes.push(["GET /api/rank tracker status", `/api/rank-tracker/status?site_id=${sampleSiteId}&cycle_days=14`]);
     probes.push(["GET /api/seo-health", `/api/seo-health?site_id=${sampleSiteId}`]);
     if (sampleQuery) probes.push(["GET /api/keyword-history", `/api/keyword-history?siteId=${sampleSiteId}&query=${encodeURIComponent(sampleQuery)}&days=30`]);
     if (sampleGa4Property) probes.push(["GET /api/realtime (GA4)", `/api/realtime?propertyId=${encodeURIComponent(sampleGa4Property)}`]);
