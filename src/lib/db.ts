@@ -236,6 +236,24 @@ export async function ensureSchema(): Promise<void> {
       ON search_console_query_data (site_id, date)
   `;
 
+  // Property totals are separate from query/page rows, which omit anonymized queries.
+  await sql`
+    CREATE TABLE IF NOT EXISTS search_console_daily_totals (
+      site_id INT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+      date DATE NOT NULL,
+      country TEXT NOT NULL DEFAULT '',
+      clicks INT NOT NULL DEFAULT 0,
+      impressions INT NOT NULL DEFAULT 0,
+      position REAL NOT NULL DEFAULT 0,
+      synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (site_id, date, country)
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_scdt_site_country_date
+      ON search_console_daily_totals (site_id, country, date)
+  `;
+
   // Preserve full GSC query/page dimensions; Google can return values beyond legacy VARCHAR limits.
   await sql`ALTER TABLE search_console_data ALTER COLUMN query TYPE TEXT`;
   await sql`ALTER TABLE search_console_data ALTER COLUMN page TYPE TEXT`;

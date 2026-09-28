@@ -6,6 +6,7 @@ import { ensureSyncStatusTable, saveSyncStatus, type SyncSource } from "@/lib/sy
 import { requireCronOrUser } from "@/lib/cron-auth";
 import { aggregateGa4Daily } from "@/lib/ga4-daily-aggregation";
 import {
+  normalizeDailyTotalGscRows,
   normalizePageLevelGscRows,
   normalizeQueryLevelGscRows,
   type PageLevelGscRow,
@@ -113,6 +114,26 @@ async function upsertQueryLevelRows(
   }
 }
 
+async function upsertDailyTotals(
+  sql: ReturnType<typeof getSQL>,
+  siteId: number,
+  rows: ReturnType<typeof normalizeDailyTotalGscRows>,
+): Promise<void> {
+  for (const batch of chunkItems(rows, GSC_UPSERT_BATCH_SIZE)) {
+    const payload = JSON.stringify(batch);
+    await sql`
+      INSERT INTO search_console_daily_totals
+        (site_id, date, country, clicks, impressions, position)
+      SELECT ${siteId}, x.date::date, x.country, x.clicks, x.impressions, x.position
+      FROM jsonb_to_recordset(${payload}::jsonb) AS x(
+        date text, country text, clicks integer, impressions integer, position real
+      )
+      ON CONFLICT (site_id, date, country) DO UPDATE SET
+        clicks = EXCLUDED.clicks, impressions = EXCLUDED.impressions,
+        position = EXCLUDED.position, synced_at = NOW()
+    `;
+  }
+}
 function isoDateDaysAgo(daysAgo: number): string {
   const d = new Date();
   d.setDate(d.getDate() - daysAgo);
@@ -185,6 +206,22 @@ async function syncSearchConsole(siteId: number, siteUrl: string, days = 45) {
   // Query 1: query + page + date (no country, no device) — country='' device='' rows
   // Natural key: (site_id, date, COALESCE(query,''), COALESCE(page,''), COALESCE(country,''), COALESCE(device,''))
   // UNIQUE INDEX uq_scd_natural_key enforces dedup at write time.
+  let totalInserted = 0;
+  // A query/date breakdown omits anonymized searches; store property totals separately.
+  const propertyRows = normalizeDailyTotalGscRows(await fetchAllSearchAnalyticsRows(searchConsole, siteUrl, {
+    startDate, endDate, dimensions: ["date"], dataState: "final", type: "web",
+  }), { date: 0 });
+  await upsertDailyTotals(sql, siteId, propertyRows);
+  totalInserted += propertyRows.length;
+  try {
+    const countryRows = normalizeDailyTotalGscRows(await fetchAllSearchAnalyticsRows(searchConsole, siteUrl, {
+      startDate, endDate, dimensions: ["date", "country"], dataState: "final", type: "web",
+    }), { date: 0, country: 1 });
+    await upsertDailyTotals(sql, siteId, countryRows);
+    totalInserted += countryRows.length;
+  } catch (error) {
+    console.error(`Country total sync failed for site ${siteId}:`, error instanceof Error ? error.message : error);
+  }
   const rows = await fetchAllSearchAnalyticsRows(searchConsole, siteUrl, {
       startDate, endDate,
       dimensions: ["query", "page", "date"],
@@ -192,7 +229,7 @@ async function syncSearchConsole(siteId: number, siteUrl: string, days = 45) {
   });
   const pageRows = normalizePageLevelGscRows(rows, { date: 2 });
   await upsertPageLevelRows(sql, siteId, pageRows);
-  let totalInserted = pageRows.length;
+  totalInserted += pageRows.length;
 
   // Query 2: by country WITH date dimension so each row has its real date
   // (previously collapsed all dates to endDate → 45× row inflation per query/page/country)

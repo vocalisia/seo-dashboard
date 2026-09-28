@@ -93,3 +93,29 @@ export function normalizeQueryLevelGscRows(rows: RawGscSyncRow[]): QueryLevelGsc
     }];
   });
 }
+
+export interface DailyTotalGscRow {
+  date: string;
+  country: string;
+  clicks: number;
+  impressions: number;
+  position: number;
+}
+
+export function normalizeDailyTotalGscRows(
+  rows: RawGscSyncRow[],
+  indexes: { date: number; country?: number },
+): DailyTotalGscRow[] {
+  return rows.flatMap((row) => {
+    const date = validDate(row.keys?.[indexes.date]);
+    const country = indexes.country == null ? "" : String(row.keys?.[indexes.country] ?? "").toUpperCase();
+    if (!date || (indexes.country != null && !/^[A-Z]{3}$/.test(country))) return [];
+    return [{
+      date,
+      country,
+      clicks: nonNegativeInteger(row.clicks),
+      impressions: nonNegativeInteger(row.impressions),
+      position: acceptedPosition(row.position) ?? 0,
+    }];
+  });
+}

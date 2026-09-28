@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  normalizeDailyTotalGscRows,
   normalizePageLevelGscRows,
   normalizeQueryLevelGscRows,
 } from "./gsc-sync-batch";
@@ -43,5 +44,16 @@ describe("GSC sync batch normalization", () => {
       ctr: 0.1,
       position: 7,
     }]);
+  });
+  it("keeps property totals that have no visible query rows", () => {
+    expect(normalizeDailyTotalGscRows([
+      { keys: ["2026-09-25"], clicks: 2, impressions: 24, position: 12.5 },
+      { keys: [""], clicks: 1, impressions: 5, position: 9 },
+    ], { date: 0 })).toEqual([{
+      date: "2026-09-25", country: "", clicks: 2, impressions: 24, position: 12.5,
+    }]);
+    expect(normalizeDailyTotalGscRows([
+      { keys: ["2026-09-25", "che"], clicks: 1, impressions: 10, position: 3 },
+    ], { date: 0, country: 1 })[0].country).toBe("CHE");
   });
 });

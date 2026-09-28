@@ -66,12 +66,12 @@ export async function GET(request: NextRequest) {
           COALESCE(SUM(d.clicks), 0) AS clicks,
           COALESCE(SUM(d.impressions), 0) AS impressions,
           COALESCE(SUM(d.position * d.impressions)::float / NULLIF(SUM(d.impressions), 0), 0) AS position
-        FROM search_console_data d
+        FROM search_console_daily_totals d
         JOIN sites s ON s.id = d.site_id
         WHERE s.is_active = true
           AND d.date >= (CURRENT_DATE - INTERVAL '1 day' * ${gscStartDaysAgo})::date
           AND d.date <= (CURRENT_DATE - INTERVAL '1 day' * ${gscEndDaysAgo})::date
-          AND (d.country IS NULL OR d.country = '')
+          AND d.country = ''
         GROUP BY s.id, s.name, s.url, d.date
         ORDER BY d.date ASC
       `;
@@ -111,30 +111,12 @@ export async function GET(request: NextRequest) {
             site_id,
             COALESCE(SUM(clicks), 0) AS clicks,
             COALESCE(SUM(impressions), 0) AS impressions,
-            COUNT(DISTINCT date) AS days_with_data
-          FROM search_console_data
-          WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${gscStartDaysAgo})::date
-            AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${gscEndDaysAgo})::date
-            AND (country IS NULL OR country = '')
-          GROUP BY site_id
-        ),
-        pos AS (
-          SELECT
-            site_id,
+            COUNT(DISTINCT date) AS days_with_data,
             COALESCE(SUM(impressions * position)::float / NULLIF(SUM(impressions), 0), 0) AS position
-          FROM search_console_query_data
+          FROM search_console_daily_totals
           WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${gscStartDaysAgo})::date
             AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${gscEndDaysAgo})::date
-          GROUP BY site_id
-        ),
-        pos_fallback AS (
-          SELECT
-            site_id,
-            COALESCE(AVG(NULLIF(position, 0)), 0) AS position
-          FROM search_console_data
-          WHERE date >= (CURRENT_DATE - INTERVAL '1 day' * ${gscStartDaysAgo})::date
-            AND date <= (CURRENT_DATE - INTERVAL '1 day' * ${gscEndDaysAgo})::date
-            AND (country IS NULL OR country = '')
+            AND country = ''
           GROUP BY site_id
         ),
         ga4 AS (
@@ -157,7 +139,7 @@ export async function GET(request: NextRequest) {
           s.url,
           COALESCE(g.clicks, 0) AS clicks,
           COALESCE(g.impressions, 0) AS impressions,
-          COALESCE(NULLIF(p.position, 0), pf.position, 0) AS position,
+          COALESCE(g.position, 0) AS position,
           COALESCE(g.days_with_data, 0) AS days_with_data,
           COALESCE(a.sessions, 0) AS sessions,
           COALESCE(a.users, 0) AS users,
@@ -167,8 +149,6 @@ export async function GET(request: NextRequest) {
           COALESCE(a.bounce_rate, 0) AS bounce_rate
         FROM sites s
         LEFT JOIN gsc g ON g.site_id = s.id
-        LEFT JOIN pos p ON p.site_id = s.id
-        LEFT JOIN pos_fallback pf ON pf.site_id = s.id
         LEFT JOIN ga4 a ON a.site_id = s.id
         WHERE s.is_active = true
         ORDER BY COALESCE(g.clicks, 0) DESC, s.name ASC
