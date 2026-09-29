@@ -31,13 +31,13 @@ export async function GET(request: NextRequest) {
 
   try {
     const sql = getSQL();
-    // Use CURRENT_DATE (not NOW()) so the lower bound is a midnight DATE — avoids
-    // an off-by-one that excludes the earliest day when NOW() is mid-afternoon.
-    // `daysNum - 1` produces an inclusive N-day window ending today.
+    // The daily GA4 sync ends yesterday. Select N complete days, ending yesterday,
+    // so a one-day request never reads an unsynced current-day row.
     const rows = await sql`
       SELECT * FROM analytics_daily
       WHERE site_id = ${siteIdNum}
-      AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${daysNum - 1})::date
+      AND date >= (CURRENT_DATE - INTERVAL '1 day' * ${daysNum})::date
+      AND date < CURRENT_DATE
       ORDER BY date ASC
     `;
     return NextResponse.json(rows);

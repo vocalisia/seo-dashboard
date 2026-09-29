@@ -36,8 +36,9 @@ export async function GET(request: NextRequest) {
   const offset = Math.max(0, Math.min(365, parseInt(request.nextUrl.searchParams.get("offset") || "0", 10) || 0));
   const gscStartDaysAgo = days - 1 + GSC_LAG_DAYS + offset;
   const gscEndDaysAgo = GSC_LAG_DAYS + offset;
-  const ga4StartDaysAgo = days - 1 + offset;
-  const ga4EndDaysAgo = offset;
+  // GA4 daily rows are synced through yesterday, unlike the live GA4 API.
+  const ga4StartDaysAgo = days + offset;
+  const ga4EndDaysAgo = 1 + offset;
   const type = request.nextUrl.searchParams.get("type") || "gsc";
   const noCache = request.nextUrl.searchParams.get("nocache") === "1";
   const cacheKey = `overview:${type}:${days}:${offset}`;
